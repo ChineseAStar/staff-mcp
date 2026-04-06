@@ -1,5 +1,5 @@
-import fs from "fs/promises";
-import path from "path";
+import * as fs from "fs/promises";
+import * as path from "path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SecurityManager } from "../security.js";
@@ -25,7 +25,7 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
       try {
         const validatedPath = security.resolveAndValidatePath(filePath);
         const fullContent = await fs.readFile(validatedPath, "utf-8");
-        const lines = fullContent.split("\n");
+        const lines = fullContent.split(/\r?\n/);
 
         let contentLines = lines;
         let prefix = "";
@@ -250,9 +250,9 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
               const content = await fs.readFile(fullPath, "utf-8");
               let match;
               while ((match = searchRegex.exec(content)) !== null) {
-                // Find line number
-                const lineNum = content.substring(0, match.index).split("\n").length;
-                const context = content.split("\n")[lineNum - 1];
+                // Find line number using cross-platform line endings
+                const lineNum = content.substring(0, match.index).split(/\r?\n/).length;
+                const context = content.split(/\r?\n/)[lineNum - 1];
                 results.push(`${relPath}:${lineNum} - ${context.trim()}`);
                 
                 if (results.length > 100) {

@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import path from "path";
+import * as path from "path";
 import { createServer } from "./server.js";
 import { startStdioServer } from "./transports/stdio.js";
 import { startHttpServer } from "./transports/http.js";

@@ -1,4 +1,4 @@
-import path from "path";
+import * as path from "path";
 
 export class SecurityManager {
   private allowedDirs: string[];
@@ -38,6 +38,9 @@ export class SecurityManager {
   /**
    * Validates if a specific directory is allowed.
    */
+  /**
+   * Validates if a specific directory is allowed.
+   */
   public validateDirectory(dirPath: string): string {
     const resolved = path.resolve(this.workingDir, dirPath);
     const isAllowed = this.allowedDirs.some(allowedDir => {
@@ -49,5 +52,9 @@ export class SecurityManager {
       throw new Error(`Security Error: Directory "${resolved}" is not in the allowed list.`);
     }
     return resolved;
+  }
+
+  public getAllowedDirs(): string[] {
+    return [...this.allowedDirs];
   }
 }

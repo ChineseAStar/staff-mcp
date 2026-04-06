@@ -34,7 +34,7 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
 
         // Truncate output if too long
         const formatOutput = (out: string) => {
-          const lines = out.split("\n");
+          const lines = out.split(/\r?\n/);
           if (lines.length > 500) {
             return lines.slice(0, 100).join("\n") + 
                    `\n\n...[${lines.length - 200} lines truncated for brevity]...\n\n` + 
@@ -74,10 +74,14 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
     async ({ command, cwd }) => {
       try {
         const validatedCwd = security.validateDirectory(cwd || ".");
-        const [cmd, ...args] = command.split(" ");
-        const child = spawn(cmd, args, { 
+        
+        // Use a single string for spawn when shell: true is enabled.
+        // This is more cross-platform and handles arguments/quotes better.
+        const child = spawn(command, { 
           cwd: validatedCwd,
           shell: true,
+          // On Windows, shell: true uses cmd.exe /c.
+          // On Unix, shell: true uses /bin/sh -c.
         });
 
         const taskId = `task_${Math.random().toString(36).substring(2, 9)}`;
