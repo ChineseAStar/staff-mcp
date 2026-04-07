@@ -3,11 +3,21 @@
   "version": "1.0.0",
   "type": "module",
   "main": "dist/src/index.js",
+  "bin": {
+    "staff-mcp": "./dist/src/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "README_zh.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/src/index.js",
     "dev": "tsx src/index.ts",
-    "test": "node --test dist/tests/**/*.test.js"
+    "test": "node --test dist/tests/**/*.test.js",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.1.0",

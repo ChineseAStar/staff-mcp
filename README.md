@@ -2,37 +2,42 @@
 
 [English](./README.md) | [简体中文](./README_zh.md)
 
-A powerful Model Context Protocol (MCP) server providing file management, shell execution, and LSP capabilities. Built for seamless integration with AI assistants like Claude Desktop, IDE plugins, and custom agents.
+A robust Model Context Protocol (MCP) server that provides AI assistants with a secure, cross-platform environment for file management, shell execution, and LSP-powered code intelligence.
 
-## 🚀 Quick Start
+---
 
-### Installation
+## 🚀 Usage
+
+Use this section if you want to run the published package.
+
+### Run with npx
+
+Recommended command:
 
 ```bash
-npm install
-npm run build
+npx -y staff-mcp@latest --working-dir /path/to/your/project
 ```
 
-### Running the Server
+Using `@latest` is the safest option for a published CLI package and avoids resolution issues such as `could not determine executable to run`.
 
-**Stdio Mode (Recommended for Claude Desktop)**
+### Configure for Claude Desktop
 
-```bash
-# Using npm (Recommended)
-npm start -- --working-dir /path/to/your/project
+Add the following to your `claude_desktop_config.json`:
 
-# Using node directly
-node dist/src/index.js --working-dir /path/to/your/project
-```
-
-**HTTP Mode**
-
-```bash
-# Using npm
-npm start -- --transport http --port 3000
-
-# Using node directly
-node dist/src/index.js --transport http --port 3000
+```json
+{
+  "mcpServers": {
+    "staff-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "staff-mcp@latest",
+        "--working-dir",
+        "/path/to/your/project"
+      ]
+    }
+  }
+}
 ```
 
 ### CLI Arguments
@@ -42,39 +47,84 @@ node dist/src/index.js --transport http --port 3000
 | `--working-dir` | Root directory for the sandbox | `process.cwd()` |
 | `--allowed-dir` | Extra directories allowed for access | `[]` |
 | `--transport` | Transport type (`stdio` or `http`) | `stdio` |
-| `--port` | Port for HTTP server | `3000` |
+| `--port` | Port for HTTP server (if using http) | `3000` |
+
+### Skill Loading
+
+`staff-mcp` can work with skill directories if they already exist in your workspace or home directory. To use them, place skill files in any supported location such as:
+
+- `.staff/skills/<skill-name>/SKILL.md`
+- `.claude/skills/<skill-name>/SKILL.md`
+- `.agents/skills/<skill-name>/SKILL.md`
+- `.opencode/skills/<skill-name>/SKILL.md`
+
+The server discovers them automatically at startup.
 
 ---
 
-## 🛠️ Supported MCP Features
+## 🛠️ Core Features
 
-- **Tools**: Comprehensive file operations, shell execution, and LSP support.
-- **Skills & Prompts**: Compatible with the `SKILL.md` format. Automatically detects skills in `.staff/skills/`, `.claude/skills/`, etc.
-- **MCP Native Support**: Implements the `instructions` mechanism to provide model context for environment awareness (OS, shell, etc.) and tool relationships.
+- **File Operations**: Secure read, write, delete, and list operations within the sandbox.
+- **Shell Integration**: Execute non-interactive commands or start background tasks (e.g., dev servers).
+- **Code Intelligence**: LSP-based symbol extraction and diagnostics for better code understanding.
+- **Skill System**: Automatically detects and loads domain-specific instructions from `.staff/skills/`, `.claude/skills/`, and `.agents/skills/`.
+- **Environment Awareness**: Native support for Windows (CMD/PowerShell) and Unix-like (Bash/Sh) systems.
 
-### Skill File Format (`SKILL.md`)
+### Adding Skills
+
+Create a `SKILL.md` file in `.staff/skills/your-skill/`:
 
 ```markdown
 ---
 name: my-skill
-description: Skill description
+description: Custom logic for my project
 ---
-Skill instructions here...
+Add your domain-specific instructions or workflows here.
 ```
 
 ---
 
-## 💻 Cross-Platform Compatibility
-
-`staff-mcp` handles environment differences automatically:
-- **Paths**: Resolves `\` (Windows) and `/` (Unix) based on host OS.
-- **Shell**: Uses `cmd.exe` on Windows and `sh` on Linux/macOS.
-- **Line Endings**: Supports both `CRLF` and `LF` for file operations.
-
 ## 🧪 Development
 
+Use this section only if you want to work on the repository itself.
+
+### Local setup
+
 ```bash
+git clone https://github.com/your-username/staff-mcp.git
+cd staff-mcp
+npm install
+npm run build
+```
+
+### Run the local build
+
+```bash
+node dist/src/index.js --working-dir ./test-workspace
+```
+
+### Run with npm scripts
+
+```bash
+npm start -- --working-dir ./test-workspace
 npm run dev -- --working-dir ./test-workspace
+```
+
+## ✅ Testing
+
+Examples for verifying the package behavior separately from normal usage:
+
+### Verify the published package
+
+```bash
+npx -y staff-mcp@latest --working-dir /tmp
+```
+
+### Verify the local build
+
+```bash
+npm run build
+node dist/src/index.js --working-dir /tmp
 ```
 
 ## 📄 License
