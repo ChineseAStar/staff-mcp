@@ -19,6 +19,31 @@ const DEFAULT_CONFIGS: Record<string, LSPConfig> = {
     command: ["node", path.join(os.homedir(), ".staff/lsp/node_modules/pyright/dist/pyright-langserver.js"), "--stdio"],
     installCommand: "npm install --prefix " + path.join(os.homedir(), ".staff/lsp") + " pyright",
     extensions: [".py"]
+  },
+  go: {
+    command: ["gopls"],
+    installCommand: "go install golang.org/x/tools/gopls@latest",
+    extensions: [".go"]
+  },
+  cpp: {
+    command: ["clangd"],
+    installCommand: "echo 'Please install clangd (e.g., sudo apt install clangd)'",
+    extensions: [".c", ".cpp", ".h", ".hpp"]
+  },
+  java: {
+    command: ["jdtls"],
+    installCommand: "echo 'Please install jdtls and ensure it is in your PATH'",
+    extensions: [".java"]
+  },
+  kotlin: {
+    command: ["kotlin-language-server"],
+    installCommand: "echo 'Please install kotlin-language-server and ensure it is in your PATH'",
+    extensions: [".kt", ".kts"]
+  },
+  rust: {
+    command: ["rust-analyzer"],
+    installCommand: "rustup component add rust-analyzer",
+    extensions: [".rs"]
   }
 };
 
@@ -130,6 +155,7 @@ export class LSPClient {
 }
 
 export class LSPManager {
+  public readonly DEFAULT_CONFIGS = DEFAULT_CONFIGS;
   private clients = new Map<string, LSPClient>();
   private lspDir = path.join(os.homedir(), ".staff/lsp");
 
@@ -143,11 +169,36 @@ export class LSPManager {
     const config = DEFAULT_CONFIGS[language];
     if (!config || !config.installCommand) return;
 
-    const binPath = config.command[1]; // Approximate binary path
-    if (!fs.existsSync(binPath)) {
-      console.log(`Installing LSP for ${language}...`);
-      const { execSync } = await import("child_process");
-      execSync(config.installCommand);
+    // Check if the command exists in PATH
+    const cmd = config.command[0];
+    const { execSync } = await import("child_process");
+    
+    try {
+      const checkCmd = process.platform === 'win32' ? `where ${cmd}` : `which ${cmd}`;
+      execSync(checkCmd, { stdio: 'ignore' });
+      return; // Found in PATH
+    } catch {
+      // Not in PATH, check if it's a specific node_module path we manage
+      if (path.isAbsolute(cmd) && fs.existsSync(cmd)) {
+        return;
+      }
+
+      // Check common user bin path for go
+      if (language === 'go') {
+        const goBin = path.join(os.homedir(), 'go', 'bin', 'gopls');
+        if (fs.existsSync(goBin)) {
+          config.command[0] = goBin;
+          return;
+        }
+      }
+      
+      console.log(`LSP server '${cmd}' not found. Attempting install for ${language}...`);
+      try {
+        // Use inherit only for major installs to avoid blocking
+        execSync(config.installCommand, { stdio: 'pipe' });
+      } catch (e) {
+        console.error(`Failed to install LSP for ${language}:`, e);
+      }
     }
   }
 
@@ -158,6 +209,18 @@ export class LSPManager {
     await this.ensureServer(language);
     const config = DEFAULT_CONFIGS[language];
     if (!config) throw new Error(`Unsupported language: ${language}`);
+
+    // Verify binary exists before spawning
+    const cmd = config.command[0];
+    const { execSync } = await import("child_process");
+    try {
+        const checkCmd = process.platform === 'win32' ? `where ${cmd}` : `which ${cmd}`;
+        execSync(checkCmd, { stdio: 'ignore' });
+    } catch {
+        if (!path.isAbsolute(cmd) || !fs.existsSync(cmd)) {
+            throw new Error(`LSP server binary '${cmd}' not found for ${language}`);
+        }
+    }
 
     const client = new LSPClient(config, rootPath);
     await client.start();
@@ -173,6 +236,17 @@ export class LSPManager {
     const client = await this.getClient(lang, rootPath);
     const uri = `file://${filePath}`;
     
+    // Ensure file is opened and notified to server
+    const content = fs.readFileSync(filePath, "utf-8");
+    await client.notification("textDocument/didOpen", {
+      textDocument: {
+        uri,
+        languageId: lang,
+        version: 1,
+        text: content
+      }
+    });
+
     return new Promise(async (resolve) => {
       let resolved = false;
       const timeout = setTimeout(() => {
@@ -180,23 +254,16 @@ export class LSPManager {
           resolved = true;
           resolve([]);
         }
-      }, 5000); // 5s timeout
+      }, 3000); // Wait for async diagnostics
 
       client.onNotification("textDocument/publishDiagnostics", (params: any) => {
-        if (params.uri === uri && !resolved) {
+        // Normalize path for comparison
+        const paramPath = params.uri.replace("file://", "");
+        const checkPath = filePath.startsWith("/") ? filePath : `/${filePath}`;
+        if (paramPath.endsWith(filePath) && !resolved) {
           resolved = true;
           clearTimeout(timeout);
           resolve(params.diagnostics);
-        }
-      });
-
-      const content = fs.readFileSync(filePath, "utf-8");
-      await client.notification("textDocument/didOpen", {
-        textDocument: {
-          uri,
-          languageId: lang,
-          version: 1,
-          text: content
         }
       });
     });
@@ -217,6 +284,27 @@ export class LSPManager {
     if (typeof result.contents === "string") return result.contents;
     if (Array.isArray(result.contents)) return result.contents.map((c: any) => typeof c === "string" ? c : c.value).join("\n");
     return result.contents.value || "No hover information found";
+  }
+
+  async go_to_definition_internal(filePath: string, line: number, character: number, rootPath: string): Promise<string> {
+    const ext = path.extname(filePath);
+    const lang = Object.keys(DEFAULT_CONFIGS).find(l => DEFAULT_CONFIGS[l].extensions.includes(ext));
+    if (!lang) throw new Error(`Unsupported language for extension ${ext}`);
+
+    const client = await this.getClient(lang, rootPath);
+    const result = await client.request("textDocument/definition", {
+      textDocument: { uri: `file://${filePath}` },
+      position: { line: line - 1, character: character - 1 }
+    });
+
+    if (!result) return "Definition not found";
+    
+    const locations = Array.isArray(result) ? result : [result];
+    return locations.map((loc: any) => {
+      const uri = loc.uri || loc.targetUri;
+      const range = loc.range || loc.targetSelectionRange;
+      return `${uri.replace('file://', '')}:${range.start.line + 1}`;
+    }).join("\n");
   }
 }
 

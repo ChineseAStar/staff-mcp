@@ -83,23 +83,10 @@ export function registerLspTools(server: McpServer, security: SecurityManager) {
       try {
         const validatedPath = security.resolveAndValidatePath(filePath);
         const rootPath = security.getWorkingDir();
-        const client = await lspManager.getClient(path.extname(validatedPath).slice(1) === 'py' ? 'python' : 'typescript', rootPath);
-        const result = await client.request("textDocument/definition", {
-          textDocument: { uri: `file://${validatedPath}` },
-          position: { line: line - 1, character: character - 1 }
-        });
-
-        if (!result) return { content: [{ type: "text", text: "Definition not found" }] };
-        
-        const locations = Array.isArray(result) ? result : [result];
-        const formatted = locations.map((loc: any) => {
-          const uri = loc.uri || loc.targetUri;
-          const range = loc.range || loc.targetSelectionRange;
-          return `${uri.replace('file://', '')}:${range.start.line + 1}`;
-        }).join("\n");
+        const result = await lspManager.go_to_definition_internal(validatedPath, line, character, rootPath);
 
         return {
-          content: [{ type: "text", text: formatted }],
+          content: [{ type: "text", text: result }],
         };
       } catch (error: any) {
         return {
