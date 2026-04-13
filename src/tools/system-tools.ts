@@ -1,6 +1,7 @@
 import * as os from "os";
 import * as path from "path";
 import { SecurityManager } from "../security.js";
+import { getWorkspaceArtifactPolicy } from "../policies/workspace-artifact-policy.js";
 
 /**
  * Returns a concise instruction string for the MCP server to guide tool usage.
@@ -34,5 +35,7 @@ Tool Usage Guidance:
 4. Specialized Skills: If a '.staff/skills' or '.claude/skills' directory exists, use the 'skill' tool to load domain-specific workflows which will augment your current context.
 5. Search & Replace: When refactoring, use 'search_file_content' to find all occurrences, then 'edit_file_by_replace' for precise, line-based replacements.
 6. Verification: Use 'get_diagnostics' after editing code to ensure no errors were introduced.
+
+${getWorkspaceArtifactPolicy()}
 `.trim();
 }
