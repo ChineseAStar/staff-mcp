@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SecurityManager } from "../security.js";
 import { CHARACTER_LIMIT } from "../constants.js";
-import { getPathDiagnostics } from "./lsp-tools.js";
+import { lspManager } from "../lsp/manager.js";
 
 /**
  * Registers file-related tools using the latest registerTool API.
@@ -100,12 +100,14 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
 
         let response = `Successfully updated ${filePath}`;
         
-        // Add diagnostics feedback for TS files
-        if (filePath.endsWith(".ts") || filePath.endsWith(".tsx")) {
-          const diagnostics = await getPathDiagnostics(filePath, security);
-          if (diagnostics) {
-            response += `\n\nWarning: TypeScript diagnostics found after editing:\n${diagnostics}`;
-          }
+        // Add diagnostics feedback
+        const rootPath = security.getWorkingDir();
+        const diagnostics = await lspManager.getDiagnostics(validatedPath, rootPath);
+        if (diagnostics && diagnostics.length > 0) {
+          const formatted = diagnostics.map((d: any) => 
+            `[Line ${d.range.start.line + 1}] ${d.message}`
+          ).join("\n");
+          response += `\n\nWarning: LSP diagnostics found after editing:\n${formatted}`;
         }
 
         return {
@@ -138,12 +140,14 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
 
         let response = `Successfully wrote file: ${filePath}`;
         
-        // Add diagnostics feedback for TS files
-        if (filePath.endsWith(".ts") || filePath.endsWith(".tsx")) {
-          const diagnostics = await getPathDiagnostics(filePath, security);
-          if (diagnostics) {
-            response += `\n\nWarning: TypeScript diagnostics found after writing:\n${diagnostics}`;
-          }
+        // Add diagnostics feedback
+        const rootPath = security.getWorkingDir();
+        const diagnostics = await lspManager.getDiagnostics(validatedPath, rootPath);
+        if (diagnostics && diagnostics.length > 0) {
+          const formatted = diagnostics.map((d: any) => 
+            `[Line ${d.range.start.line + 1}] ${d.message}`
+          ).join("\n");
+          response += `\n\nWarning: LSP diagnostics found after writing:\n${formatted}`;
         }
 
         return {

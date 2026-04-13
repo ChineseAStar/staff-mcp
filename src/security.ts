@@ -57,4 +57,8 @@ export class SecurityManager {
   public getAllowedDirs(): string[] {
     return [...this.allowedDirs];
   }
+
+  public getWorkingDir(): string {
+    return this.workingDir;
+  }
 }
