@@ -4,6 +4,7 @@ import * as path from "path";
 import { createServer } from "./server.js";
 import { startStdioServer } from "./transports/stdio.js";
 import { startHttpServer } from "./transports/http.js";
+import { ensureStaffDirs } from "./utils/paths.js";
 
 const program = new Command();
 
@@ -17,6 +18,7 @@ program
   .option("-w, --working-dir <path>", "Working directory for the server (defaults to current execution path)", process.cwd())
   .option("-d, --allowed-dir <paths...>", "Additional directories allowed for sandbox", [])
   .action(async (options) => {
+    ensureStaffDirs();
     const workingDir = path.resolve(options.workingDir);
     const allowedDirs = options.allowedDir.map((d: string) => path.resolve(d));
     const server = createServer("staff-mcp", "1.0.0", workingDir, allowedDirs);

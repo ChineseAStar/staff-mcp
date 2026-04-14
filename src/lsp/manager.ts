@@ -1,7 +1,9 @@
-import { spawn, ChildProcess } from "child_process";
+import { spawn, ChildProcess, execSync } from "child_process";
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
+import { STAFF_TOOLS_DIR, ensureStaffDirs } from "../utils/paths.js";
+import { getPlatformCommand } from "../utils/tool-utils.js";
 
 export interface LSPConfig {
   command: string[];
@@ -9,36 +11,23 @@ export interface LSPConfig {
   extensions: string[];
 }
 
+const STAFF_NODE_MODULES = path.join(STAFF_TOOLS_DIR, "node_modules");
+
 const DEFAULT_CONFIGS: Record<string, LSPConfig> = {
   typescript: {
-    command: ["node", path.join(os.homedir(), ".staff/lsp/node_modules/typescript-language-server/lib/cli.mjs"), "--stdio"],
-    installCommand: "npm install --prefix " + path.join(os.homedir(), ".staff/lsp") + " typescript-language-server typescript",
+    command: ["node", path.join(STAFF_NODE_MODULES, "typescript-language-server/lib/cli.mjs"), "--stdio"],
+    installCommand: `npm install typescript-language-server typescript`,
     extensions: [".ts", ".tsx", ".js", ".jsx"]
   },
   python: {
-    command: ["node", path.join(os.homedir(), ".staff/lsp/node_modules/pyright/dist/pyright-langserver.js"), "--stdio"],
-    installCommand: "npm install --prefix " + path.join(os.homedir(), ".staff/lsp") + " pyright",
+    command: ["node", path.join(STAFF_NODE_MODULES, "pyright/dist/pyright-langserver.js"), "--stdio"],
+    installCommand: `npm install pyright`,
     extensions: [".py"]
   },
   go: {
     command: ["gopls"],
     installCommand: "go install golang.org/x/tools/gopls@latest",
     extensions: [".go"]
-  },
-  cpp: {
-    command: ["clangd"],
-    installCommand: "echo 'Please install clangd (e.g., sudo apt install clangd)'",
-    extensions: [".c", ".cpp", ".h", ".hpp"]
-  },
-  java: {
-    command: ["jdtls"],
-    installCommand: "echo 'Please install jdtls and ensure it is in your PATH'",
-    extensions: [".java"]
-  },
-  kotlin: {
-    command: ["kotlin-language-server"],
-    installCommand: "echo 'Please install kotlin-language-server and ensure it is in your PATH'",
-    extensions: [".kt", ".kts"]
   },
   rust: {
     command: ["rust-analyzer"],
@@ -56,9 +45,11 @@ export class LSPClient {
   constructor(private config: LSPConfig, private rootPath: string) {}
 
   async start() {
-    this.process = spawn(this.config.command[0], this.config.command.slice(1), {
+    const executable = getPlatformCommand(this.config.command[0]);
+    this.process = spawn(executable, this.config.command.slice(1), {
       cwd: this.rootPath,
-      stdio: ["pipe", "pipe", "pipe"]
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: true // Using shell helps with path resolution on Windows
     });
 
     this.process.stdout?.on("data", (data) => {
@@ -157,47 +148,47 @@ export class LSPClient {
 export class LSPManager {
   public readonly DEFAULT_CONFIGS = DEFAULT_CONFIGS;
   private clients = new Map<string, LSPClient>();
-  private lspDir = path.join(os.homedir(), ".staff/lsp");
 
   constructor() {
-    if (!fs.existsSync(this.lspDir)) {
-      fs.mkdirSync(this.lspDir, { recursive: true });
+    ensureStaffDirs();
+    if (!fs.existsSync(STAFF_NODE_MODULES)) {
+      fs.mkdirSync(STAFF_NODE_MODULES, { recursive: true });
     }
   }
 
   async ensureServer(language: string) {
     const config = DEFAULT_CONFIGS[language];
-    if (!config || !config.installCommand) return;
+    if (!config) return;
+
+    // Check if it's a node module we manage
+    const serverPath = config.command[1];
+    if (serverPath && path.isAbsolute(serverPath) && fs.existsSync(serverPath)) {
+      return;
+    }
 
     // Check if the command exists in PATH
     const cmd = config.command[0];
-    const { execSync } = await import("child_process");
     
     try {
       const checkCmd = process.platform === 'win32' ? `where ${cmd}` : `which ${cmd}`;
       execSync(checkCmd, { stdio: 'ignore' });
       return; // Found in PATH
     } catch {
-      // Not in PATH, check if it's a specific node_module path we manage
-      if (path.isAbsolute(cmd) && fs.existsSync(cmd)) {
-        return;
-      }
-
-      // Check common user bin path for go
-      if (language === 'go') {
-        const goBin = path.join(os.homedir(), 'go', 'bin', 'gopls');
-        if (fs.existsSync(goBin)) {
-          config.command[0] = goBin;
-          return;
+      if (config.installCommand) {
+        console.log(`LSP server '${cmd}' not found. Attempting auto-install for ${language}...`);
+        try {
+          const installParts = config.installCommand.split(" ");
+          const platformNpm = getPlatformCommand(installParts[0]);
+          const args = installParts.slice(1);
+          
+          execSync(`${platformNpm} ${args.join(" ")}`, { 
+            cwd: STAFF_TOOLS_DIR,
+            stdio: 'inherit',
+            shell: true
+          } as any);
+        } catch (e) {
+          console.error(`Failed to install LSP for ${language}:`, e);
         }
-      }
-      
-      console.log(`LSP server '${cmd}' not found. Attempting install for ${language}...`);
-      try {
-        // Use inherit only for major installs to avoid blocking
-        execSync(config.installCommand, { stdio: 'pipe' });
-      } catch (e) {
-        console.error(`Failed to install LSP for ${language}:`, e);
       }
     }
   }
@@ -209,18 +200,6 @@ export class LSPManager {
     await this.ensureServer(language);
     const config = DEFAULT_CONFIGS[language];
     if (!config) throw new Error(`Unsupported language: ${language}`);
-
-    // Verify binary exists before spawning
-    const cmd = config.command[0];
-    const { execSync } = await import("child_process");
-    try {
-        const checkCmd = process.platform === 'win32' ? `where ${cmd}` : `which ${cmd}`;
-        execSync(checkCmd, { stdio: 'ignore' });
-    } catch {
-        if (!path.isAbsolute(cmd) || !fs.existsSync(cmd)) {
-            throw new Error(`LSP server binary '${cmd}' not found for ${language}`);
-        }
-    }
 
     const client = new LSPClient(config, rootPath);
     await client.start();

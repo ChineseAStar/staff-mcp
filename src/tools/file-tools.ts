@@ -1,10 +1,15 @@
 import * as fs from "fs/promises";
 import * as path from "path";
+import { exec } from "child_process";
+import { promisify } from "util";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SecurityManager } from "../security.js";
 import { CHARACTER_LIMIT } from "../constants.js";
 import { lspManager } from "../lsp/manager.js";
+import { ensureRipgrep } from "../utils/tool-utils.js";
+
+const execAsync = promisify(exec);
 
 /**
  * Registers file-related tools using the latest registerTool API.
@@ -66,31 +71,35 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
         newText: z.string().describe("The new text content to replace with."),
       }).strict(),
     },
-    async ({ path: filePath, oldText, newText }) => {
+    async ({ path: filePath, oldText: originalOldText, newText }) => {
       try {
         const validatedPath = security.resolveAndValidatePath(filePath);
         const content = await fs.readFile(validatedPath, "utf-8");
 
-        // Simple fuzzy match: try exact first, then trimmed
+        let oldText = originalOldText;
         let index = content.indexOf(oldText);
 
+        // If exact match fails, try fuzzy matching (ignoring whitespace differences)
         if (index === -1) {
-          // Try fuzzy: trim and normalize line endings
-          const normalize = (s: string) => s.replace(/\r\n/g, "\n").trim();
-          const normalizedContent = normalize(content);
-          const normalizedOld = normalize(oldText);
+          const escapedOld = originalOldText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          // Replace whitespace sequences with \s+ to match any whitespace
+          const fuzzyRegex = new RegExp(escapedOld.replace(/\s+/g, '\\s+'), 'g');
+          const matches = [...content.matchAll(fuzzyRegex)];
           
-          if (normalizedContent.includes(normalizedOld)) {
-             // If normalized matches, we need to find the actual position in the original content
-             // For simplicity, if exact match fails but normalized would work, we warn the model
+          if (matches.length === 1) {
+             index = matches[0].index!;
+             oldText = matches[0][0]; // Use the actual matched text for replacement
+          } else if (matches.length > 1) {
              return {
-               content: [{ type: "text", text: `Error: The oldText provided did not match exactly. Please ensure whitespace and line endings match or provide more context.` }],
+               content: [{ type: "text", text: `Error: Multiple fuzzy matches found for the provided text. Please provide more context to uniquely identify the block.` }],
                isError: true,
              };
           }
+        }
 
+        if (index === -1) {
           return {
-            content: [{ type: "text", text: `Error: Could not find the text block to replace in ${filePath}. Check for typos or provide more context.` }],
+            content: [{ type: "text", text: `Error: Could not find the text block to replace in ${filePath}. Ensure the text matches exactly (including whitespace) or provide more surrounding context.` }],
             isError: true,
           };
         }
@@ -222,54 +231,109 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
   server.registerTool(
     "search_file_content",
     {
-      description: "Perform a global regex search for a specific string across all files in the project.",
+      description: "Perform a global search for a pattern across all files in the project. Supports regex, case-sensitivity, and glob filters.",
       inputSchema: z.object({
-        regex: z.string().describe("The regular expression pattern to search for."),
-        includeGlob: z.string().optional().describe("Glob pattern to limit the search (e.g. src/**/*.ts)."),
+        regex: z.string().describe("The pattern to search for (regex supported)."),
+        includeGlob: z.string().optional().describe("Glob pattern to limit the search (e.g. 'src/**/*.ts')."),
+        excludeGlob: z.string().optional().describe("Glob pattern to exclude from the search (e.g. 'node_modules/**')."),
+        caseSensitive: z.boolean().optional().describe("Whether the search should be case-sensitive (default: false)."),
+        wholeWord: z.boolean().optional().describe("Whether to match whole words only (default: false)."),
       }).strict(),
     },
-    async ({ regex, includeGlob }) => {
+    async ({ regex, includeGlob, excludeGlob, caseSensitive = false, wholeWord = false }) => {
       try {
-        const searchRegex = new RegExp(regex, "g");
-        const results: string[] = [];
         const baseDir = security.resolveAndValidatePath(".");
+        const rgPath = await ensureRipgrep();
+        
+        if (rgPath) {
+          try {
+            let args = ["--line-number", "--column", "--no-heading", "--color", "never"];
+            if (!caseSensitive) args.push("--ignore-case");
+            if (wholeWord) args.push("--word-regexp");
+            if (includeGlob) {
+               args.push("--glob");
+               args.push(includeGlob);
+            }
+            if (excludeGlob) {
+               args.push("--glob");
+               args.push(`!${excludeGlob}`);
+            }
+            
+            args.push("--");
+            args.push(regex);
+            args.push(baseDir);
+
+            // Use double quotes for all arguments to be safe on Windows
+            const command = `"${rgPath}" ${args.map(a => `"${a.replace(/"/g, '\\"')}"`).join(" ")}`;
+            const { stdout } = await execAsync(command);
+            const lines = stdout.trim().split("\n").filter(l => l.length > 0);
+            
+            const formatted = lines.slice(0, 100).map(line => {
+               // Robust parsing for path:line:col:text, considering Windows drive letters
+               const match = line.match(/^((?:[a-zA-Z]:)?[^:]+):(\d+):(\d+):(.*)$/);
+               if (match) {
+                  const [_, absPath, lineNum, colNum, context] = match;
+                  const relPath = path.relative(baseDir, absPath);
+                  return `${relPath}:${lineNum} - ${context.trim()}`;
+               }
+               return line;
+            });
+
+            if (lines.length > 100) {
+              formatted.push("... [Search results truncated after 100 matches]");
+            }
+
+            return {
+              content: [{ type: "text", text: formatted.join("\n") || "No matches found." }],
+            };
+          } catch (rgError: any) {
+             if (rgError.code === 1) { // rg exit code 1 means no matches
+                return { content: [{ type: "text", text: "No matches found." }] };
+             }
+             // If rg failed for other reasons, fall back to JS
+          }
+        }
+
+        // JS Fallback
+        const results: string[] = [];
+        const searchRegex = new RegExp(wholeWord ? `\\b${regex}\\b` : regex, caseSensitive ? "g" : "gi");
 
         async function searchRecursively(currentDir: string) {
           const entries = await fs.readdir(currentDir, { withFileTypes: true });
 
           for (const entry of entries) {
             const fullPath = path.join(currentDir, entry.name);
-            
-            // Simple check to skip node_modules and .git
-            if (entry.name === "node_modules" || entry.name === ".git") continue;
+            const relPath = path.relative(baseDir, fullPath);
+
+            if (entry.name === "node_modules" || entry.name === ".git" || entry.name.startsWith(".")) continue;
 
             if (entry.isDirectory()) {
               await searchRecursively(fullPath);
             } else if (entry.isFile()) {
-              const relPath = path.relative(baseDir, fullPath);
-              
-              // Basic glob matching (simple version)
               if (includeGlob && !relPath.includes(includeGlob.replace(/\*/g, ""))) continue;
+              if (excludeGlob && relPath.includes(excludeGlob.replace(/\*/g, ""))) continue;
 
-              const content = await fs.readFile(fullPath, "utf-8");
-              let match;
-              while ((match = searchRegex.exec(content)) !== null) {
-                // Find line number using cross-platform line endings
-                const lineNum = content.substring(0, match.index).split(/\r?\n/).length;
-                const context = content.split(/\r?\n/)[lineNum - 1];
-                results.push(`${relPath}:${lineNum} - ${context.trim()}`);
-                
-                if (results.length > 100) {
-                  results.push("... [Search results truncated after 100 matches]");
-                  return;
+              try {
+                const content = await fs.readFile(fullPath, "utf-8");
+                if (content.includes("\0")) continue;
+
+                let match;
+                while ((match = searchRegex.exec(content)) !== null) {
+                  const lineNum = content.substring(0, match.index).split(/\r?\n/).length;
+                  const context = content.split(/\r?\n/)[lineNum - 1];
+                  results.push(`${relPath}:${lineNum} - ${context.trim()}`);
+                  
+                  if (results.length > 100) {
+                    results.push("... [Search results truncated after 100 matches]");
+                    return;
+                  }
                 }
-              }
+              } catch (e) {}
             }
           }
         }
 
         await searchRecursively(baseDir);
-
         return {
           content: [{ type: "text", text: results.join("\n") || "No matches found." }],
         };
