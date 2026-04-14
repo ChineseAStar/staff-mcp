@@ -6,7 +6,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SecurityManager } from "../security.js";
 import { CHARACTER_LIMIT } from "../constants.js";
-import { lspManager } from "../lsp/manager.js";
 import { ensureRipgrep } from "../utils/tool-utils.js";
 
 const execAsync = promisify(exec);
@@ -107,20 +106,8 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
         const updatedContent = content.slice(0, index) + newText + content.slice(index + oldText.length);
         await fs.writeFile(validatedPath, updatedContent, "utf-8");
 
-        let response = `Successfully updated ${filePath}`;
-        
-        // Add diagnostics feedback
-        const rootPath = security.getWorkingDir();
-        const diagnostics = await lspManager.getDiagnostics(validatedPath, rootPath);
-        if (diagnostics && diagnostics.length > 0) {
-          const formatted = diagnostics.map((d: any) => 
-            `[Line ${d.range.start.line + 1}] ${d.message}`
-          ).join("\n");
-          response += `\n\nWarning: LSP diagnostics found after editing:\n${formatted}`;
-        }
-
         return {
-          content: [{ type: "text", text: response }],
+          content: [{ type: "text", text: `Successfully updated ${filePath}` }],
         };
       } catch (error: any) {
         return {
@@ -147,20 +134,8 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
         await fs.mkdir(path.dirname(validatedPath), { recursive: true });
         await fs.writeFile(validatedPath, content, "utf-8");
 
-        let response = `Successfully wrote file: ${filePath}`;
-        
-        // Add diagnostics feedback
-        const rootPath = security.getWorkingDir();
-        const diagnostics = await lspManager.getDiagnostics(validatedPath, rootPath);
-        if (diagnostics && diagnostics.length > 0) {
-          const formatted = diagnostics.map((d: any) => 
-            `[Line ${d.range.start.line + 1}] ${d.message}`
-          ).join("\n");
-          response += `\n\nWarning: LSP diagnostics found after writing:\n${formatted}`;
-        }
-
         return {
-          content: [{ type: "text", text: response }],
+          content: [{ type: "text", text: `Successfully wrote file: ${filePath}` }],
         };
       } catch (error: any) {
         return {
