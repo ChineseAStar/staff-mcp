@@ -57,9 +57,7 @@ export async function ensureTool(name: string, installCmd?: string): Promise<str
   if (name === "rg") {
     // Special check for @vscode/ripgrep if installed in the tool directory
     const rgInStaff = path.join(staffNodeModulesPath, "@vscode", "ripgrep", "bin", binaryName);
-    const rgInStaffAlt = path.join(staffNodeModulesPath, "@vscode", "ripgrep", "bin", name);
     if (await exists(rgInStaff)) return rgInStaff;
-    if (process.platform === "win32" && await exists(rgInStaffAlt)) return rgInStaffAlt;
   }
 
   // 4. Trigger Auto-Installation if missing
@@ -106,10 +104,10 @@ export async function ensureTool(name: string, installCmd?: string): Promise<str
  */
 export async function ensureRipgrep(): Promise<string> {
   // Try to find it in the project's own node_modules first
-  const localRgPaths = [
-    path.join(process.cwd(), "node_modules", "@vscode", "ripgrep", "bin", process.platform === "win32" ? "rg.exe" : "rg"),
-    path.join(process.cwd(), "node_modules", "vscode-ripgrep", "bin", process.platform === "win32" ? "rg.exe" : "rg"),
-    // Fallback for missing .exe on Windows
+  const localRgPaths = process.platform === "win32" ? [
+    path.join(process.cwd(), "node_modules", "@vscode", "ripgrep", "bin", "rg.exe"),
+    path.join(process.cwd(), "node_modules", "vscode-ripgrep", "bin", "rg.exe"),
+  ] : [
     path.join(process.cwd(), "node_modules", "@vscode", "ripgrep", "bin", "rg"),
     path.join(process.cwd(), "node_modules", "vscode-ripgrep", "bin", "rg"),
   ];

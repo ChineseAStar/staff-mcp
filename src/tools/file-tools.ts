@@ -213,16 +213,26 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
         excludeGlob: z.string().optional().describe("Glob pattern to exclude from the search (e.g. 'node_modules/**')."),
         caseSensitive: z.boolean().optional().describe("Whether the search should be case-sensitive (default: false)."),
         wholeWord: z.boolean().optional().describe("Whether to match whole words only (default: false)."),
+        noIgnore: z.boolean().optional().describe("If true, searches will not respect .gitignore files. Useful for searching in hidden/ignored directories like .staff."),
       }).strict(),
     },
-    async ({ regex, includeGlob, excludeGlob, caseSensitive = false, wholeWord = false }) => {
+    async ({ regex, includeGlob, excludeGlob, caseSensitive = false, wholeWord = false, noIgnore = false }) => {
       try {
         const baseDir = security.resolveAndValidatePath(".");
         const rgPath = await ensureRipgrep();
         
         if (rgPath) {
           try {
-            let args = ["--line-number", "--column", "--no-heading", "--color", "never"];
+            let args = ["--line-number", "--column", "--no-heading", "--color", "never", "--hidden"];
+            
+            if (noIgnore) {
+               args.push("--no-ignore");
+            }
+            
+            // Explicitly ignore .git and node_modules in all cases
+            args.push("--glob"); args.push("!.git/**");
+            args.push("--glob"); args.push("!node_modules/**");
+            
             if (!caseSensitive) args.push("--ignore-case");
             if (wholeWord) args.push("--word-regexp");
             if (includeGlob) {
@@ -272,21 +282,30 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
         // JS Fallback
         const results: string[] = [];
         const searchRegex = new RegExp(wholeWord ? `\\b${regex}\\b` : regex, caseSensitive ? "g" : "gi");
+        
+        function globToRegex(glob: string) {
+          const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+          const replaced = escaped.replace(/\\\*\\\*/g, '.*').replace(/\\\*/g, '[^/]*').replace(/\\\?/g, '.');
+          return new RegExp(`^${replaced}$`);
+        }
+        
+        const includeRegex = includeGlob ? globToRegex(includeGlob) : null;
+        const excludeRegex = excludeGlob ? globToRegex(excludeGlob) : null;
 
         async function searchRecursively(currentDir: string) {
           const entries = await fs.readdir(currentDir, { withFileTypes: true });
 
           for (const entry of entries) {
             const fullPath = path.join(currentDir, entry.name);
-            const relPath = path.relative(baseDir, fullPath);
+            const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
 
-            if (entry.name === "node_modules" || entry.name === ".git" || entry.name.startsWith(".")) continue;
+            if (entry.name === "node_modules" || entry.name === ".git") continue;
 
             if (entry.isDirectory()) {
               await searchRecursively(fullPath);
             } else if (entry.isFile()) {
-              if (includeGlob && !relPath.includes(includeGlob.replace(/\*/g, ""))) continue;
-              if (excludeGlob && relPath.includes(excludeGlob.replace(/\*/g, ""))) continue;
+              if (includeRegex && !includeRegex.test(relPath)) continue;
+              if (excludeRegex && excludeRegex.test(relPath)) continue;
 
               try {
                 const content = await fs.readFile(fullPath, "utf-8");
@@ -315,6 +334,125 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
       } catch (error: any) {
         return {
           content: [{ type: "text", text: `Error during search: ${error.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // find_files
+  server.registerTool(
+    "find_files",
+    {
+      description: "Search for files by name or path across the workspace.",
+      inputSchema: z.object({
+        pattern: z.string().describe("Glob pattern to match file paths (e.g. '**/*.ts', 'src/**/components/*')."),
+        excludePattern: z.string().optional().describe("Glob pattern to exclude (e.g. 'node_modules/**')."),
+        noIgnore: z.boolean().optional().describe("If true, searches will not respect .gitignore files. Useful for finding files in hidden/ignored directories."),
+      }).strict(),
+    },
+    async ({ pattern, excludePattern, noIgnore = false }) => {
+      try {
+        const baseDir = security.resolveAndValidatePath(".");
+        const rgPath = await ensureRipgrep();
+
+        if (rgPath) {
+          try {
+            // Use rg --files to just list files, then we filter by glob
+            let args = ["--files", "--hidden", "--color", "never"];
+            
+            if (noIgnore) {
+               args.push("--no-ignore");
+            }
+            
+            // Add the glob for inclusion
+            args.push("--glob");
+            args.push(pattern);
+
+            if (excludePattern) {
+              args.push("--glob");
+              args.push(`!${excludePattern}`);
+            }
+
+            // Provide default exclusions so we don't crawl the whole universe
+            args.push("--glob"); args.push("!.git/**");
+            args.push("--glob"); args.push("!node_modules/**");
+
+            args.push("--");
+            args.push(baseDir);
+
+            const command = `"${rgPath}" ${args.map(a => `"${a.replace(/"/g, '\\"')}"`).join(" ")}`;
+            const { stdout } = await execAsync(command);
+            let lines = stdout.trim().split("\n").filter(l => l.length > 0);
+
+            // Convert to relative paths
+            lines = lines.map(line => {
+              // Convert absolute to relative path, handling Windows drives
+              const relPath = path.relative(baseDir, line.trim());
+              return relPath.replace(/\\/g, '/');
+            });
+
+            if (lines.length > 100) {
+              lines = lines.slice(0, 100);
+              lines.push("... [Search results truncated after 100 matches]");
+            }
+
+            return {
+              content: [{ type: "text", text: lines.join("\n") || "No matching files found." }],
+            };
+          } catch (rgError: any) {
+             if (rgError.code === 1) {
+                return { content: [{ type: "text", text: "No matching files found." }] };
+             }
+          }
+        }
+
+        // JS Fallback
+        const results: string[] = [];
+        function globToRegex(glob: string) {
+          const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+          const replaced = escaped.replace(/\\\*\\\*/g, '.*').replace(/\\\*/g, '[^/]*').replace(/\\\?/g, '.');
+          return new RegExp(`^${replaced}$`);
+        }
+        
+        const includeRegex = globToRegex(pattern);
+        const excludeRegex = excludePattern ? globToRegex(excludePattern) : null;
+
+        async function searchRecursively(currentDir: string) {
+          const entries = await fs.readdir(currentDir, { withFileTypes: true });
+
+          for (const entry of entries) {
+            const fullPath = path.join(currentDir, entry.name);
+            const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
+
+            if (entry.name === "node_modules" || entry.name === ".git") continue;
+
+            if (entry.isDirectory()) {
+              if (includeRegex.test(relPath + '/')) {
+                  // Some people use glob for matching directory paths, though rg --files only yields files
+              }
+              await searchRecursively(fullPath);
+            } else if (entry.isFile()) {
+              if (!includeRegex.test(relPath)) continue;
+              if (excludeRegex && excludeRegex.test(relPath)) continue;
+
+              results.push(relPath);
+              if (results.length > 100) return;
+            }
+          }
+        }
+
+        await searchRecursively(baseDir);
+        if (results.length >= 100) {
+           results.push("... [Search results truncated after 100 matches]");
+        }
+
+        return {
+          content: [{ type: "text", text: results.join("\n") || "No matching files found." }],
+        };
+      } catch (error: any) {
+        return {
+          content: [{ type: "text", text: `Error finding files: ${error.message}` }],
           isError: true,
         };
       }

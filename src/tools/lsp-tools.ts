@@ -4,6 +4,8 @@ import { SecurityManager } from "../security.js";
 import { lspManager } from "../lsp/manager.js";
 import * as path from "path";
 
+import { fileURLToPath } from "url";
+
 /**
  * Registers LSP-related tools using the latest registerTool API.
  */
@@ -170,8 +172,9 @@ export function registerLspTools(server: McpServer, security: SecurityManager) {
         }
 
         const results = references.map((ref: any) => {
-          const uri = ref.uri.replace("file://", "");
-          return `${uri}:${ref.range.start.line + 1}`;
+          let uriPath = ref.uri;
+          try { uriPath = fileURLToPath(ref.uri); } catch(e) { uriPath = uriPath.replace("file://", ""); }
+          return `${uriPath}:${ref.range.start.line + 1}`;
         });
 
         return {

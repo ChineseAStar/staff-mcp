@@ -2,7 +2,12 @@ import { spawn, ChildProcess, execSync } from "child_process";
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
+import { pathToFileURL, fileURLToPath } from "url";
 import { STAFF_TOOLS_DIR, ensureStaffDirs } from "../utils/paths.js";
+
+function pathToUri(filePath: string): string {
+  return pathToFileURL(filePath).href;
+}
 import { getPlatformCommand } from "../utils/tool-utils.js";
 
 export interface LSPConfig {
@@ -75,7 +80,7 @@ export class LSPClient {
           // Initialize
           await this.request("initialize", {
             processId: process.pid,
-            rootUri: `file://${this.rootPath}`,
+            rootUri: pathToUri(this.rootPath),
             capabilities: {
               textDocument: {
                 publishDiagnostics: {
@@ -83,7 +88,7 @@ export class LSPClient {
                 }
               }
             },
-            workspaceFolders: [{ uri: `file://${this.rootPath}`, name: "workspace" }]
+            workspaceFolders: [{ uri: pathToUri(this.rootPath), name: "workspace" }]
           });
           await this.notification("initialized", {});
 
@@ -218,62 +223,75 @@ export class LSPManager {
     }
   }
 
+  private installLock: Promise<void> | null = null;
+
   async ensureServer(language: string) {
-    const config = DEFAULT_CONFIGS[language];
-    if (!config) return;
-
-    const cmd = config.command[0];
-    const serverPath = config.command[1];
-
-    // Check if it's a node-managed server script
-    const isNodeManaged = cmd === "node" && serverPath && path.isAbsolute(serverPath);
-    if (isNodeManaged) {
-      if (fs.existsSync(serverPath)) {
-        return;
-      }
-      // If node-managed but script is missing, we must install
-    } else {
-      // Check if the command exists in PATH
-      try {
-        const checkCmd = process.platform === 'win32' ? `where ${cmd}` : `which ${cmd}`;
-        execSync(checkCmd, { stdio: 'ignore' });
-        return; // Found in PATH
-      } catch {
-        // Not found, continue to install
-      }
+    if (this.installLock) {
+      await this.installLock;
     }
 
-    if (config.installCommand) {
-      console.log(`LSP server '${cmd}' not found or missing dependencies. Attempting auto-install for ${language}...`);
-      try {
-        // Ensure package.json exists in STAFF_TOOLS_DIR to keep node_modules local
-        const packageJsonPath = path.join(STAFF_TOOLS_DIR, "package.json");
-        if (!fs.existsSync(packageJsonPath)) {
-          fs.writeFileSync(packageJsonPath, JSON.stringify({ 
-            name: "staff-mcp-tools", 
-            version: "1.0.0",
-            private: true 
-          }, null, 2));
-        }
+    let releaseLock: () => void;
+    this.installLock = new Promise(resolve => releaseLock = resolve);
 
-        const installParts = config.installCommand.split(" ");
-        const platformNpm = getPlatformCommand(installParts[0]);
-        const args = installParts.slice(1);
-        
-        console.log(`Executing: ${platformNpm} ${args.join(" ")} in ${STAFF_TOOLS_DIR}`);
-        execSync(`${platformNpm} ${args.join(" ")}`, { 
-          cwd: STAFF_TOOLS_DIR,
-          stdio: 'inherit',
-          shell: true
-        } as any);
-        
-        // After installation, verify the serverPath if it's node-managed
-        if (isNodeManaged && !fs.existsSync(serverPath)) {
-          console.error(`Installation finished but ${serverPath} still not found.`);
+    try {
+      const config = DEFAULT_CONFIGS[language];
+      if (!config) return;
+
+      const cmd = config.command[0];
+      const serverPath = config.command[1];
+
+      // Check if it's a node-managed server script
+      const isNodeManaged = cmd === "node" && serverPath && path.isAbsolute(serverPath);
+      if (isNodeManaged) {
+        if (fs.existsSync(serverPath)) {
+          return;
         }
-      } catch (e) {
-        console.error(`Failed to install LSP for ${language}:`, e);
+        // If node-managed but script is missing, we must install
+      } else {
+        // Check if the command exists in PATH
+        try {
+          const checkCmd = process.platform === 'win32' ? `where ${cmd}` : `which ${cmd}`;
+          execSync(checkCmd, { stdio: 'ignore' });
+          return; // Found in PATH
+        } catch {
+          // Not found, continue to install
+        }
       }
+
+      if (config.installCommand) {
+        console.log(`LSP server '${cmd}' not found or missing dependencies. Attempting auto-install for ${language}...`);
+        try {
+          // Ensure package.json exists in STAFF_TOOLS_DIR to keep node_modules local
+          const packageJsonPath = path.join(STAFF_TOOLS_DIR, "package.json");
+          if (!fs.existsSync(packageJsonPath)) {
+            fs.writeFileSync(packageJsonPath, JSON.stringify({ 
+              name: "staff-mcp-tools", 
+              version: "1.0.0",
+              private: true 
+            }, null, 2));
+          }
+
+          const installParts = config.installCommand.split(" ");
+          const platformNpm = getPlatformCommand(installParts[0]);
+          const args = installParts.slice(1);
+          
+          console.log(`Executing: ${platformNpm} ${args.join(" ")} in ${STAFF_TOOLS_DIR}`);
+          execSync(`${platformNpm} ${args.join(" ")}`, { 
+            cwd: STAFF_TOOLS_DIR,
+            stdio: 'inherit',
+            shell: true
+          } as any);
+          
+          // After installation, verify the serverPath if it's node-managed
+          if (isNodeManaged && !fs.existsSync(serverPath)) {
+            console.error(`Installation finished but ${serverPath} still not found.`);
+          }
+        } catch (e) {
+          console.error(`Failed to install LSP for ${language}:`, e);
+        }
+      }
+    } finally {
+      releaseLock!();
     }
   }
 
@@ -292,7 +310,7 @@ export class LSPManager {
   }
 
   async ensureDocumentOpened(client: LSPClient, filePath: string, lang: string): Promise<boolean> {
-    const uri = `file://${filePath}`;
+    const uri = pathToUri(filePath);
     const content = fs.readFileSync(filePath, "utf-8");
     const doc = this.documentVersions.get(filePath);
 
@@ -328,7 +346,7 @@ export class LSPManager {
     if (!lang) return [];
 
     const client = await this.getClient(lang, rootPath);
-    const uri = `file://${filePath}`;
+    const uri = pathToUri(filePath);
     
     // Determine if file changed before setting up intervals to prevent race conditions
     let changed = false;
@@ -385,7 +403,7 @@ export class LSPManager {
     const client = await this.getClient(lang, rootPath);
     await this.ensureDocumentOpened(client, filePath, lang);
     const result = await client.request("textDocument/hover", {
-      textDocument: { uri: `file://${filePath}` },
+      textDocument: { uri: pathToUri(filePath) },
       position: { line, character }
     });
     
@@ -403,7 +421,7 @@ export class LSPManager {
     const client = await this.getClient(lang, rootPath);
     await this.ensureDocumentOpened(client, filePath, lang);
     const result = await client.request("textDocument/definition", {
-      textDocument: { uri: `file://${filePath}` },
+      textDocument: { uri: pathToUri(filePath) },
       position: { line: line - 1, character: character - 1 }
     });
 
@@ -415,7 +433,9 @@ export class LSPManager {
     return locations.map((loc: any) => {
       const uri = loc.uri || loc.targetUri;
       const range = loc.range || loc.targetSelectionRange;
-      return `${uri.replace('file://', '')}:${range.start.line + 1}`;
+      let filePath = uri;
+      try { filePath = fileURLToPath(uri); } catch(e) {}
+      return `${filePath}:${range.start.line + 1}`;
     }).join("\n");
   }
   async getDocumentSymbols(filePath: string, rootPath: string): Promise<any[]> {
@@ -426,7 +446,7 @@ export class LSPManager {
     const client = await this.getClient(lang, rootPath);
     await this.ensureDocumentOpened(client, filePath, lang);
     const result = await client.request("textDocument/documentSymbol", {
-      textDocument: { uri: `file://${filePath}` }
+      textDocument: { uri: pathToUri(filePath) }
     });
 
     return result || [];
@@ -440,7 +460,7 @@ export class LSPManager {
     const client = await this.getClient(lang, rootPath);
     await this.ensureDocumentOpened(client, filePath, lang);
     const result = await client.request("textDocument/references", {
-      textDocument: { uri: `file://${filePath}` },
+      textDocument: { uri: pathToUri(filePath) },
       position: { line, character },
       context: { includeDeclaration: true }
     });
