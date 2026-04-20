@@ -8,7 +8,14 @@ import { DEFAULT_TIMEOUT } from "../constants.js";
 const execAsync = promisify(exec);
 
 // Store for background tasks
-const backgroundTasks = new Map<string, { process: ChildProcess; logs: string[] }>();
+interface BackgroundTask {
+  process: ChildProcess;
+  logs: string[];
+  command: string;
+  cwd: string;
+  startTime: string;
+}
+const backgroundTasks = new Map<string, BackgroundTask>();
 
 /**
  * Registers shell-related tools using the latest registerTool API.
@@ -17,19 +24,20 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
   server.registerTool(
     "execute_command",
     {
-      description: "Execute a shell command in a specified directory (sandboxed).",
+      description: "Execute a shell command in a specified directory (sandboxed) with an optional timeout.",
       inputSchema: z.object({
         command: z.string().describe("The shell command to execute."),
         cwd: z.string().optional().describe("Directory to execute command from (must be allowed). Defaults to the workspace root."),
+        timeout: z.number().optional().default(DEFAULT_TIMEOUT).describe(`Timeout in milliseconds (default: ${DEFAULT_TIMEOUT}ms).`),
       }).strict(),
     },
-    async ({ command, cwd }) => {
+    async ({ command, cwd, timeout }) => {
       try {
         const validatedCwd = security.validateDirectory(cwd || ".");
 
         const { stdout, stderr } = await execAsync(command, {
           cwd: validatedCwd,
-          timeout: DEFAULT_TIMEOUT,
+          timeout: timeout,
         });
 
         // Truncate output if too long
@@ -53,8 +61,12 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
         };
       } catch (error: any) {
         // If timed out or error occurred, still try to return what we have or a meaningful error
+        let errorMessage = error.message;
+        if (error.killed && error.signal === 'SIGTERM') {
+          errorMessage = `Command timed out after ${timeout}ms.`;
+        }
         return {
-          content: [{ type: "text", text: `Command execution failed or timed out: ${error.message}` }],
+          content: [{ type: "text", text: `Command execution failed or timed out: ${errorMessage}` }],
           isError: true,
         };
       }
@@ -97,7 +109,13 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
           if (logs.length > 1000) logs.shift();
         });
 
-        backgroundTasks.set(taskId, { process: child, logs });
+        backgroundTasks.set(taskId, { 
+          process: child, 
+          logs, 
+          command, 
+          cwd: validatedCwd, 
+          startTime: new Date().toISOString() 
+        });
 
         child.on("exit", (code) => {
           logs.push(`[Process exited with code ${code}]`);
@@ -113,6 +131,34 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
           isError: true,
         };
       }
+    }
+  );
+
+  // list_background_tasks
+  server.registerTool(
+    "list_background_tasks",
+    {
+      description: "List all currently registered background tasks and their status.",
+      inputSchema: z.object({}).strict(),
+    },
+    async () => {
+      const tasks = Array.from(backgroundTasks.entries()).map(([id, task]) => ({
+        taskId: id,
+        command: task.command,
+        cwd: task.cwd,
+        startTime: task.startTime,
+        status: task.process.exitCode === null ? "running" : `exited (code: ${task.process.exitCode})`,
+      }));
+
+      if (tasks.length === 0) {
+        return {
+          content: [{ type: "text", text: "No background tasks found." }],
+        };
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(tasks, null, 2) }],
+      };
     }
   );
 
