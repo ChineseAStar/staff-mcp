@@ -12,7 +12,7 @@ import { getMcpInstructions } from "./tools/system-tools.js";
  * @param version The server's version.
  * @param workingDir The working directory for the server.
  * @param allowedDirs Additional directories for the SecurityManager.
- * @param profile The active persona/role profile.
+ * @param profile The active profile for skills and instructions.
  * @returns An initialized McpServer instance.
  */
 export function createServer(name: string, version: string, workingDir: string, allowedDirs: string[], profile: string = "default"): McpServer {

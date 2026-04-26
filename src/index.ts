@@ -17,7 +17,7 @@ program
   .option("-h, --host <address>", "Host for HTTP server", "127.0.0.1")
   .option("-w, --working-dir <path>", "Working directory for the server (defaults to current execution path)", process.cwd())
   .option("-d, --allowed-dir <paths...>", "Additional directories allowed for sandbox", [])
-  .option("-r, --profile <name>", "The persona/role for skills (e.g., developer, reverse-engineer, default)", "default")
+  .option("-r, --profile <name>", "The active profile for skills and instructions (e.g., developer, default)", "default")
   .action(async (options) => {
     ensureStaffDirs();
     const workingDir = path.resolve(options.workingDir);
