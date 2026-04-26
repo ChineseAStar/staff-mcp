@@ -4,6 +4,7 @@ import { registerFileTools } from "./tools/file-tools.js";
 import { registerShellTools } from "./tools/shell-tools.js";
 import { registerLspTools } from "./tools/lsp-tools.js";
 import { registerSkillTools } from "./tools/skills.js";
+import { registerMcpClientTools } from "./tools/mcp-client-tools.js";
 import { getMcpInstructions } from "./tools/system-tools.js";
 
 /**
@@ -37,6 +38,7 @@ export function createServer(name: string, version: string, workingDir: string, 
   registerShellTools(server, security);
   registerLspTools(server, security);
   registerSkillTools(server, workingDir, security, profile);
+  registerMcpClientTools(server);
 
   return server;
 }
