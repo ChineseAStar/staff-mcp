@@ -78,10 +78,13 @@ program
         });
       }
 
-      // 7. Specify the target image
+      // 7. Inject environment variable to detect docker proxy mode
+      dockerArgs.push("-e", "STAFF_MCP_IS_DOCKER=1");
+
+      // 8. Specify the target image
       dockerArgs.push(options.docker);
 
-      // 8. Reconstruct the command inside the container
+      // 9. Reconstruct the command inside the container
       dockerArgs.push("node", "/opt/staff-mcp/dist/src/index.js");
       dockerArgs.push("-t", options.transport);
       dockerArgs.push("-p", String(options.port));
@@ -102,8 +105,10 @@ program
       }
       dockerArgs.push("-r", options.profile);
 
-      // 9. Spawn Docker and pipe I/O natively
-      const child = spawn("docker", dockerArgs, { stdio: "inherit" });
+      // 10. Spawn Docker and pipe I/O natively
+      const child = spawn("docker", dockerArgs, { stdio: ["pipe", "inherit", "inherit"] });
+      process.stdin.pipe(child.stdin);
+      
       child.on("exit", (code) => process.exit(code ?? 0));
       child.on("error", (err) => {
         console.error("[staff-mcp] Failed to start docker proxy:", err.message);
@@ -116,6 +121,21 @@ program
     // -------------------------------------------------------------
     // Standard Host Mode
     // -------------------------------------------------------------
+    
+    // Auto-exit if we are running as a proxy child and the host pipe breaks
+    if (process.env.STAFF_MCP_IS_DOCKER === "1") {
+      if (options.transport === "http") {
+        process.stdin.resume(); // keep reading to detect end in HTTP mode
+      }
+      process.stdin.on("end", () => {
+        console.error("[staff-mcp] Host pipe closed, terminating container...");
+        process.exit(0);
+      });
+      process.stdin.on("error", () => {
+        process.exit(1);
+      });
+    }
+
     ensureStaffDirs();
     const workingDir = path.resolve(options.workingDir);
     const allowedDirs = options.allowedDir.map((d: string) => path.resolve(d));

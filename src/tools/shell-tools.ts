@@ -1,5 +1,7 @@
 import { exec, spawn, ChildProcess } from "child_process";
 import { promisify } from "util";
+import * as os from "os";
+import * as fs from "fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SecurityManager } from "../security.js";
@@ -16,6 +18,22 @@ interface BackgroundTask {
   startTime: string;
 }
 const backgroundTasks = new Map<string, BackgroundTask>();
+
+/**
+ * Determine the optimal shell to use for executing commands.
+ * Prioritizes bash on POSIX systems, falling back to sh (like in Alpine).
+ */
+function getOptimalShell(): string | undefined {
+  if (os.platform() === "win32") {
+    return undefined; // Let Node.js determine the best shell (cmd.exe) on Windows
+  }
+  if (fs.existsSync("/bin/bash")) {
+    return "/bin/bash";
+  }
+  return "/bin/sh";
+}
+
+const DEFAULT_SHELL = getOptimalShell();
 
 /**
  * Registers shell-related tools using the latest registerTool API.
@@ -38,6 +56,7 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
         const { stdout, stderr } = await execAsync(command, {
           cwd: validatedCwd,
           timeout: timeout,
+          shell: DEFAULT_SHELL as string | undefined, // passing boolean true is mostly for spawn, but exec defaults to /bin/sh if not specified.
         });
 
         // Truncate output if too long
@@ -91,9 +110,9 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
         // This is more cross-platform and handles arguments/quotes better.
         const child = spawn(command, { 
           cwd: validatedCwd,
-          shell: true,
+          shell: DEFAULT_SHELL || true,
           // On Windows, shell: true uses cmd.exe /c.
-          // On Unix, shell: true uses /bin/sh -c.
+          // On Unix, shell: '/bin/bash' explicitly calls bash instead of /bin/sh.
         });
 
         const taskId = `task_${Math.random().toString(36).substring(2, 9)}`;
