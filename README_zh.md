@@ -108,31 +108,6 @@ npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "--privileged" "-v /dev/
 
 ---
 
-## 🧪 定制你的私有技能
-
-想教 AI 一个新的工作流？只需在项目里建个 `SKILL.md` 文件：
-\`\`\`bash
-mkdir -p .staff/skills/my-workflow
-touch .staff/skills/my-workflow/SKILL.md
-\`\`\`
-
-填入标准的 YAML 头部信息和操作指南：
-\`\`\`markdown
----
-name: my-workflow
-description: 本项目专属的标准化发布流程
----
-# 知识库
-我们的线上发布使用...
-
-# 工作流
-1. 先运行 `npm run build`
-2. ...
-\`\`\`
-保存后，AI 会立即通过文件监听 (Watcher) 感知到变化，并掌握你新教它的这门手艺！
-
----
-
 ## 📄 License
 
 MIT

@@ -108,31 +108,6 @@ npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "--privileged" "-v /dev/
 
 ---
 
-## 🧪 Custom Skills Development
-
-Want to teach the AI a new trick? Just create a `SKILL.md` inside your project:
-\`\`\`bash
-mkdir -p .staff/skills/my-workflow
-touch .staff/skills/my-workflow/SKILL.md
-\`\`\`
-
-Add the YAML frontmatter and your instructions:
-\`\`\`markdown
----
-name: my-workflow
-description: Standard operating procedure for deploying this app
----
-# Knowledge
-Deployments are handled via...
-
-# Workflows
-1. Run `npm run build`
-2. ...
-\`\`\`
-The AI will immediately detect the file change and make the \`my-workflow\` tool available!
-
----
-
 ## 📄 License
 
 MIT
