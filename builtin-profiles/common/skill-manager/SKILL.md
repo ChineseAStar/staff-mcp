@@ -27,13 +27,19 @@ Profiles are roles or specific context configurations (e.g. `developer`, `revers
 
 ### 🔍 Search/Discover Skills
 To find skills to install:
-1. Use `execute_command` with `curl` to query GitHub API: `curl -s "https://api.github.com/orgs/anthropics/repos?per_page=100" | grep '"name"'`
+1. **Analyze the source**: A skill can come from anywhere: a local directory path on the machine, a GitHub URL, an npm package, a zip file, or another public repository.
+2. **If the user provides an exact path or URL**: Use that directly to fetch the skill.
+3. **If the user does not provide enough information**: Do NOT assume it is from Anthropic or GitHub. Ask the user politely for the exact URL, Git repository, or local folder path where the skill is located.
+4. **Example searches (Optional)**: If the user explicitly asks for "Anthropic official skills", you can use `curl -s "https://api.github.com/orgs/anthropics/repos?per_page=100" | grep '"name"'` as an example, but NEVER restrict yourself to this organization unless requested.
 
 ### ⬇️ Install a Skill
 When the user asks to install a skill:
-1. Assume **Project** environment (`<cwd>/.staff/skills/`) by default, unless "global" is specified.
-2. **If Project-level**: Use `execute_command` to clone/download the skill into `<cwd>/.staff/skills/<skill-name>`.
-3. **If Global-level**: DO NOT execute anything. Output the corresponding commands (e.g., `mkdir -p ~/.staff/skills && cd ~/.staff/skills && git clone ...`) and ask the user to execute them manually.
+1. **Determine the source**: Ensure you know exactly where to get the skill from (a local path, a Git repository URL, a zip URL, etc.). If unsure, ask the user.
+2. **Assume Project environment** (`<cwd>/.staff/skills/`) by default, unless "global" is specified.
+3. **If Project-level**: 
+   - Use `execute_command` to fetch the skill (e.g., `git clone <url> <cwd>/.staff/skills/<skill-name>` or `cp -r <local-path> <cwd>/.staff/skills/<skill-name>`).
+   - Ensure the directory contains a `SKILL.md` file.
+4. **If Global-level**: DO NOT execute anything. Output the corresponding commands (e.g., `mkdir -p ~/.staff/skills && cd ~/.staff/skills && git clone <url> <name>`) and ask the user to execute them manually.
 
 ### 🗑️ Uninstall / Clear Skills
 When the user asks to remove, uninstall, or clear skills:
