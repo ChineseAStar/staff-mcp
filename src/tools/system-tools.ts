@@ -1,5 +1,6 @@
 import * as os from "os";
 import * as path from "path";
+import * as fs from "fs";
 import { SecurityManager } from "../security.js";
 import { getWorkspaceArtifactPolicy } from "../policies/workspace-artifact-policy.js";
 
@@ -17,10 +18,9 @@ export function getMcpInstructions(workingDir: string, security: SecurityManager
     if (process.env.STAFF_MCP_IS_DOCKER === "1") {
        // If running in Docker, we dynamically probed bash in shell-tools.
        // We can assume if /bin/bash exists, it's used.
-       const fs = require('fs');
        shell = fs.existsSync('/bin/bash') ? "/bin/bash" : "/bin/sh";
     } else {
-       shell = process.env.SHELL || (require('fs').existsSync('/bin/bash') ? "/bin/bash" : "/bin/sh");
+       shell = process.env.SHELL || (fs.existsSync('/bin/bash') ? "/bin/bash" : "/bin/sh");
     }
   }
 
