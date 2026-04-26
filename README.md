@@ -96,14 +96,21 @@ It will securely download, configure, and reload the skill without you lifting a
 | `-h, --host` | Host for HTTP server | `127.0.0.1` |
 
 ### Hardware Pass-through Example (Android Reverse Engineering)
-If you need the AI to interact with an Android device connected via USB while running inside a container:
+If you need the AI to interact with an Android device connected via USB while running inside a container, utilizing network-based ADB pass-through is the most reliable cross-platform solution:
 
 ```bash
-# Mac/Win (ADB Server Pass-through)
+# 1. Start ADB Server on the host machine listening on all interfaces:
+# adb kill-server && adb -a nodaemon server start
+
+# 2. Start staff-mcp with the ADB_SERVER_SOCKET environment variable injected
+# On Mac/Windows:
 npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "-e ADB_SERVER_SOCKET=tcp:host.docker.internal:5037"
 
-# Native Linux (USB Direct Pass-through)
-npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "--privileged" "-v /dev/bus/usb:/dev/bus/usb"
+# On Native Linux (If not using --network host, point to the docker bridge IP):
+npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "-e ADB_SERVER_SOCKET=tcp:172.17.0.1:5037"
+
+# Alternative for Native Linux (Share host network stack completely):
+npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "--network host"
 ```
 
 ---

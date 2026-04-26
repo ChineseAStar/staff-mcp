@@ -96,14 +96,21 @@ npx -y staff-mcp@latest --profile reverse-engineer
 | `-h, --host` | HTTP 服务的监听地址 | `127.0.0.1` |
 
 ### 硬件透传案例 (Android 移动端逆向)
-如果你希望 AI 在容器内运行时，仍能连接并控制物理机上的 Android 手机：
+如果你希望 AI 在容器内运行时，仍能连接并控制物理机上的 Android 手机，利用基于网络端口的 ADB 透传是最稳妥的跨平台方案：
 
 ```bash
-# Mac/Win (ADB 服务端网络穿透法)
+# 1. 首先在物理机上启动 ADB Server，允许所有网卡连接：
+# adb kill-server && adb -a nodaemon server start
+
+# 2. 启动 staff-mcp 并注入 ADB_SERVER_SOCKET 环境变量
+# Mac/Win 环境下：
 npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "-e ADB_SERVER_SOCKET=tcp:host.docker.internal:5037"
 
-# 原生 Linux (USB 硬件节点直连法)
-npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "--privileged" "-v /dev/bus/usb:/dev/bus/usb"
+# 原生 Linux 环境下（若不使用 host 网络，可指向虚拟桥接 IP）：
+npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "-e ADB_SERVER_SOCKET=tcp:172.17.0.1:5037"
+
+# 原生 Linux 的极简方案（直接与物理机共享网络栈）：
+npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "--network host"
 ```
 
 ---
