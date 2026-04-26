@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
+import { getSearchPaths } from "./resolver.js";
 
 export interface SkillInfo {
   name: string;
@@ -10,35 +10,15 @@ export interface SkillInfo {
 }
 
 export class SkillManager {
-  // 定义搜索的基准目录名（隐藏目录）
-  private static readonly SEARCH_DIRS = [".staff", ".claude", ".agents", ".opencode"];
-  // 定义技能子目录名
-  private static readonly SKILL_SUBDIRS = ["skills", "skill"];
+  static getSearchPaths(workingDir: string, profile: string = "default"): string[] {
+    return getSearchPaths(workingDir, profile);
+  }
 
-  static loadSkills(workingDir: string): Record<string, SkillInfo> {
+  static loadSkills(workingDir: string, profile: string = "default"): Record<string, SkillInfo> {
     const skills: Record<string, SkillInfo> = {};
-    const searchPaths: string[] = [];
+    const searchPaths = this.getSearchPaths(workingDir, profile);
 
-    // 0. 直接检查工作目录下的 skills (兼容旧逻辑)
-    searchPaths.push(path.join(workingDir, "skills"));
-    searchPaths.push(path.join(workingDir, "skill"));
-
-    // 1. 添加当前工作区搜索路径
-    this.SEARCH_DIRS.forEach(dir => {
-      this.SKILL_SUBDIRS.forEach(sub => {
-        searchPaths.push(path.join(workingDir, dir, sub));
-      });
-    });
-
-    // 2. 添加全局搜索路径 (用户主目录)
-    const homeDir = os.homedir();
-    this.SEARCH_DIRS.forEach(dir => {
-      this.SKILL_SUBDIRS.forEach(sub => {
-        searchPaths.push(path.join(homeDir, dir, sub));
-      });
-    });
-
-    // 3. 扫描所有有效路径
+    // 扫描所有有效路径
     for (const root of searchPaths) {
       if (fs.existsSync(root) && fs.statSync(root).isDirectory()) {
         this.scanDirSync(root, skills);
@@ -76,7 +56,7 @@ export class SkillManager {
       
       // 确保有必要的元数据
       if (data.name && data.description) {
-        // 如果名称冲突，优先保留先扫描到的（项目本地优先于全局）
+        // 如果名称冲突，优先保留先扫描到的（优先级高的路径在前）
         if (!skills[data.name]) {
           skills[data.name] = {
             name: data.name,

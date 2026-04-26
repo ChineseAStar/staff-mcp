@@ -17,11 +17,13 @@ program
   .option("-h, --host <address>", "Host for HTTP server", "127.0.0.1")
   .option("-w, --working-dir <path>", "Working directory for the server (defaults to current execution path)", process.cwd())
   .option("-d, --allowed-dir <paths...>", "Additional directories allowed for sandbox", [])
+  .option("-r, --profile <name>", "The persona/role for skills (e.g., developer, reverse-engineer, default)", "default")
   .action(async (options) => {
     ensureStaffDirs();
     const workingDir = path.resolve(options.workingDir);
     const allowedDirs = options.allowedDir.map((d: string) => path.resolve(d));
-    const server = createServer("staff-mcp", "1.0.0", workingDir, allowedDirs);
+    const profile = options.profile;
+    const server = createServer("staff-mcp", "1.0.0", workingDir, allowedDirs, profile);
 
     if (options.transport === "http") {
       await startHttpServer(server, parseInt(options.port, 10), options.host);
