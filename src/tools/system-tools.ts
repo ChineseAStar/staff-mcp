@@ -10,7 +10,20 @@ import { getWorkspaceArtifactPolicy } from "../policies/workspace-artifact-polic
 export function getMcpInstructions(workingDir: string, security: SecurityManager): string {
   const platform = os.platform();
   const isWin = platform === "win32";
-  const shell = isWin ? "cmd.exe or PowerShell" : (process.env.SHELL || "/bin/sh");
+  
+  // Use the same logic as shell-tools.ts to determine the actual shell being used
+  let shell = isWin ? "cmd.exe or PowerShell" : "/bin/sh";
+  if (!isWin) {
+    if (process.env.STAFF_MCP_IS_DOCKER === "1") {
+       // If running in Docker, we dynamically probed bash in shell-tools.
+       // We can assume if /bin/bash exists, it's used.
+       const fs = require('fs');
+       shell = fs.existsSync('/bin/bash') ? "/bin/bash" : "/bin/sh";
+    } else {
+       shell = process.env.SHELL || (require('fs').existsSync('/bin/bash') ? "/bin/bash" : "/bin/sh");
+    }
+  }
+
   const allowedDirs = security.getAllowedDirs();
 
   return `

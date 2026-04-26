@@ -56,7 +56,7 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
         const { stdout, stderr } = await execAsync(command, {
           cwd: validatedCwd,
           timeout: timeout,
-          shell: DEFAULT_SHELL as string | undefined, // passing boolean true is mostly for spawn, but exec defaults to /bin/sh if not specified.
+          shell: DEFAULT_SHELL, // use the precise shell string or undefined for windows
         });
 
         // Truncate output if too long
