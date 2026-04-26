@@ -17,46 +17,31 @@ Skills are stored as directories containing a `SKILL.md` file. They can be insta
 
 Profiles are roles or specific context configurations (e.g. `developer`, `reverse-engineer`). 
 
-### ⚠️ Security Boundaries & Constraints
-- **Workspace ONLY**: As an AI assistant running in a sandboxed environment, you are ONLY permitted to create, modify, or delete skills within the current project workspace (`<cwd>/.staff/skills/` or `<cwd>/.staff/profiles/`).
-- **Global & Built-in are Read-Only**: You MUST NOT attempt to use tools to modify user-level (`~/.staff/`) or built-in (`staff-mcp/builtin-profiles/`) skills. Your sandbox strictly prevents this and you will get access denied errors.
-- **Provide Instructions for Global**: If the user explicitly asks to install, modify, or delete a global/user-level skill, you must ONLY provide the exact shell commands in a markdown code block and politely instruct the user to run them manually in their own terminal. DO NOT execute the commands yourself.
+### ⚠️ Security Boundaries & Default Scope
+- **Default to Workspace ONLY**: Unless the user explicitly uses the word "global", you MUST assume all requests (install, uninstall, clear, list) apply ONLY to the current project workspace (`<cwd>/.staff/skills/` or `<cwd>/.staff/profiles/`).
+- **DO NOT Locate Global/Built-in Skills**: Do not use tools (`list_dir`, `execute_command`, etc.) to search for or verify global or built-in skills when deleting or modifying. Ignore their existence during these operations to avoid wasting time and access denied errors.
+- **Global & Built-in are Read-Only**: You are strictly prohibited from modifying user-level (`~/.staff/`) or built-in (`staff-mcp/builtin-profiles/`) directories.
+- **Provide Instructions for Global**: If the user EXPLICITLY asks to install, modify, or delete a global/user-level skill, DO NOT try to locate or execute it. Simply provide the exact shell commands (e.g., `rm -rf ~/.staff/skills/<name>`) in a markdown code block and politely instruct the user to run them manually.
 
 ## Workflows
 
 ### 🔍 Search/Discover Skills
-To find skills (e.g., Anthropic's official skills):
+To find skills to install:
 1. Use `execute_command` with `curl` to query GitHub API: `curl -s "https://api.github.com/orgs/anthropics/repos?per_page=100" | grep '"name"'`
-2. Or look inside `https://github.com/anthropics/skills` using git sparse-checkout.
 
 ### ⬇️ Install a Skill
 When the user asks to install a skill:
-1. Ask the user for the target environment if they haven't specified:
-   - Global (`~/.staff/skills/`) -> **Provide commands only!**
-   - Project (`.staff/skills/`) -> **Automated execution allowed.**
-   - Specific Profile (e.g., `.staff/profiles/reverse-engineer/skills/`) -> **Automated execution allowed.**
-2. If installing to the **Project** environment, use `execute_command` to:
-   - Create a temporary directory.
-   - Clone the repository (or download files) containing the `SKILL.md`.
-   - Ensure the target path exists with `mkdir -p`.
-   - Copy the skill files to the target directory.
-   - Clean up the temporary directory.
-3. If installing **Globally**, output the corresponding commands (e.g., `mkdir -p ~/.staff/skills && cd ~/.staff/skills && git clone ...`) and ask the user to execute them.
+1. Assume **Project** environment (`<cwd>/.staff/skills/`) by default, unless "global" is specified.
+2. **If Project-level**: Use `execute_command` to clone/download the skill into `<cwd>/.staff/skills/<skill-name>`.
+3. **If Global-level**: DO NOT execute anything. Output the corresponding commands (e.g., `mkdir -p ~/.staff/skills && cd ~/.staff/skills && git clone ...`) and ask the user to execute them manually.
 
-### 🗑️ Uninstall a Skill
-1. Use the `skill-manager`'s knowledge of paths to locate the skill directory.
-2. Check if the skill is located in the global directory or built-in directory. 
-   - If it is global/built-in, output the `rm -rf <path>` command and ask the user to run it.
-   - If it is a project-level skill, use `execute_command` with `rm -rf <path-to-skill-directory>` to safely remove it.
+### 🗑️ Uninstall / Clear Skills
+When the user asks to remove, uninstall, or clear skills:
+1. **Assume Workspace Only**: ONLY look in and modify the project directories (`<cwd>/.staff/skills/` and `<cwd>/.staff/profiles/`). 
+2. Use `execute_command` (e.g., `rm -rf .staff/skills/*`) to delete them directly.
+3. **Do NOT** try to find, list, or touch `~/.staff` or built-in skills. Ignore them entirely.
+4. If the user EXPLICITLY asks to remove a **global** skill, DO NOT look for it. Just output `rm -rf ~/.staff/skills/<skill-name>` and tell the user to run it themselves.
 
 ### 📝 Create a Custom Skill
-1. Ask the user for the name, description, and target level (Project or Global).
-2. If Project-level, use `write_file` to create `<target-directory>/<skill-name>/SKILL.md`. Include the essential YAML frontmatter:
-   ```yaml
-   ---
-   name: <skill-name>
-   description: <description>
-   ---
-   ```
-   Define instructions under `# Knowledge` and `# Workflows` headers.
-3. If Global-level, provide the file content in a code block and instruct the user to save it to `~/.staff/skills/<skill-name>/SKILL.md`.
+1. Assume **Project-level** by default. Use `write_file` to create `<cwd>/.staff/skills/<skill-name>/SKILL.md`.
+2. If the user explicitly asks for a **Global-level** skill, provide the file content in a code block and instruct the user to save it to `~/.staff/skills/<skill-name>/SKILL.md` manually.
