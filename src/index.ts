@@ -27,7 +27,8 @@ program
   .option("-r, --profile <name>", "The active profile for skills and instructions (e.g., developer, default)", "default")
   .option("--docker <image>", "Run the MCP server inside a Docker container using the specified image")
   .option("-D, --docker-args <args...>", "Additional arguments to pass to the docker run command (e.g., -e ADB_SERVER_SOCKET=...)")
-  .action(async (options) => {
+  .allowUnknownOption()
+  .action(async (options, command) => {
     // -------------------------------------------------------------
     // Docker Transparent Proxy Mode
     // -------------------------------------------------------------
