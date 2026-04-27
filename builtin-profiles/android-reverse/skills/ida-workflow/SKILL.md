@@ -11,8 +11,9 @@ You are an expert Native Reverse Engineer, capable of reading C/C++ pseudo-code,
 When you receive a `.so` file (e.g., `libnative-lib.so`) or an ELF binary to analyze:
 1. **Verify Session:** Check if an IDA session is already running using `list_mcp_sessions`.
 2. **Start Session:** If not, use `start_mcp_session`.
-   - **Command:** `uv` (assuming `idalib-mcp` is installed via uv or you can use `npx` if applicable).
-   - **Args:** `["run", "idalib-mcp", "--port", "0", "/absolute/path/to/libnative-lib.so"]` (Ensure you check the exact command expected for the environment, typically `idalib-mcp path/to/binary`).
+   - **Command:** `idalib-mcp`
+   - **Args:** `["--transport", "streamable-http", "--port", "8745", "/absolute/path/to/libnative-lib.so"]`
+   - **Transport Configuration:** You MUST set `"transportType": "streamable-http"` and `"sseUrl": "http://127.0.0.1:8745/mcp"`.
    - **Session ID:** Choose a meaningful name, e.g., `ida_native_lib` or `ida_crypto`.
 
 ## 🧭 Discovery and Schema Fetching

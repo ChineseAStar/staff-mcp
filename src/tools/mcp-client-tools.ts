@@ -3,14 +3,16 @@ import { z } from "zod";
 import { spawn, ChildProcess } from "child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 interface McpSession {
   sessionId: string;
   command: string;
   args: string[];
-  process: ChildProcess;
+  process: ChildProcess | null;
   client: Client;
-  transport: StdioClientTransport;
+  transport: any;
   status: "starting" | "ready" | "error" | "exited";
   startedAt: Date;
   error?: string;
@@ -36,13 +38,15 @@ export function registerMcpClientTools(server: McpServer): void {
   // 1. start_mcp_session
   server.tool(
     "start_mcp_session",
-    "Starts a background Model Context Protocol (MCP) server process using the provided command and arguments. Returns a unique sessionId.",
+    "Starts a background Model Context Protocol (MCP) server process. Supports stdio (default), sse, and streamable-http transports. Returns a unique sessionId.",
     {
       sessionId: z.string().describe("A unique identifier you choose for this session (e.g. 'jadx_1')"),
-      command: z.string().describe("The executable command to run the server (e.g. 'npx', 'uv', 'java')"),
+      command: z.string().describe("The executable command to run the server"),
       args: z.array(z.string()).describe("Arguments to pass to the command"),
+      transportType: z.enum(["stdio", "sse", "streamable-http"]).optional().describe("Transport type, default is stdio."),
+      sseUrl: z.string().optional().describe("Required if transportType is 'sse' or 'streamable-http'. The endpoint URL (e.g. 'http://127.0.0.1:8745/sse').")
     },
-    async ({ sessionId, command, args }) => {
+    async ({ sessionId, command, args, transportType = "stdio", sseUrl }) => {
       if (sessions.has(sessionId)) {
         const existing = sessions.get(sessionId)!;
         return {
@@ -54,28 +58,44 @@ export function registerMcpClientTools(server: McpServer): void {
       }
 
       try {
-        const transport = new StdioClientTransport({ command, args });
         const client = new Client(
           { name: "staff-mcp-proxy", version: "1.0.0" },
           { capabilities: {} }
         );
 
-        const sessionProcess = spawn(command, args, {
-          // StdioClientTransport handles stdio automatically, but we need the process reference for lifecycle
-          // Wait, StdioClientTransport internalizes the process spawning. 
-          // We can't directly grab the ChildProcess from StdioClientTransport easily without hacking its internals.
-          // However, we CAN just rely on the transport to manage the process!
-        });
-        // We will just let StdioClientTransport handle the spawn, so we don't need `spawn` manually.
-        // Let's refine this below.
-        
-        // Actually, StdioClientTransport takes { command, args } and spawns it internally on `connect()`.
-        
+        let transport: any;
+        let sessionProcess: ChildProcess | null = null;
+
+        if (transportType === "sse" || transportType === "streamable-http") {
+            if (!sseUrl) {
+                return {
+                    content: [{ type: "text", text: `sseUrl is required when transportType is '${transportType}'` }],
+                    isError: true
+                };
+            }
+            
+            // For HTTP transports, we manually spawn the server process and then connect via HTTP
+            sessionProcess = spawn(command, args, { stdio: 'ignore', detached: true });
+            sessionProcess.unref(); // Let it run independently
+            
+            // Wait a few seconds for the HTTP server to bind
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            
+            if (transportType === "sse") {
+                transport = new SSEClientTransport(new URL(sseUrl));
+            } else {
+                transport = new StreamableHTTPClientTransport(new URL(sseUrl));
+            }
+        } else {
+            transport = new StdioClientTransport({ command, args });
+            // process is managed inside StdioClientTransport
+        }
+
         sessions.set(sessionId, {
           sessionId,
           command,
           args,
-          process: null as any, // We won't track the raw process, transport does it
+          process: sessionProcess,
           client,
           transport,
           status: "starting",
@@ -119,6 +139,9 @@ export function registerMcpClientTools(server: McpServer): void {
 
       try {
         await session.client.close();
+        if (session.process && session.process.pid) {
+           try { process.kill(session.process.pid, 'SIGKILL'); } catch(e) {}
+        }
         // transport.close() is usually called by client.close() or handles process killing
       } catch (e) {
         // ignore close errors

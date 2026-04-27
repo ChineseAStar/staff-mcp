@@ -10,6 +10,19 @@ import { startStdioServer } from "./transports/stdio.js";
 import { startHttpServer } from "./transports/http.js";
 import { ensureStaffDirs } from "./utils/paths.js";
 
+// Global error handlers to prevent the MCP server from crashing due to unhandled child process errors
+process.on("uncaughtException", (err: any) => {
+  if (err.code === "ENOENT" && err.syscall && err.syscall.startsWith("spawn")) {
+    console.error(`[staff-mcp] Captured unhandled spawn error: ${err.message}. A background tool failed to start.`);
+  } else {
+    console.error("[staff-mcp] Uncaught Exception:", err);
+  }
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[staff-mcp] Unhandled Rejection at:", promise, "reason:", reason);
+});
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
