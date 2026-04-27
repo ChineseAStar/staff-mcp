@@ -69,26 +69,38 @@ export function registerLspTools(server: McpServer, security: SecurityManager) {
     }
   );
 
-  // go_to_definition
+  // symbol_lookup
   server.registerTool(
-    "go_to_definition",
+    "symbol_lookup",
     {
-      description: "Find the definition of a symbol at a specific position.",
+      description: "Look up definition or references for a symbol at a specific position.",
       inputSchema: z.object({
-        path: z.string().describe("File path to inspect."),
+        action: z.enum(["definition", "references"]).describe("Whether to find the definition or all references."),
+        path: z.string().describe("File path where the symbol is located."),
         line: z.number().describe("1-based line number."),
         character: z.number().describe("1-based character position."),
       }).strict(),
     },
-    async ({ path: filePath, line, character }) => {
+    async ({ action, path: filePath, line, character }) => {
       try {
         const validatedPath = security.resolveAndValidatePath(filePath);
         const rootPath = security.getWorkingDir();
-        const result = await lspManager.go_to_definition_internal(validatedPath, line, character, rootPath);
 
-        return {
-          content: [{ type: "text", text: result }],
-        };
+        if (action === "definition") {
+          const result = await lspManager.go_to_definition_internal(validatedPath, line, character, rootPath);
+          return { content: [{ type: "text", text: result }] };
+        } else {
+          const references = await lspManager.findReferences(validatedPath, line - 1, character - 1, rootPath);
+          if (!references || references.length === 0) {
+            return { content: [{ type: "text", text: "No references found." }] };
+          }
+          const results = references.map((ref: any) => {
+            let uriPath = ref.uri;
+            try { uriPath = fileURLToPath(ref.uri); } catch(e) { uriPath = uriPath.replace("file://", ""); }
+            return `${uriPath}:${ref.range.start.line + 1}`;
+          });
+          return { content: [{ type: "text", text: results.join("\n") }] };
+        }
       } catch (error: any) {
         return {
           content: [{ type: "text", text: `LSP Error: ${error.message}` }],
@@ -150,42 +162,4 @@ export function registerLspTools(server: McpServer, security: SecurityManager) {
     }
   );
 
-  // find_references
-  server.registerTool(
-    "find_references",
-    {
-      description: "Find all references to a symbol at a specific position in the project.",
-      inputSchema: z.object({
-        path: z.string().describe("File path where the symbol is located."),
-        line: z.number().describe("1-based line number."),
-        character: z.number().describe("1-based character position."),
-      }).strict(),
-    },
-    async ({ path: filePath, line, character }) => {
-      try {
-        const validatedPath = security.resolveAndValidatePath(filePath);
-        const rootPath = security.getWorkingDir();
-        const references = await lspManager.findReferences(validatedPath, line - 1, character - 1, rootPath);
-        
-        if (!references || references.length === 0) {
-          return { content: [{ type: "text", text: "No references found." }] };
-        }
-
-        const results = references.map((ref: any) => {
-          let uriPath = ref.uri;
-          try { uriPath = fileURLToPath(ref.uri); } catch(e) { uriPath = uriPath.replace("file://", ""); }
-          return `${uriPath}:${ref.range.start.line + 1}`;
-        });
-
-        return {
-          content: [{ type: "text", text: results.join("\n") }],
-        };
-      } catch (error: any) {
-        return {
-          content: [{ type: "text", text: `LSP Error: ${error.message}` }],
-          isError: true,
-        };
-      }
-    }
-  );
 }

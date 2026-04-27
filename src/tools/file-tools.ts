@@ -202,39 +202,47 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
     }
   );
 
-  // search_file_content
+  // search_workspace
   server.registerTool(
-    "search_file_content",
+    "search_workspace",
     {
-      description: "Perform a global search for a pattern across all files in the project. Supports regex, case-sensitivity, and glob filters.",
+      description: "Perform a global search across all files in the project. Use 'content' to search inside files (regex) or 'path' to find files by name/glob.",
       inputSchema: z.object({
-        regex: z.string().describe("The pattern to search for (regex supported)."),
+        search_type: z.enum(["content", "path"]).describe("The type of search to perform."),
+        query: z.string().describe("The pattern to search for. For 'content', this is a regex. For 'path', this is a glob pattern (e.g. '**/*.ts')."),
         includeGlob: z.string().optional().describe("Glob pattern to limit the search (e.g. 'src/**/*.ts')."),
         excludeGlob: z.string().optional().describe("Glob pattern to exclude from the search (e.g. 'node_modules/**')."),
-        caseSensitive: z.boolean().optional().describe("Whether the search should be case-sensitive (default: false)."),
-        wholeWord: z.boolean().optional().describe("Whether to match whole words only (default: false)."),
+        caseSensitive: z.boolean().optional().describe("Whether the search should be case-sensitive (default: false, only applies to 'content')."),
+        wholeWord: z.boolean().optional().describe("Whether to match whole words only (default: false, only applies to 'content')."),
         noIgnore: z.boolean().optional().describe("If true, searches will not respect .gitignore files. Useful for searching in hidden/ignored directories like .staff."),
       }).strict(),
     },
-    async ({ regex, includeGlob, excludeGlob, caseSensitive = false, wholeWord = false, noIgnore = false }) => {
+    async ({ search_type, query, includeGlob, excludeGlob, caseSensitive = false, wholeWord = false, noIgnore = false }) => {
       try {
         const baseDir = security.resolveAndValidatePath(".");
         const rgPath = await ensureRipgrep();
         
         if (rgPath) {
           try {
-            let args = ["--line-number", "--column", "--no-heading", "--color", "never", "--hidden"];
+            let args = ["--color", "never", "--hidden"];
+            
+            if (search_type === "content") {
+              args.push("--line-number", "--column", "--no-heading");
+              if (!caseSensitive) args.push("--ignore-case");
+              if (wholeWord) args.push("--word-regexp");
+            } else {
+              args.push("--files");
+              args.push("--glob");
+              args.push(query);
+            }
             
             if (noIgnore) {
                args.push("--no-ignore");
             }
             
-            // Explicitly ignore .git and node_modules in all cases
             args.push("--glob"); args.push("!.git/**");
             args.push("--glob"); args.push("!node_modules/**");
             
-            if (!caseSensitive) args.push("--ignore-case");
-            if (wholeWord) args.push("--word-regexp");
             if (includeGlob) {
                args.push("--glob");
                args.push(includeGlob);
@@ -245,51 +253,63 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
             }
             
             args.push("--");
-            args.push(regex);
+            if (search_type === "content") {
+              args.push(query);
+            }
             args.push(baseDir);
 
-            // Use double quotes for all arguments to be safe on Windows
             const command = `"${rgPath}" ${args.map(a => `"${a.replace(/"/g, '\\"')}"`).join(" ")}`;
             const { stdout } = await execAsync(command);
-            const lines = stdout.trim().split("\n").filter(l => l.length > 0);
-            
-            const formatted = lines.slice(0, 100).map(line => {
-               // Robust parsing for path:line:col:text, considering Windows drive letters
-               const match = line.match(/^((?:[a-zA-Z]:)?[^:]+):(\d+):(\d+):(.*)$/);
-               if (match) {
-                  const [_, absPath, lineNum, colNum, context] = match;
-                  const relPath = path.relative(baseDir, absPath);
-                  return `${relPath}:${lineNum} - ${context.trim()}`;
-               }
-               return line;
-            });
 
-            if (lines.length > 100) {
-              formatted.push("... [Search results truncated after 100 matches]");
+            let lines = stdout.trim().split("\n").filter(l => l.length > 0);
+
+            if (search_type === "path") {
+              lines = lines.map(line => {
+                const relPath = path.relative(baseDir, line.trim());
+                return relPath.replace(/\\/g, '/');
+              });
+            } else {
+              lines = lines.map(line => {
+                 const match = line.match(/^((?:[a-zA-Z]:)?[^:]+):(\d+):(\d+):(.*)$/);
+                 if (match) {
+                    const [_, absPath, lineNum, colNum, context] = match;
+                    const relPath = path.relative(baseDir, absPath);
+                    return `${relPath.replace(/\\/g, '/')}:${lineNum} - ${context.trim()}`;
+                 }
+                 return line;
+              });
+            }
+
+            if (lines.length > 200) {
+              lines = lines.slice(0, 200);
+              lines.push("... [Search results truncated after 200 matches]");
             }
 
             return {
-              content: [{ type: "text", text: formatted.join("\n") || "No matches found." }],
+              content: [{ type: "text", text: lines.join("\n") || "No matches found." }],
             };
           } catch (rgError: any) {
-             if (rgError.code === 1) { // rg exit code 1 means no matches
-                return { content: [{ type: "text", text: "No matches found." }] };
-             }
-             // If rg failed for other reasons, fall back to JS
+            if (rgError.code === 1) {
+              return { content: [{ type: "text", text: "No matches found." }] };
+            }
           }
         }
 
         // JS Fallback
         const results: string[] = [];
-        const searchRegex = new RegExp(wholeWord ? `\\b${regex}\\b` : regex, caseSensitive ? "g" : "gi");
-        
         function globToRegex(glob: string) {
-          const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+          const escaped = glob.replace(/[.+^${()|[\]\\]/g, '\\$&');
           const replaced = escaped.replace(/\\\*\\\*/g, '.*').replace(/\\\*/g, '[^/]*').replace(/\\\?/g, '.');
           return new RegExp(`^${replaced}$`);
         }
-        
-        const includeRegex = includeGlob ? globToRegex(includeGlob) : null;
+
+        const searchRegex = search_type === "content" ? new RegExp(wholeWord ? `\\b${query}\\b` : query, caseSensitive ? "g" : "gi") : null;
+        let includeRegex: RegExp | null = null;
+        if (search_type === "path") {
+          includeRegex = globToRegex(query);
+        } else if (includeGlob) {
+          includeRegex = globToRegex(includeGlob);
+        }
         const excludeRegex = excludeGlob ? globToRegex(excludeGlob) : null;
 
         async function searchRecursively(currentDir: string) {
@@ -304,25 +324,32 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
             if (entry.isDirectory()) {
               await searchRecursively(fullPath);
             } else if (entry.isFile()) {
-              if (includeRegex && !includeRegex.test(relPath)) continue;
-              if (excludeRegex && excludeRegex.test(relPath)) continue;
+              if (search_type === "path") {
+                 if (includeRegex && !includeRegex.test(relPath)) continue;
+                 if (excludeRegex && excludeRegex.test(relPath)) continue;
+                 results.push(relPath);
+                 if (results.length > 200) return;
+              } else {
+                 if (includeRegex && !includeRegex.test(relPath)) continue;
+                 if (excludeRegex && excludeRegex.test(relPath)) continue;
 
-              try {
-                const content = await fs.readFile(fullPath, "utf-8");
-                if (content.includes("\0")) continue;
+                 try {
+                   const contentStr = await fs.readFile(fullPath, "utf-8");
+                   if (contentStr.includes("\0")) continue; // Skip binary
 
-                let match;
-                while ((match = searchRegex.exec(content)) !== null) {
-                  const lineNum = content.substring(0, match.index).split(/\r?\n/).length;
-                  const context = content.split(/\r?\n/)[lineNum - 1];
-                  results.push(`${relPath}:${lineNum} - ${context.trim()}`);
-                  
-                  if (results.length > 100) {
-                    results.push("... [Search results truncated after 100 matches]");
-                    return;
-                  }
-                }
-              } catch (e) {}
+                   let match;
+                   while ((match = searchRegex!.exec(contentStr)) !== null) {
+                     const lineNum = contentStr.substring(0, match.index).split(/\r?\n/).length;
+                     const context = contentStr.split(/\r?\n/)[lineNum - 1];
+                     results.push(`${relPath}:${lineNum} - ${context.trim()}`);
+                     
+                     if (results.length > 200) {
+                       results.push("... [Search results truncated after 200 matches]");
+                       return;
+                     }
+                   }
+                 } catch (e) {}
+              }
             }
           }
         }
@@ -340,122 +367,4 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
     }
   );
 
-  // find_files
-  server.registerTool(
-    "find_files",
-    {
-      description: "Search for files by name or path across the workspace.",
-      inputSchema: z.object({
-        pattern: z.string().describe("Glob pattern to match file paths (e.g. '**/*.ts', 'src/**/components/*')."),
-        excludePattern: z.string().optional().describe("Glob pattern to exclude (e.g. 'node_modules/**')."),
-        noIgnore: z.boolean().optional().describe("If true, searches will not respect .gitignore files. Useful for finding files in hidden/ignored directories."),
-      }).strict(),
-    },
-    async ({ pattern, excludePattern, noIgnore = false }) => {
-      try {
-        const baseDir = security.resolveAndValidatePath(".");
-        const rgPath = await ensureRipgrep();
-
-        if (rgPath) {
-          try {
-            // Use rg --files to just list files, then we filter by glob
-            let args = ["--files", "--hidden", "--color", "never"];
-            
-            if (noIgnore) {
-               args.push("--no-ignore");
-            }
-            
-            // Add the glob for inclusion
-            args.push("--glob");
-            args.push(pattern);
-
-            if (excludePattern) {
-              args.push("--glob");
-              args.push(`!${excludePattern}`);
-            }
-
-            // Provide default exclusions so we don't crawl the whole universe
-            args.push("--glob"); args.push("!.git/**");
-            args.push("--glob"); args.push("!node_modules/**");
-
-            args.push("--");
-            args.push(baseDir);
-
-            const command = `"${rgPath}" ${args.map(a => `"${a.replace(/"/g, '\\"')}"`).join(" ")}`;
-            const { stdout } = await execAsync(command);
-            let lines = stdout.trim().split("\n").filter(l => l.length > 0);
-
-            // Convert to relative paths
-            lines = lines.map(line => {
-              // Convert absolute to relative path, handling Windows drives
-              const relPath = path.relative(baseDir, line.trim());
-              return relPath.replace(/\\/g, '/');
-            });
-
-            if (lines.length > 100) {
-              lines = lines.slice(0, 100);
-              lines.push("... [Search results truncated after 100 matches]");
-            }
-
-            return {
-              content: [{ type: "text", text: lines.join("\n") || "No matching files found." }],
-            };
-          } catch (rgError: any) {
-             if (rgError.code === 1) {
-                return { content: [{ type: "text", text: "No matching files found." }] };
-             }
-          }
-        }
-
-        // JS Fallback
-        const results: string[] = [];
-        function globToRegex(glob: string) {
-          const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-          const replaced = escaped.replace(/\\\*\\\*/g, '.*').replace(/\\\*/g, '[^/]*').replace(/\\\?/g, '.');
-          return new RegExp(`^${replaced}$`);
-        }
-        
-        const includeRegex = globToRegex(pattern);
-        const excludeRegex = excludePattern ? globToRegex(excludePattern) : null;
-
-        async function searchRecursively(currentDir: string) {
-          const entries = await fs.readdir(currentDir, { withFileTypes: true });
-
-          for (const entry of entries) {
-            const fullPath = path.join(currentDir, entry.name);
-            const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
-
-            if (entry.name === "node_modules" || entry.name === ".git") continue;
-
-            if (entry.isDirectory()) {
-              if (includeRegex.test(relPath + '/')) {
-                  // Some people use glob for matching directory paths, though rg --files only yields files
-              }
-              await searchRecursively(fullPath);
-            } else if (entry.isFile()) {
-              if (!includeRegex.test(relPath)) continue;
-              if (excludeRegex && excludeRegex.test(relPath)) continue;
-
-              results.push(relPath);
-              if (results.length > 100) return;
-            }
-          }
-        }
-
-        await searchRecursively(baseDir);
-        if (results.length >= 100) {
-           results.push("... [Search results truncated after 100 matches]");
-        }
-
-        return {
-          content: [{ type: "text", text: results.join("\n") || "No matching files found." }],
-        };
-      } catch (error: any) {
-        return {
-          content: [{ type: "text", text: `Error finding files: ${error.message}` }],
-          isError: true,
-        };
-      }
-    }
-  );
 }

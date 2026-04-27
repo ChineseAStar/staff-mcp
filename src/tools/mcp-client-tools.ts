@@ -35,152 +35,100 @@ function getReadySession(sessionId: string): McpSession {
 }
 
 export function registerMcpClientTools(server: McpServer): void {
-  // 1. start_mcp_session
+  // 1. manage_mcp_session (combines start, stop, list)
   server.registerTool(
-    "start_mcp_session",
+    "manage_mcp_session",
     {
-      description: "Starts a background Model Context Protocol (MCP) server process. Supports stdio (default), sse, and streamable-http transports. Returns a unique sessionId.",
+      description: "Manage background Model Context Protocol (MCP) server processes. Actions: 'start' (requires sessionId, command, args), 'stop' (requires sessionId), 'list'.",
       inputSchema: z.object({
-        sessionId: z.string().describe("A unique identifier you choose for this session (e.g. 'jadx_1')"),
-        command: z.string().describe("The executable command to run the server"),
-        args: z.array(z.string()).describe("Arguments to pass to the command"),
-        transportType: z.enum(["stdio", "sse", "streamable-http"]).optional().describe("Transport type, default is stdio."),
-        sseUrl: z.string().optional().describe("Required if transportType is 'sse' or 'streamable-http'. The endpoint URL (e.g. 'http://127.0.0.1:8745/sse').")
+        action: z.enum(["start", "stop", "list"]).describe("The action to perform on MCP sessions."),
+        sessionId: z.string().optional().describe("A unique identifier for this session. Required for 'start' and 'stop'."),
+        command: z.string().optional().describe("Required for 'start'. The executable command to run the server."),
+        args: z.array(z.string()).optional().describe("Required for 'start'. Arguments to pass to the command."),
+        transportType: z.enum(["stdio", "sse", "streamable-http"]).optional().describe("Optional for 'start'. Transport type, default is stdio."),
+        sseUrl: z.string().optional().describe("Required for 'start' if transportType is 'sse' or 'streamable-http'.")
       }).strict(),
     },
-    async ({ sessionId, command, args, transportType = "stdio", sseUrl }) => {
-      if (sessions.has(sessionId)) {
-        const existing = sessions.get(sessionId)!;
-        return {
-          content: [
-            { type: "text", text: `Session '${sessionId}' already exists with status '${existing.status}'. Please use a different ID or stop it first.` }
-          ],
-          isError: true
-        };
-      }
-
-      try {
-        const client = new Client(
-          { name: "staff-mcp-proxy", version: "1.0.0" },
-          { capabilities: {} }
-        );
-
-        let transport: any;
-        let sessionProcess: ChildProcess | null = null;
-
-        if (transportType === "sse" || transportType === "streamable-http") {
-            if (!sseUrl) {
-                return {
-                    content: [{ type: "text", text: `sseUrl is required when transportType is '${transportType}'` }],
-                    isError: true
-                };
-            }
-            
-            // For HTTP transports, we manually spawn the server process and then connect via HTTP
-            sessionProcess = spawn(command, args, { stdio: 'ignore', detached: true });
-            sessionProcess.unref(); // Let it run independently
-            
-            // Wait a few seconds for the HTTP server to bind
-            await new Promise(resolve => setTimeout(resolve, 3000));
-            
-            if (transportType === "sse") {
-                transport = new SSEClientTransport(new URL(sseUrl));
-            } else {
-                transport = new StreamableHTTPClientTransport(new URL(sseUrl));
-            }
-        } else {
-            transport = new StdioClientTransport({ command, args });
-            // process is managed inside StdioClientTransport
+    async ({ action, sessionId, command, args, transportType = "stdio", sseUrl }) => {
+      if (action === "start") {
+        if (!sessionId || !command || !args) {
+          return { content: [{ type: "text", text: "Error: 'sessionId', 'command', and 'args' are required to start a session." }], isError: true };
+        }
+        if (sessions.has(sessionId)) {
+          const existing = sessions.get(sessionId)!;
+          return {
+            content: [{ type: "text", text: `Session '${sessionId}' already exists with status '${existing.status}'. Please use a different ID or stop it first.` }],
+            isError: true
+          };
         }
 
-        sessions.set(sessionId, {
-          sessionId,
-          command,
-          args,
-          process: sessionProcess,
-          client,
-          transport,
-          status: "starting",
-          startedAt: new Date()
-        });
+        try {
+          const client = new Client({ name: "staff-mcp-proxy", version: "1.0.0" }, { capabilities: {} });
+          let transport: any;
+          let sessionProcess: ChildProcess | null = null;
 
-        await client.connect(transport);
-        
-        const session = sessions.get(sessionId)!;
-        session.status = "ready";
+          if (transportType === "sse" || transportType === "streamable-http") {
+              if (!sseUrl) {
+                  return { content: [{ type: "text", text: `sseUrl is required when transportType is '${transportType}'` }], isError: true };
+              }
+              sessionProcess = spawn(command, args, { stdio: 'ignore', detached: true });
+              sessionProcess.unref();
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              
+              if (transportType === "sse") {
+                  transport = new SSEClientTransport(new URL(sseUrl));
+              } else {
+                  transport = new StreamableHTTPClientTransport(new URL(sseUrl));
+              }
+          } else {
+              transport = new StdioClientTransport({ command, args });
+          }
 
-        return {
-          content: [
-            { type: "text", text: `Successfully started and connected to MCP session '${sessionId}'. Use 'explore_mcp_session' to discover available tools.` }
-          ]
-        };
-      } catch (err: any) {
-        sessions.delete(sessionId);
-        return {
-          content: [{ type: "text", text: `Failed to start MCP session '${sessionId}': ${err.message}` }],
-          isError: true
-        };
-      }
-    }
-  );
+          sessions.set(sessionId, {
+            sessionId, command, args, process: sessionProcess, client, transport,
+            status: "starting", startedAt: new Date()
+          });
 
-  // 2. stop_mcp_session
-  server.registerTool(
-    "stop_mcp_session",
-    {
-      description: "Stops a running MCP session and releases its resources.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The unique identifier of the session to stop"),
-      }).strict(),
-    },
-    async ({ sessionId }) => {
-      const session = sessions.get(sessionId);
-      if (!session) {
-        return {
-          content: [{ type: "text", text: `Session '${sessionId}' not found.` }]
-        };
-      }
+          await client.connect(transport);
+          sessions.get(sessionId)!.status = "ready";
 
-      try {
-        await session.client.close();
-        if (session.process && session.process.pid) {
-           try { process.kill(session.process.pid, 'SIGKILL'); } catch(e) {}
+          return { content: [{ type: "text", text: `Successfully started and connected to MCP session '${sessionId}'. Use 'explore_mcp_session' to discover available tools.` }] };
+        } catch (err: any) {
+          sessions.delete(sessionId);
+          return { content: [{ type: "text", text: `Failed to start MCP session '${sessionId}': ${err.message}` }], isError: true };
         }
-        // transport.close() is usually called by client.close() or handles process killing
-      } catch (e) {
-        // ignore close errors
-      } finally {
-        sessions.delete(sessionId);
+      } else if (action === "stop") {
+        if (!sessionId) {
+          return { content: [{ type: "text", text: "Error: 'sessionId' is required to stop a session." }], isError: true };
+        }
+        const session = sessions.get(sessionId);
+        if (!session) {
+          return { content: [{ type: "text", text: `Session '${sessionId}' not found.` }] };
+        }
+        try {
+          await session.client.close();
+          if (session.process && session.process.pid) {
+             try { process.kill(session.process.pid, 'SIGKILL'); } catch(e) {}
+          }
+        } catch (e) {} finally {
+          sessions.delete(sessionId);
+        }
+        return { content: [{ type: "text", text: `Session '${sessionId}' successfully stopped.` }] };
+      } else if (action === "list") {
+        if (sessions.size === 0) {
+          return { content: [{ type: "text", text: "No active MCP sessions." }] };
+        }
+        let output = "Active MCP Sessions:\n";
+        for (const [id, session] of sessions.entries()) {
+          output += `- [${id}] Status: ${session.status}, Command: ${session.command} ${session.args.join(" ")}\n`;
+        }
+        return { content: [{ type: "text", text: output }] };
       }
-
-      return {
-        content: [{ type: "text", text: `Session '${sessionId}' successfully stopped.` }]
-      };
+      return { content: [{ type: "text", text: `Invalid action: ${action}` }], isError: true };
     }
   );
 
-  // 3. list_mcp_sessions
-  server.registerTool(
-    "list_mcp_sessions",
-    {
-      description: "Lists all currently active MCP sessions managed by this proxy.",
-      inputSchema: z.object({}).strict(),
-    },
-    async () => {
-      if (sessions.size === 0) {
-        return { content: [{ type: "text", text: "No active MCP sessions." }] };
-      }
-
-      let output = "Active MCP Sessions:\n";
-      for (const [id, session] of sessions.entries()) {
-        output += `- [${id}] Status: ${session.status}, Command: ${session.command} ${session.args.join(" ")}\n`;
-      }
-
-      return { content: [{ type: "text", text: output }] };
-    }
-  );
-
-  // 4. explore_mcp_session
+  // 2. explore_mcp_session
   server.registerTool(
     "explore_mcp_session",
     {
@@ -193,13 +141,16 @@ export function registerMcpClientTools(server: McpServer): void {
     async ({ sessionId, toolName }) => {
       try {
         const session = getReadySession(sessionId);
+        
+        // Fetch tools list first (always needed)
         const toolsResult = await session.client.listTools();
 
         if (toolName) {
+          // --- Detailed view: full schema for ONE specific tool ---
           const tool = toolsResult.tools.find((t) => t.name === toolName);
           if (!tool) {
             return {
-              content: [{ type: "text", text: `Tool '${toolName}' not found in session '${sessionId}'.` }],
+              content: [{ type: "text", text: `Tool '${toolName}' not found in session '${sessionId}'. Available tools: ${toolsResult.tools.map(t => t.name).join(", ")}` }],
               isError: true
             };
           }
@@ -207,13 +158,70 @@ export function registerMcpClientTools(server: McpServer): void {
           let output = `Tool: ${tool.name}\nDescription: ${tool.description || "N/A"}\n\nArguments Schema (JSON Schema):\n`;
           output += JSON.stringify(tool.inputSchema, null, 2);
           return { content: [{ type: "text", text: output }] };
+          
         } else {
-          let output = `Available tools for session '${sessionId}':\n\n`;
-          toolsResult.tools.forEach((t) => {
-            output += `--- Tool: ${t.name} ---\n`;
-            output += `Description: ${t.description || "No description"}\n`;
-            output += `Arguments Schema:\n${JSON.stringify(t.inputSchema, null, 2)}\n\n`;
-          });
+          // --- Lightweight overview: ALL tools listed compactly ---
+          let output = `Session: ${sessionId}\n`;
+          
+          // Server identity
+          const serverVersion = session.client.getServerVersion();
+          if (serverVersion) {
+            output += `Server: ${serverVersion.name} v${serverVersion.version}\n`;
+          }
+          const caps = session.client.getServerCapabilities();
+          if (caps) {
+            const capNames = Object.keys(caps).filter(k => caps[k as keyof typeof caps]);
+            if (capNames.length > 0) {
+              output += `Capabilities: ${capNames.join(", ")}\n`;
+            }
+          }
+          output += "\n";
+          
+          // Server instructions (important context from the MCP server itself)
+          try {
+            const instructions = await session.client.getInstructions();
+            if (instructions) {
+              output += `[Server Instructions]\n${instructions}\n\n`;
+            }
+          } catch (e) {
+            // Some MCP servers don't implement getInstructions, skip silently
+          }
+          
+          // List ALL tools with compact info (NO full schemas - those are expensive)
+          output += `Available Tools (${toolsResult.tools.length} total):\n`;
+          for (const t of toolsResult.tools) {
+            const props = t.inputSchema?.properties;
+            const argCount = props ? Object.keys(props).length : 0;
+            const required = t.inputSchema?.required || [];
+            
+            output += `\n  [${t.name}]`;
+            if (t.description) {
+              output += `\n    ${t.description.split('\n')[0]}`;
+            }
+            if (argCount > 0) {
+              output += `\n    Args: ${argCount} parameter(s)`;
+              if (required.length > 0) {
+                output += ` [required: ${required.join(", ")}]`;
+              }
+            } else {
+              output += `\n    Args: none`;
+            }
+          }
+          
+          // Prompts (if server provides them)
+          try {
+            const promptsResult = await session.client.listPrompts();
+            if (promptsResult?.prompts?.length > 0) {
+              output += `\n\nAvailable Prompts (${promptsResult.prompts.length} total):\n`;
+              for (const p of promptsResult.prompts) {
+                output += `  [${p.name}] ${p.description || ""}\n`;
+              }
+            }
+          } catch (e) {
+            // MCP server may not support prompts
+          }
+          
+          output += `\n💡 Tip: Use explore_mcp_session with "toolName" to inspect a specific tool's full schema before calling it.`;
           return { content: [{ type: "text", text: output }] };
         }
       } catch (err: any) {

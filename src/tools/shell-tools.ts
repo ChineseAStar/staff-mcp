@@ -92,144 +92,96 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
     }
   );
 
-  // start_background_task
+  // manage_background_task (combines start, list, logs, kill)
   server.registerTool(
-    "start_background_task",
+    "manage_background_task",
     {
-      description: "Start a background process (e.g. dev server) in the workspace.",
+      description: "Manage background processes (e.g. dev servers) in the workspace. Use 'start' to start a new task, 'list' to view tasks, 'logs' to read output, and 'stop' to terminate.",
       inputSchema: z.object({
-        command: z.string().describe("The shell command to start."),
-        cwd: z.string().optional().describe("Directory to start from (defaults to workspace root)."),
+        action: z.enum(["start", "list", "logs", "stop"]).describe("The action to perform."),
+        command: z.string().optional().describe("Required for 'start'. The shell command to start."),
+        cwd: z.string().optional().describe("Optional for 'start'. Directory to start from (defaults to workspace root)."),
+        taskId: z.string().optional().describe("Required for 'logs' and 'stop'. The ID of the task."),
+        tail: z.number().optional().default(100).describe("Optional for 'logs'. Number of lines to return from the end."),
       }).strict(),
     },
-    async ({ command, cwd }) => {
-      try {
-        const validatedCwd = security.validateDirectory(cwd || ".");
-        
-        // Use a single string for spawn when shell: true is enabled.
-        // This is more cross-platform and handles arguments/quotes better.
-        const child = spawn(command, { 
-          cwd: validatedCwd,
-          shell: DEFAULT_SHELL || true,
-          // On Windows, shell: true uses cmd.exe /c.
-          // On Unix, shell: '/bin/bash' explicitly calls bash instead of /bin/sh.
-        });
+    async ({ action, command, cwd, taskId, tail }) => {
+      if (action === "start") {
+        if (!command) {
+          return { content: [{ type: "text", text: "Error: 'command' is required for action 'start'." }], isError: true };
+        }
+        try {
+          const validatedCwd = security.validateDirectory(cwd || ".");
+          const child = spawn(command, { 
+            cwd: validatedCwd,
+            shell: DEFAULT_SHELL || true,
+          });
 
-        const taskId = `task_${Math.random().toString(36).substring(2, 9)}`;
-        const logs: string[] = [];
+          const newTaskId = `task_${Math.random().toString(36).substring(2, 9)}`;
+          const logs: string[] = [];
 
-        child.stdout?.on("data", (data) => {
-          logs.push(data.toString());
-          if (logs.length > 1000) logs.shift(); // Keep last 1000 lines
-        });
+          child.stdout?.on("data", (data) => {
+            logs.push(data.toString());
+            if (logs.length > 1000) logs.shift();
+          });
 
-        child.stderr?.on("data", (data) => {
-          logs.push(`ERR: ${data.toString()}`);
-          if (logs.length > 1000) logs.shift();
-        });
+          child.stderr?.on("data", (data) => {
+            logs.push(`ERR: ${data.toString()}`);
+            if (logs.length > 1000) logs.shift();
+          });
 
-        backgroundTasks.set(taskId, { 
-          process: child, 
-          logs, 
-          command, 
-          cwd: validatedCwd, 
-          startTime: new Date().toISOString() 
-        });
+          backgroundTasks.set(newTaskId, { 
+            process: child, 
+            logs, 
+            command, 
+            cwd: validatedCwd, 
+            startTime: new Date().toISOString() 
+          });
 
-        child.on("exit", (code) => {
-          logs.push(`[Process exited with code ${code}]`);
-          // Note: We don't remove from map yet so logs can be read
-        });
+          child.on("exit", (code) => {
+            logs.push(`[Process exited with code ${code}]`);
+          });
 
-        return {
-          content: [{ type: "text", text: `Task started with ID: ${taskId}` }],
-        };
-      } catch (error: any) {
-        return {
-          content: [{ type: "text", text: `Error starting task: ${error.message}` }],
-          isError: true,
-        };
+          return { content: [{ type: "text", text: `Task started with ID: ${newTaskId}` }] };
+        } catch (error: any) {
+          return { content: [{ type: "text", text: `Error starting task: ${error.message}` }], isError: true };
+        }
+      } else if (action === "list") {
+        const tasks = Array.from(backgroundTasks.entries()).map(([id, task]) => ({
+          taskId: id,
+          command: task.command,
+          cwd: task.cwd,
+          startTime: task.startTime,
+          status: task.process.exitCode === null ? "running" : `exited (code: ${task.process.exitCode})`,
+        }));
+
+        if (tasks.length === 0) {
+          return { content: [{ type: "text", text: "No background tasks found." }] };
+        }
+        return { content: [{ type: "text", text: JSON.stringify(tasks, null, 2) }] };
+      } else if (action === "logs") {
+        if (!taskId) {
+          return { content: [{ type: "text", text: "Error: 'taskId' is required for action 'logs'." }], isError: true };
+        }
+        const task = backgroundTasks.get(taskId);
+        if (!task) {
+          return { content: [{ type: "text", text: `Task ${taskId} not found.` }], isError: true };
+        }
+        const taskLogs = task.logs.slice(-(tail || 100));
+        return { content: [{ type: "text", text: taskLogs.join("") || "(No logs yet)" }] };
+      } else if (action === "stop") {
+        if (!taskId) {
+          return { content: [{ type: "text", text: "Error: 'taskId' is required for action 'stop'." }], isError: true };
+        }
+        const task = backgroundTasks.get(taskId);
+        if (!task) {
+          return { content: [{ type: "text", text: `Task ${taskId} not found.` }], isError: true };
+        }
+        task.process.kill();
+        backgroundTasks.delete(taskId);
+        return { content: [{ type: "text", text: `Task ${taskId} killed.` }] };
       }
-    }
-  );
-
-  // list_background_tasks
-  server.registerTool(
-    "list_background_tasks",
-    {
-      description: "List all currently registered background tasks and their status.",
-      inputSchema: z.object({}).strict(),
-    },
-    async () => {
-      const tasks = Array.from(backgroundTasks.entries()).map(([id, task]) => ({
-        taskId: id,
-        command: task.command,
-        cwd: task.cwd,
-        startTime: task.startTime,
-        status: task.process.exitCode === null ? "running" : `exited (code: ${task.process.exitCode})`,
-      }));
-
-      if (tasks.length === 0) {
-        return {
-          content: [{ type: "text", text: "No background tasks found." }],
-        };
-      }
-
-      return {
-        content: [{ type: "text", text: JSON.stringify(tasks, null, 2) }],
-      };
-    }
-  );
-
-  // get_background_task_logs
-  server.registerTool(
-    "get_background_task_logs",
-    {
-      description: "Read the latest logs from a running or recently exited background task.",
-      inputSchema: z.object({
-        taskId: z.string().describe("The ID of the task."),
-        tail: z.number().optional().default(100).describe("Number of lines to return from the end."),
-      }).strict(),
-    },
-    async ({ taskId, tail }) => {
-      const task = backgroundTasks.get(taskId);
-      if (!task) {
-        return {
-          content: [{ type: "text", text: `Task ${taskId} not found.` }],
-          isError: true,
-        };
-      }
-
-      const logs = task.logs.slice(-tail);
-      return {
-        content: [{ type: "text", text: logs.join("") || "(No logs yet)" }],
-      };
-    }
-  );
-
-  // kill_background_task
-  server.registerTool(
-    "kill_background_task",
-    {
-      description: "Terminate a background task by its ID.",
-      inputSchema: z.object({
-        taskId: z.string().describe("The ID of the task to kill."),
-      }).strict(),
-    },
-    async ({ taskId }) => {
-      const task = backgroundTasks.get(taskId);
-      if (!task) {
-        return {
-          content: [{ type: "text", text: `Task ${taskId} not found.` }],
-          isError: true,
-        };
-      }
-
-      task.process.kill();
-      backgroundTasks.delete(taskId);
-      return {
-        content: [{ type: "text", text: `Task ${taskId} killed.` }],
-      };
+      return { content: [{ type: "text", text: `Invalid action: ${action}` }], isError: true };
     }
   );
 }
