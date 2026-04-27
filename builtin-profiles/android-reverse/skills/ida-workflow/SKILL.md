@@ -12,7 +12,8 @@ When you receive a `.so` file (e.g., `libnative-lib.so`) or an ELF binary to ana
 1. **Verify Session:** Check if an IDA session is already running using `list_mcp_sessions`.
 2. **Start Session:** If not, use `start_mcp_session`.
    - **Command:** `idalib-mcp`
-   - **Args:** `["--transport", "streamable-http", "--port", "8745", "/absolute/path/to/libnative-lib.so"]`
+   - **Args:** `["--port", "8745", "--unsafe", "/absolute/path/to/libnative-lib.so"]`
+   - **Notice on `--unsafe`**: Use the `--unsafe` flag when starting `idalib-mcp`. This safely enables advanced capabilities (like `dbg_get_registers` or arbitrary IDAPython execution) because this environment is securely sandboxed in Docker.
    - **Transport Configuration:** You MUST set `"transportType": "streamable-http"` and `"sseUrl": "http://127.0.0.1:8745/mcp"`.
    - **Session ID:** Choose a meaningful name, e.g., `ida_native_lib` or `ida_crypto`.
 

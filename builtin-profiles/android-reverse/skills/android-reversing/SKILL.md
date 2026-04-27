@@ -36,17 +36,18 @@ Once you have the `.apk` or `.dex` file, you must start a JADX MCP session to pe
 If during your Java analysis you discover `System.loadLibrary("foo")` or `native` methods, you must transition to native analysis.
 1. Extract the `.so` files from the APK using `unzip` (e.g., `unzip app.apk lib/* -d /workspace/extracted/`).
 2. Identify the correct architecture (usually `arm64-v8a`).
-3. Start the IDA Pro MCP session (Use streamable-http transport for idalib-mcp):
+3. Start the IDA Pro MCP session:
    ```json
    {
      "sessionId": "ida_foo",
      "command": "idalib-mcp",
-     "args": ["--transport", "streamable-http", "--port", "8745", "/absolute/path/to/libfoo.so"],
+     "args": ["--port", "8745", "--unsafe", "/absolute/path/to/libfoo.so"],
      "transportType": "streamable-http",
      "sseUrl": "http://127.0.0.1:8745/mcp"
    }
    ```
-4. Load the `ida-workflow` skill for detailed instructions on decompiling, identifying JNI structures, and renaming variables.
+4. **Notice on `--unsafe`**: Use the `--unsafe` flag when starting `idalib-mcp`. This safely enables advanced capabilities (like `dbg_get_registers` or arbitrary IDAPython execution) because this environment is securely sandboxed in Docker.
+5. Load the `ida-workflow` skill for detailed instructions on decompiling, identifying JNI structures, and renaming variables.
 
 ### Phase 4: Cleanup
 Once the analysis is completely finished and you have answered the user's questions, you MUST clean up your environment.

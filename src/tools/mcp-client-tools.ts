@@ -26,25 +26,27 @@ const sessions = new Map<string, McpSession>();
 function getReadySession(sessionId: string): McpSession {
   const session = sessions.get(sessionId);
   if (!session) {
-    throw new Error(`MCP Session '${sessionId}' not found.`);
+    throw new Error(`MCP Session '${sessionId}' not found. Please use 'list_mcp_sessions' to check active sessions or start it first.`);
   }
   if (session.status !== "ready") {
-    throw new Error(`MCP Session '${sessionId}' is not ready. Current status: ${session.status}`);
+    throw new Error(`MCP Session '${sessionId}' is not in ready state. Current status: ${session.status}. It might have failed to start or crashed. Check logs if necessary.`);
   }
   return session;
 }
 
 export function registerMcpClientTools(server: McpServer): void {
   // 1. start_mcp_session
-  server.tool(
+  server.registerTool(
     "start_mcp_session",
-    "Starts a background Model Context Protocol (MCP) server process. Supports stdio (default), sse, and streamable-http transports. Returns a unique sessionId.",
     {
-      sessionId: z.string().describe("A unique identifier you choose for this session (e.g. 'jadx_1')"),
-      command: z.string().describe("The executable command to run the server"),
-      args: z.array(z.string()).describe("Arguments to pass to the command"),
-      transportType: z.enum(["stdio", "sse", "streamable-http"]).optional().describe("Transport type, default is stdio."),
-      sseUrl: z.string().optional().describe("Required if transportType is 'sse' or 'streamable-http'. The endpoint URL (e.g. 'http://127.0.0.1:8745/sse').")
+      description: "Starts a background Model Context Protocol (MCP) server process. Supports stdio (default), sse, and streamable-http transports. Returns a unique sessionId.",
+      inputSchema: z.object({
+        sessionId: z.string().describe("A unique identifier you choose for this session (e.g. 'jadx_1')"),
+        command: z.string().describe("The executable command to run the server"),
+        args: z.array(z.string()).describe("Arguments to pass to the command"),
+        transportType: z.enum(["stdio", "sse", "streamable-http"]).optional().describe("Transport type, default is stdio."),
+        sseUrl: z.string().optional().describe("Required if transportType is 'sse' or 'streamable-http'. The endpoint URL (e.g. 'http://127.0.0.1:8745/sse').")
+      }).strict(),
     },
     async ({ sessionId, command, args, transportType = "stdio", sseUrl }) => {
       if (sessions.has(sessionId)) {
@@ -123,11 +125,13 @@ export function registerMcpClientTools(server: McpServer): void {
   );
 
   // 2. stop_mcp_session
-  server.tool(
+  server.registerTool(
     "stop_mcp_session",
-    "Stops a running MCP session and releases its resources.",
     {
-      sessionId: z.string().describe("The unique identifier of the session to stop"),
+      description: "Stops a running MCP session and releases its resources.",
+      inputSchema: z.object({
+        sessionId: z.string().describe("The unique identifier of the session to stop"),
+      }).strict(),
     },
     async ({ sessionId }) => {
       const session = sessions.get(sessionId);
@@ -156,10 +160,12 @@ export function registerMcpClientTools(server: McpServer): void {
   );
 
   // 3. list_mcp_sessions
-  server.tool(
+  server.registerTool(
     "list_mcp_sessions",
-    "Lists all currently active MCP sessions managed by this proxy.",
-    {},
+    {
+      description: "Lists all currently active MCP sessions managed by this proxy.",
+      inputSchema: z.object({}).strict(),
+    },
     async () => {
       if (sessions.size === 0) {
         return { content: [{ type: "text", text: "No active MCP sessions." }] };
@@ -175,12 +181,14 @@ export function registerMcpClientTools(server: McpServer): void {
   );
 
   // 4. explore_mcp_session
-  server.tool(
+  server.registerTool(
     "explore_mcp_session",
-    "Explores the available tools exposed by a running MCP session. If toolName is provided, returns detailed schema for that tool.",
     {
-      sessionId: z.string().describe("The session ID to explore"),
-      toolName: z.string().optional().describe("Optional. The specific tool name to get detailed argument schema for"),
+      description: "Explores the available tools exposed by a running MCP session. If toolName is provided, returns detailed schema for that tool.",
+      inputSchema: z.object({
+        sessionId: z.string().describe("The session ID to explore"),
+        toolName: z.string().optional().describe("Optional. The specific tool name to get detailed argument schema for"),
+      }).strict(),
     },
     async ({ sessionId, toolName }) => {
       try {
@@ -200,11 +208,12 @@ export function registerMcpClientTools(server: McpServer): void {
           output += JSON.stringify(tool.inputSchema, null, 2);
           return { content: [{ type: "text", text: output }] };
         } else {
-          let output = `Available tools for session '${sessionId}':\n`;
+          let output = `Available tools for session '${sessionId}':\n\n`;
           toolsResult.tools.forEach((t) => {
-            output += `- ${t.name}: ${t.description || "No description"}\n`;
+            output += `--- Tool: ${t.name} ---\n`;
+            output += `Description: ${t.description || "No description"}\n`;
+            output += `Arguments Schema:\n${JSON.stringify(t.inputSchema, null, 2)}\n\n`;
           });
-          output += `\nTo see detailed arguments for a specific tool, call explore_mcp_session again with the 'toolName' parameter.`;
           return { content: [{ type: "text", text: output }] };
         }
       } catch (err: any) {
@@ -217,50 +226,85 @@ export function registerMcpClientTools(server: McpServer): void {
   );
 
   // 5. call_mcp_session_tool
-  server.tool(
+  server.registerTool(
     "call_mcp_session_tool",
-    "Calls a specific tool on a running MCP session with the required JSON parameters.",
     {
-      sessionId: z.string().describe("The session ID"),
-      method: z.string().describe("The tool name to call (e.g., 'search_code')"),
-      params: z.string().describe("A JSON-encoded string containing the arguments for the tool (e.g., '{\"query\": \"secret\"}')"),
+      description: "Calls a specific tool on a running MCP session with the required JSON parameters.",
+      inputSchema: z.object({
+        sessionId: z.string().describe("The session ID"),
+        method: z.string().describe("The tool name to call (e.g., 'search_code')"),
+        params: z.string().optional().describe("A JSON-encoded string containing the arguments for the tool (e.g., '{\"query\": \"secret\"}')"),
+      }).strict(),
     },
     async ({ sessionId, method, params }) => {
       try {
         const session = getReadySession(sessionId);
+
+        // Pre-fetch tools to validate the tool exists and fetch its schema
+        const toolsResult = await session.client.listTools();
+        const tool = toolsResult.tools.find(t => t.name === method);
+        
+        if (!tool) {
+          const availableTools = toolsResult.tools.map(t => t.name).join(", ");
+          return {
+            content: [{ type: "text", text: `Tool '${method}' not found in session '${sessionId}'. Available tools: ${availableTools}` }],
+            isError: true
+          };
+        }
+
         let parsedParams = {};
-        if (params && params.trim() !== "") {
-          parsedParams = JSON.parse(params);
+        try {
+          if (params && params.trim() !== "") {
+            parsedParams = JSON.parse(params);
+          }
+        } catch (e: any) {
+          return {
+            content: [{ type: "text", text: `Failed to parse params JSON: ${e.message}\n\nPlease check the required parameters for this tool. Here is the tool schema:\n${JSON.stringify(tool.inputSchema, null, 2)}` }],
+            isError: true
+          };
         }
 
-        const result = await session.client.callTool({
-          name: method,
-          arguments: parsedParams,
-        });
+        try {
+          const result = await session.client.callTool({
+            name: method,
+            arguments: parsedParams,
+          });
 
-        // We can just pass it directly back since we are also an MCP server!
-        // But we need to ensure the format matches what our server expects to return.
-        let isErrorResult = false;
-        let contentArray: Array<{type: "text", text: string}> = [];
-        
-        if (result && Array.isArray(result.content)) {
-            contentArray = result.content.map((c: any) => {
-                if (c.type === "text" && "text" in c) {
-                    return { type: "text" as const, text: String(c.text) };
-                } else {
-                    return { type: "text" as const, text: `[${c.type} content omitted or unsupported]` };
-                }
-            });
-        }
-        
-        if (result && (result as any).isError) {
-            isErrorResult = true;
-        }
+          // Process and return result
+          let isErrorResult = false;
+          let contentArray: Array<{type: "text", text: string}> = [];
+          
+          if (result && Array.isArray(result.content)) {
+              contentArray = result.content.map((c: any) => {
+                  if (c.type === "text" && "text" in c) {
+                      return { type: "text" as const, text: String(c.text) };
+                  } else {
+                      return { type: "text" as const, text: `[${c.type} content omitted or unsupported]` };
+                  }
+              });
+          }
+          
+          if (result && (result as any).isError) {
+              isErrorResult = true;
+              // If it's an error (likely validation or execution), append the schema to help the model correct itself
+              contentArray.push({
+                type: "text",
+                text: `\n\nTool '${method}' execution failed. Please check the required parameters for this tool. Here is the tool schema:\n${JSON.stringify(tool.inputSchema, null, 2)}`
+              });
+          }
 
-        return { content: contentArray, isError: isErrorResult };
+          return { content: contentArray, isError: isErrorResult };
+        } catch (callError: any) {
+           // Provide detailed error with schema
+           const errorMessage = `Failed to call tool '${method}': ${callError.message}\n\nPlease check the required parameters for this tool. Here is the tool schema:\n${JSON.stringify(tool.inputSchema, null, 2)}`;
+           return {
+             content: [{ type: "text", text: errorMessage }],
+             isError: true
+           };
+        }
       } catch (err: any) {
         return {
-          content: [{ type: "text", text: `Failed to call tool '${method}': ${err.message}` }],
+          content: [{ type: "text", text: `MCP Session Error: ${err.message}` }],
           isError: true
         };
       }
