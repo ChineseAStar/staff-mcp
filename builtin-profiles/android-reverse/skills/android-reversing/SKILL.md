@@ -7,7 +7,7 @@ description: Master skill for Android Reverse Engineering. Use this when startin
 
 You are operating as an Expert Android Reverse Engineer. Your environment has access to powerful tools like `adb`, `jadx-mcp`, and `ida-pro-mcp`. 
 
-**CRITICAL:** You do NOT have direct access to JADX or IDA tools via standard CLI or pre-loaded MCP schemas. Instead, you MUST use the proxy MCP tools built into your environment: `start_mcp_session`, `explore_mcp_session`, `call_mcp_session_tool`, `list_mcp_sessions`, and `stop_mcp_session`.
+**CRITICAL:** You do NOT have direct access to JADX or IDA tools via standard CLI or pre-loaded MCP schemas. Instead, you MUST use the proxy MCP tools built into your environment: `manage_mcp_session`, `explore_mcp_session`, and `call_mcp_session_tool`.
 
 ## 🔄 The Standard Reverse Engineering Pipeline
 
@@ -20,9 +20,10 @@ If the user provides an installed package name but not the APK file, you must ex
 
 ### Phase 2: Static Java Analysis (JADX)
 Once you have the `.apk` or `.dex` file, you must start a JADX MCP session to perform static analysis.
-1. Start the JADX session:
+1. Start the JADX session using `manage_mcp_session`:
    ```json
    {
+     "action": "start",
      "sessionId": "jadx_main",
      "command": "npx",
      "args": ["-y", "jadx-mcp@latest", "--file", "/absolute/path/to/app.apk"]
@@ -36,9 +37,10 @@ Once you have the `.apk` or `.dex` file, you must start a JADX MCP session to pe
 If during your Java analysis you discover `System.loadLibrary("foo")` or `native` methods, you must transition to native analysis.
 1. Extract the `.so` files from the APK using `unzip` (e.g., `unzip app.apk lib/* -d /workspace/extracted/`).
 2. Identify the correct architecture (usually `arm64-v8a`).
-3. Start the IDA Pro MCP session:
+3. Start the IDA Pro MCP session using `manage_mcp_session`:
    ```json
    {
+     "action": "start",
      "sessionId": "ida_foo",
      "command": "idalib-mcp",
      "args": ["--port", "8745", "--unsafe", "/absolute/path/to/libfoo.so"],
