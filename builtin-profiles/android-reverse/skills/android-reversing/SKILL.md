@@ -43,10 +43,9 @@ If during your Java analysis you discover `System.loadLibrary("foo")` or `native
      "action": "start",
      "sessionId": "ida_foo",
      "command": "idalib-mcp",
-     "args": ["--port", "8745", "--unsafe", "/absolute/path/to/libfoo.so"],
-     "transportType": "streamable-http",
-     "sseUrl": "http://127.0.0.1:8745/mcp"
-   }
+     "args": ["--port", "8745", "--unsafe", "/absolute/path/to/libfoo.so"],      "transportType": "http",
+      "port": 8745
+    }
    ```
 4. **Notice on `--unsafe`**: Use the `--unsafe` flag when starting `idalib-mcp`. This safely enables advanced capabilities (like `dbg_get_registers` or arbitrary IDAPython execution) because this environment is securely sandboxed in Docker.
 5. Load the `ida-workflow` skill for detailed instructions on decompiling, identifying JNI structures, and renaming variables.

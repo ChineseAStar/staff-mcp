@@ -45,14 +45,34 @@ export function registerMcpClientTools(server: McpServer): void {
         sessionId: z.string().optional().describe("A unique identifier for this session. Required for 'start' and 'stop'."),
         command: z.string().optional().describe("Required for 'start'. The executable command to run the server."),
         args: z.array(z.string()).optional().describe("Required for 'start'. Arguments to pass to the command."),
-        transportType: z.enum(["stdio", "sse", "streamable-http"]).optional().describe("Optional for 'start'. Transport type, default is stdio."),
-        sseUrl: z.string().optional().describe("Required for 'start' if transportType is 'sse' or 'streamable-http'.")
+        transportType: z.enum(["stdio", "http"]).optional().describe("Optional for 'start'. Transport type. Default is 'stdio'. Use 'http' for HTTP/SSE based MCP servers."),
+        port: z.number().optional().describe("Required for 'start' if transportType is 'http'. The port number the server is listening on.")
       }).strict(),
     },
-    async ({ action, sessionId, command, args, transportType = "stdio", sseUrl }) => {
+    async ({ action, sessionId, command, args, transportType, port }) => {
       if (action === "start") {
         if (!sessionId || !command || !args) {
           return { content: [{ type: "text", text: "Error: 'sessionId', 'command', and 'args' are required to start a session." }], isError: true };
+        }
+        
+        // Auto-detect transportType and port if possible
+        let effectiveTransport = transportType || "stdio";
+        let effectivePort = port;
+
+        // Heuristic: If model forgot transportType but provided port
+        if (!transportType && port) {
+           effectiveTransport = "http";
+        }
+        
+        // Heuristic: If starting staff-mcp with --transport http but forgot parameters
+        if (!transportType && !port && args.includes("--transport") && (args.includes("http") || args.includes("sse"))) {
+            effectiveTransport = "http";
+            const portIdx = args.indexOf("-p") > -1 ? args.indexOf("-p") : args.indexOf("--port");
+            if (portIdx > -1) {
+                effectivePort = parseInt(args[portIdx + 1], 10);
+            } else {
+                effectivePort = 3000;
+            }
         }
         if (sessions.has(sessionId)) {
           const existing = sessions.get(sessionId)!;
@@ -67,32 +87,63 @@ export function registerMcpClientTools(server: McpServer): void {
           let transport: any;
           let sessionProcess: ChildProcess | null = null;
 
-          if (transportType === "sse" || transportType === "streamable-http") {
-              if (!sseUrl) {
-                  return { content: [{ type: "text", text: `sseUrl is required when transportType is '${transportType}'` }], isError: true };
+          if (effectiveTransport === "http") {
+              if (!effectivePort) {
+                  return { content: [{ type: "text", text: `port is required when transportType is 'http'` }], isError: true };
               }
               sessionProcess = spawn(command, args, { stdio: 'ignore', detached: true });
               sessionProcess.unref();
+              
+              // Wait for server to boot up
               await new Promise(resolve => setTimeout(resolve, 3000));
               
-              if (transportType === "sse") {
-                  transport = new SSEClientTransport(new URL(sseUrl));
-              } else {
-                  transport = new StreamableHTTPClientTransport(new URL(sseUrl));
+              let connected = false;
+              let lastErr: any;
+              
+              // 1. Try streamable-http first
+              try {
+                  transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${effectivePort}/mcp`));
+                  await client.connect(transport);
+                  connected = true;
+              } catch (e) {
+                  lastErr = e;
+                  // 2. Fallback to sse
+                  try {
+                      // Note: We might need to close the first transport before retrying, but SDK connect typically handles it.
+                      transport = new SSEClientTransport(new URL(`http://127.0.0.1:${effectivePort}/sse`));
+                      await client.connect(transport);
+                      connected = true;
+                  } catch (e2) {
+                      lastErr = e2;
+                  }
               }
+
+              if (!connected) {
+                  if (sessionProcess.pid) {
+                      try { process.kill(sessionProcess.pid, 'SIGKILL'); } catch(e) {}
+                  }
+                  throw new Error(`Failed to connect using 'http' transport (tried streamable-http and sse on port ${effectivePort}): ${lastErr?.message || 'Unknown error'}`);
+              }
+
+              sessions.set(sessionId, {
+                sessionId, command, args, process: sessionProcess, client, transport,
+                status: "ready", startedAt: new Date()
+              });
+              
+              return { content: [{ type: "text", text: `Successfully started and connected to MCP session '${sessionId}' via http transport. Use 'explore_mcp_session' to discover available tools.` }] };
           } else {
               transport = new StdioClientTransport({ command, args });
+              
+              sessions.set(sessionId, {
+                sessionId, command, args, process: sessionProcess, client, transport,
+                status: "starting", startedAt: new Date()
+              });
+
+              await client.connect(transport);
+              sessions.get(sessionId)!.status = "ready";
+
+              return { content: [{ type: "text", text: `Successfully started and connected to MCP session '${sessionId}' via stdio. Use 'explore_mcp_session' to discover available tools.` }] };
           }
-
-          sessions.set(sessionId, {
-            sessionId, command, args, process: sessionProcess, client, transport,
-            status: "starting", startedAt: new Date()
-          });
-
-          await client.connect(transport);
-          sessions.get(sessionId)!.status = "ready";
-
-          return { content: [{ type: "text", text: `Successfully started and connected to MCP session '${sessionId}'. Use 'explore_mcp_session' to discover available tools.` }] };
         } catch (err: any) {
           sessions.delete(sessionId);
           return { content: [{ type: "text", text: `Failed to start MCP session '${sessionId}': ${err.message}` }], isError: true };

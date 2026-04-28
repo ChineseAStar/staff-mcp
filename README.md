@@ -24,7 +24,7 @@ Seamlessly spawn the AI assistant **inside any Docker container** while keeping 
 npx -y staff-mcp@latest --docker node:20-alpine
 
 # Perform security analysis inside a custom reverse-engineering image
-npx -y staff-mcp@latest --docker reverse-engineer:v3 --profile reverse-engineer
+npx -y staff-mcp@latest --docker chineseastar/security:latest --profile android-reverse
 ```
 
 ### 3. Claude Desktop Configuration
@@ -66,8 +66,8 @@ Never pollute your host machine again. By simply appending `--docker <image>`, `
 
 Switch roles on the fly:
 ```bash
-npx -y staff-mcp@latest --profile developer
-npx -y staff-mcp@latest --profile reverse-engineer
+npx -y staff-mcp@latest --profile default
+npx -y staff-mcp@latest --profile android-reverse
 ```
 
 ### 3. Built-in `skill-manager`
@@ -88,7 +88,7 @@ It will securely download, configure, and reload the skill without you lifting a
 | :--- | :--- | :--- |
 | `-w, --working-dir` | Root directory for the sandbox | `process.cwd()` |
 | `-d, --allowed-dir` | Extra directories allowed for access | `[]` |
-| `-r, --profile` | The active profile for skills (e.g., developer) | `default` |
+| `-r, --profile` | The active profile for skills (e.g., android-reverse) | `default` |
 | `--docker` | Run inside a Docker container using this image | `undefined` |
 | `-D, --docker-args` | Extra args for `docker run` (e.g., `-e FOO=BAR`) | `[]` |
 | `-t, --transport` | Transport type (`stdio` or `http`) | `stdio` |
@@ -104,13 +104,13 @@ If you need the AI to interact with an Android device connected via USB while ru
 
 # 2. Start staff-mcp with the ADB_SERVER_SOCKET environment variable injected
 # On Mac/Windows:
-npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "-e ADB_SERVER_SOCKET=tcp:host.docker.internal:5037"
+npx -y staff-mcp@latest --docker chineseastar/security:latest -D "-e ADB_SERVER_SOCKET=tcp:host.docker.internal:5037"
 
 # On Native Linux (If not using --network host, point to the docker bridge IP):
-npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "-e ADB_SERVER_SOCKET=tcp:172.17.0.1:5037"
+npx -y staff-mcp@latest --docker chineseastar/security:latest -D "-e ADB_SERVER_SOCKET=tcp:172.17.0.1:5037"
 
 # Alternative for Native Linux (Share host network stack completely):
-npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "--network host"
+npx -y staff-mcp@latest --docker chineseastar/security:latest -D "--network host"
 ```
 
 ---

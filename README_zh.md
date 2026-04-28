@@ -24,7 +24,7 @@ npx -y staff-mcp@latest --working-dir /path/to/your/project
 npx -y staff-mcp@latest --docker node:20-alpine
 
 # 在自带逆向工程工具链的镜像里执行安全分析
-npx -y staff-mcp@latest --docker reverse-engineer:v3 --profile reverse-engineer
+npx -y staff-mcp@latest --docker chineseastar/security:latest --profile android-reverse
 ```
 
 ### 3. Claude Desktop 配置
@@ -66,8 +66,8 @@ npx -y staff-mcp@latest --docker reverse-engineer:v3 --profile reverse-engineer
 
 在不同角色中自由切换：
 ```bash
-npx -y staff-mcp@latest --profile developer
-npx -y staff-mcp@latest --profile reverse-engineer
+npx -y staff-mcp@latest --profile default
+npx -y staff-mcp@latest --profile android-reverse
 ```
 
 ### 3. 聪明的“技能管家” (`skill-manager`)
@@ -88,7 +88,7 @@ npx -y staff-mcp@latest --profile reverse-engineer
 | :--- | :--- | :--- |
 | `-w, --working-dir` | 沙盒的根目录 (工作区) | `process.cwd()` |
 | `-d, --allowed-dir` | 额外允许 AI 访问的宿主机目录 | `[]` |
-| `-r, --profile` | 当前激活的技能档案/工种 (如 developer) | `default` |
+| `-r, --profile` | 当前激活的技能档案/工种 (如 android-reverse) | `default` |
 | `--docker` | 在指定的 Docker 镜像内运行 AI | `undefined` |
 | `-D, --docker-args` | 传递给 `docker run` 的自定义底层参数 | `[]` |
 | `-t, --transport` | 传输协议 (`stdio` 或 `http`) | `stdio` |
@@ -104,13 +104,13 @@ npx -y staff-mcp@latest --profile reverse-engineer
 
 # 2. 启动 staff-mcp 并注入 ADB_SERVER_SOCKET 环境变量
 # Mac/Win 环境下：
-npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "-e ADB_SERVER_SOCKET=tcp:host.docker.internal:5037"
+npx -y staff-mcp@latest --docker chineseastar/security:latest -D "-e ADB_SERVER_SOCKET=tcp:host.docker.internal:5037"
 
 # 原生 Linux 环境下（若不使用 host 网络，可指向虚拟桥接 IP）：
-npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "-e ADB_SERVER_SOCKET=tcp:172.17.0.1:5037"
+npx -y staff-mcp@latest --docker chineseastar/security:latest -D "-e ADB_SERVER_SOCKET=tcp:172.17.0.1:5037"
 
 # 原生 Linux 的极简方案（直接与物理机共享网络栈）：
-npx -y staff-mcp@latest --docker reverse-engineer:v1 -D "--network host"
+npx -y staff-mcp@latest --docker chineseastar/security:latest -D "--network host"
 ```
 
 ---

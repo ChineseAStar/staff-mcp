@@ -37,7 +37,7 @@ program
   .option("-h, --host <address>", "Host for HTTP server", "127.0.0.1")
   .option("-w, --working-dir <path>", "Working directory for the server (defaults to current execution path)", process.cwd())
   .option("-d, --allowed-dir <paths...>", "Additional directories allowed for sandbox", [])
-  .option("-r, --profile <name>", "The active profile for skills and instructions (e.g., developer, default)", "default")
+  .option("-r, --profile <name>", "The active profile for skills and instructions (e.g., android-reverse, default)", "default")
   .option("--docker <image>", "Run the MCP server inside a Docker container using the specified image")
   .option("-D, --docker-args <args...>", "Additional arguments to pass to the docker run command (e.g., -e ADB_SERVER_SOCKET=...)")
   .allowUnknownOption()
@@ -67,6 +67,16 @@ program
       dockerArgs.push("-v", `${toDockerVolumePath(hostCwd)}:/workspace`);
       dockerArgs.push("-w", "/workspace");
       dockerArgs.push("-v", `${toDockerVolumePath(pkgRoot)}:/opt/staff-mcp:ro`);
+
+      // 3.5 Check if we are nested inside a node_modules folder (npx/pnpm global scenario)
+      // If yes, map the parent node_modules into the container as well so dependencies can be resolved
+      const isNestedInNodeModules = pkgRoot.includes("node_modules");
+      if (isNestedInNodeModules) {
+        // By mapping the parent directory of staff-mcp's pkgRoot to /opt/node_modules,
+        // Node.js inside the container can look up and find shared dependencies.
+        const outerNodeModules = path.resolve(pkgRoot, "..");
+        dockerArgs.push("-v", `${toDockerVolumePath(outerNodeModules)}:/opt/node_modules:ro`);
+      }
 
       // 4. Mount additional allowed directories
       if (options.allowedDir && options.allowedDir.length > 0) {

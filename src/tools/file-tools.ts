@@ -355,8 +355,17 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
         }
 
         await searchRecursively(baseDir);
+        
+        let outputText = results.join("\n") || "No matches found.";
+        
+        // Let the LLM know it fell back to JS search, so it can decide if it wants to install ripgrep.
+        if (!rgPath) {
+           const installCmd = process.platform === "win32" ? "scoop install ripgrep (or winget install ripgrep)" : "apt-get install ripgrep (or apk add ripgrep)";
+           outputText += `\n\n[System Note: This search was executed using the slower JavaScript fallback because 'rg' (ripgrep) was not found. A background installation of ripgrep has been triggered and may be available for future searches. If it continues to fail, you can manually install it via 'execute_command': ${installCmd}]`;
+        }
+
         return {
-          content: [{ type: "text", text: results.join("\n") || "No matches found." }],
+          content: [{ type: "text", text: outputText }],
         };
       } catch (error: any) {
         return {

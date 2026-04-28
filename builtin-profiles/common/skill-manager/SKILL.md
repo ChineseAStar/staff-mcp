@@ -15,7 +15,7 @@ Skills are stored as directories containing a `SKILL.md` file. They can be insta
 4. **Global Level**: `~/.staff/skills/<skill-name>/SKILL.md`
 5. **Built-in Infrastructures**: `staff-mcp/builtin-profiles/...`
 
-**Profiles** are specific context configurations (e.g. `developer`, `reverse-engineer`). They act as complete environments that can contain not only skills but also future configurations like `agent.md` (for MCP instructions overrides). 
+**Profiles** are specific context configurations (e.g. `default`, `android-reverse`). They act as complete environments that can contain not only skills but also future configurations like `agent.md` (for MCP instructions overrides). 
 
 ### ⚠️ Security Boundaries & Default Scope
 - **Default to Workspace ONLY**: Unless the user explicitly says otherwise, you MUST assume all requests (install, uninstall, clear) apply ONLY to the standard project workspace (`<cwd>/.staff/skills/`).

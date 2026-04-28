@@ -100,10 +100,12 @@ export async function ensureTool(name: string, installCmd?: string): Promise<str
 }
 
 /**
- * Specialized version for ripgrep since it's a critical dependency
+ * Specialized version for ripgrep since it's a critical dependency.
+ * If not found, it triggers an async background installation to prevent blocking
+ * the current search request, allowing it to gracefully fall back to JS search.
  */
-export async function ensureRipgrep(): Promise<string> {
-  // Try to find it in the project's own node_modules first
+export async function ensureRipgrep(): Promise<string | null> {
+  // 1. Try to find it in the project's own node_modules
   const localRgPaths = process.platform === "win32" ? [
     path.join(process.cwd(), "node_modules", "@vscode", "ripgrep", "bin", "rg.exe"),
     path.join(process.cwd(), "node_modules", "vscode-ripgrep", "bin", "rg.exe"),
@@ -116,6 +118,19 @@ export async function ensureRipgrep(): Promise<string> {
     if (await exists(p)) return p;
   }
 
-  // Otherwise, fall back to global/staff installation
-  return ensureTool("rg", "npm install @vscode/ripgrep");
+  // 2. Check .staff/tools or global PATH without triggering blocking installation
+  try {
+    return await ensureTool("rg");
+  } catch (e) {
+    // 3. Not found anywhere. Trigger a background installation.
+    // We do NOT await this promise, so the current search will return null instantly 
+    // and fallback to JS, but next time it might be available.
+    console.log("[Background Task] Ripgrep not found. Initiating async background installation...");
+    ensureTool("rg", "npm install @vscode/ripgrep").catch(err => {
+      console.error("[Background Task] Failed to install ripgrep async:", err.message);
+    });
+
+    // Return null to signal fallback for THIS specific request.
+    return null;
+  }
 }

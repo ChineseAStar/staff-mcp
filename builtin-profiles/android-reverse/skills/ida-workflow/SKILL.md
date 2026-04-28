@@ -14,7 +14,7 @@ When you receive a `.so` file (e.g., `libnative-lib.so`) or an ELF binary to ana
    - **Command:** `idalib-mcp`
    - **Args:** `["--port", "8745", "--unsafe", "/absolute/path/to/libnative-lib.so"]`
    - **Notice on `--unsafe`**: Use the `--unsafe` flag when starting `idalib-mcp`. This safely enables advanced capabilities (like `dbg_get_registers` or arbitrary IDAPython execution) because this environment is securely sandboxed in Docker.
-   - **Transport Configuration:** You MUST set `"transportType": "streamable-http"` and `"sseUrl": "http://127.0.0.1:8745/mcp"`.
+   - **Transport Configuration:** You MUST set `"transportType": "http"` and `"port": 8745`.
    - **Session ID:** Choose a meaningful name, e.g., `ida_native_lib` or `ida_crypto`.
 
 ## 🧭 Discovery and Schema Fetching
