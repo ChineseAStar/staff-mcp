@@ -45,8 +45,9 @@ export function getSearchPaths(workingDir: string, profile: string = "default"):
   addVariations([homeDir], SKILL_SUBDIRS);
 
   // 5. 内置基建层
-  let root = path.resolve(__dirname, "..");
-  while (!fs.existsSync(path.join(root, "package.json")) && root !== "/") {
+  // 因为编译后的文件在 dist/src/skills 下，需要找对正确的项目根目录
+  let root = __dirname;
+  while (!fs.existsSync(path.join(root, "package.json")) && root !== path.dirname(root)) {
       root = path.dirname(root);
   }
   
