@@ -1,6 +1,10 @@
 {
   "name": "staff-mcp",
   "version": "1.0.13",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ChineseAStar/staff-mcp.git"
+  },
   "type": "module",
   "main": "dist/src/index.js",
   "bin": {
