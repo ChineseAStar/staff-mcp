@@ -2,11 +2,14 @@ name: Publish to npm
 
 on:
   push:
-    tags: ['v*']
+    branches:
+      - master
+    tags:
+      - "v*"
+  workflow_dispatch:
 
 jobs:
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -15,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
       - run: npm ci
       - run: npm publish --provenance --access public
