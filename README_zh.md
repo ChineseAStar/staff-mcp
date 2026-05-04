@@ -46,6 +46,16 @@ npx -y staff-mcp@latest --docker chineseastar/security:latest --profile android-
 }
 ```
 
+### 4. Reverse MCP 模式 (内网穿透)
+身处 NAT 或防火墙深处？无需公网 IP 和端口映射，主动连回中心化的远端网关 (如 `chat-ai`)！自带断线重连与无限重试机制。
+
+```bash
+npx -y staff-mcp@latest -t reverse \
+  --ru https://chat.your-domain.com/api/mcp-reverse \
+  --rt your_secure_token_here \
+  --rn my-macbook-pro
+```
+
 ---
 
 ## 🛠️ 核心能力
@@ -91,9 +101,12 @@ npx -y staff-mcp@latest --profile android-reverse
 | `-r, --profile` | 当前激活的技能档案/工种 (如 android-reverse) | `default` |
 | `--docker` | 在指定的 Docker 镜像内运行 AI | `undefined` |
 | `-D, --docker-args` | 传递给 `docker run` 的自定义底层参数 | `[]` |
-| `-t, --transport` | 传输协议 (`stdio` 或 `http`) | `stdio` |
+| `-t, --transport` | 传输协议 (`stdio`, `http`, 或 `reverse`) | `stdio` |
 | `-p, --port` | HTTP 服务的监听端口 | `3000` |
 | `-h, --host` | HTTP 服务的监听地址 | `127.0.0.1` |
+| `--ru, --reverse-url` | Reverse MCP 网关的远端 URL | `undefined` |
+| `--rt, --reverse-token` | Reverse MCP 的安全认证令牌 | `undefined` |
+| `--rn, --reverse-name` | Reverse MCP 的服务注册名称 | `undefined` |
 
 ### 硬件透传案例 (Android 移动端逆向)
 如果你希望 AI 在容器内运行时，仍能连接并控制物理机上的 Android 手机，利用基于网络端口的 ADB 透传是最稳妥的跨平台方案：

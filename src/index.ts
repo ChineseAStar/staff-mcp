@@ -8,6 +8,7 @@ import { fileURLToPath } from "url";
 import { createServer } from "./server.js";
 import { startStdioServer } from "./transports/stdio.js";
 import { startHttpServer } from "./transports/http.js";
+import { startReverseServer } from "./transports/reverse.js";
 import { ensureStaffDirs } from "./utils/paths.js";
 
 // Global error handlers to prevent the MCP server from crashing due to unhandled child process errors
@@ -32,9 +33,12 @@ program
   .name("staff-mcp")
   .description("MCP Server with file, shell, and LSP capabilities.")
   .version("1.0.0")
-  .option("-t, --transport <type>", "Transport type (stdio or http)", "stdio")
+  .option("-t, --transport <type>", "Transport type (stdio, http, reverse)", "stdio")
   .option("-p, --port <number>", "Port for HTTP server", "3000")
   .option("-h, --host <address>", "Host for HTTP server", "127.0.0.1")
+  .option("--ru, --reverse-url <url>", "URL for Reverse MCP Gateway (e.g. http://localhost:3000/api/mcp-reverse)")
+  .option("--rt, --reverse-token <token>", "Security token for Reverse MCP")
+  .option("--rn, --reverse-name <name>", "Server name for Reverse MCP")
   .option("-w, --working-dir <path>", "Working directory for the server (defaults to current execution path)", process.cwd())
   .option("-d, --allowed-dir <paths...>", "Additional directories allowed for sandbox", [])
   .option("-r, --profile <name>", "The active profile for skills and instructions (e.g., android-reverse, default)", "default")
@@ -111,13 +115,19 @@ program
       // 9. Reconstruct the command inside the container
       dockerArgs.push("node", "/opt/staff-mcp/dist/src/index.js");
       dockerArgs.push("-t", options.transport);
-      dockerArgs.push("-p", String(options.port));
-      
-      // Inside container, we must listen on all interfaces for HTTP to be exposed
-      if (options.transport === "http") {
-        dockerArgs.push("-h", "0.0.0.0");
+
+      if (options.transport === "reverse") {
+        if (options.reverseUrl) dockerArgs.push("--ru", options.reverseUrl);
+        if (options.reverseToken) dockerArgs.push("--rt", options.reverseToken);
+        if (options.reverseName) dockerArgs.push("--rn", options.reverseName);
       } else {
-        dockerArgs.push("-h", options.host);
+        dockerArgs.push("-p", String(options.port));
+        // Inside container, we must listen on all interfaces for HTTP to be exposed
+        if (options.transport === "http") {
+          dockerArgs.push("-h", "0.0.0.0");
+        } else {
+          dockerArgs.push("-h", options.host);
+        }
       }
       
       dockerArgs.push("-w", "/workspace");
@@ -168,6 +178,12 @@ program
 
     if (options.transport === "http") {
       await startHttpServer(server, parseInt(options.port, 10), options.host);
+    } else if (options.transport === "reverse") {
+      if (!options.reverseUrl || !options.reverseToken || !options.reverseName) {
+        console.error("[staff-mcp] Error: --ru (reverse-url), --rt (reverse-token), and --rn (reverse-name) are required for reverse transport.");
+        process.exit(1);
+      }
+      await startReverseServer(server, options.reverseUrl, options.reverseToken, options.reverseName);
     } else {
       await startStdioServer(server);
     }

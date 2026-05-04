@@ -46,6 +46,16 @@ Add the following to your `claude_desktop_config.json`:
 }
 ```
 
+### 4. Reverse MCP Mode (Intranet Penetration)
+Connect your local machine to a centralized remote gateway (like `chat-ai`) from behind NAT/Firewalls. No local open ports required! It automatically handles disconnects and infinite retries.
+
+```bash
+npx -y staff-mcp@latest -t reverse \
+  --ru https://chat.your-domain.com/api/mcp-reverse \
+  --rt your_secure_token_here \
+  --rn my-macbook-pro
+```
+
 ---
 
 ## 🛠️ Core Capabilities
@@ -91,9 +101,12 @@ It will securely download, configure, and reload the skill without you lifting a
 | `-r, --profile` | The active profile for skills (e.g., android-reverse) | `default` |
 | `--docker` | Run inside a Docker container using this image | `undefined` |
 | `-D, --docker-args` | Extra args for `docker run` (e.g., `-e FOO=BAR`) | `[]` |
-| `-t, --transport` | Transport type (`stdio` or `http`) | `stdio` |
+| `-t, --transport` | Transport type (`stdio`, `http`, or `reverse`) | `stdio` |
 | `-p, --port` | Port for HTTP server | `3000` |
 | `-h, --host` | Host for HTTP server | `127.0.0.1` |
+| `--ru, --reverse-url` | URL for Reverse MCP Gateway | `undefined` |
+| `--rt, --reverse-token` | Security token for Reverse MCP | `undefined` |
+| `--rn, --reverse-name` | Server name for Reverse MCP | `undefined` |
 
 ### Hardware Pass-through Example (Android Reverse Engineering)
 If you need the AI to interact with an Android device connected via USB while running inside a container, utilizing network-based ADB pass-through is the most reliable cross-platform solution:
