@@ -158,8 +158,8 @@ program
     
     // Auto-exit if we are running as a proxy child and the host pipe breaks
     if (process.env.STAFF_MCP_IS_DOCKER === "1") {
-      if (options.transport === "http") {
-        process.stdin.resume(); // keep reading to detect end in HTTP mode
+      if (options.transport !== "stdio") {
+        process.stdin.resume(); // keep reading to detect end in non-stdio modes
       }
       process.stdin.on("end", () => {
         console.error("[staff-mcp] Host pipe closed, terminating container...");
