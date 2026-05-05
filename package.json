@@ -30,7 +30,7 @@
     "commander": "^12.1.0",
     "cors": "^2.8.5",
     "express": "^4.21.1",
-    "mcp-reverse": "^1.0.7",
+    "mcp-reverse": "^1.0.8",
     "zod": "^3.23.8"
   },
   "devDependencies": {
