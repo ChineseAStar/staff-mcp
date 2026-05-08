@@ -42,6 +42,7 @@ program
   .option("-w, --working-dir <path>", "Working directory for the server (defaults to current execution path)", process.cwd())
   .option("-d, --allowed-dir <paths...>", "Additional directories allowed for sandbox", [])
   .option("-r, --profile <name>", "The active profile for skills and instructions (e.g., android-reverse, default)", "default")
+  .option("-m, --max-mcp-sessions <number>", "Maximum number of concurrent MCP sessions allowed", "5")
   .option("--docker <image>", "Run the MCP server inside a Docker container using the specified image")
   .option("-D, --docker-args <args...>", "Additional arguments to pass to the docker run command (e.g., -e ADB_SERVER_SOCKET=...)")
   .allowUnknownOption()
@@ -138,6 +139,7 @@ program
         });
       }
       dockerArgs.push("-r", options.profile);
+      dockerArgs.push("-m", String(options.maxMcpSessions));
 
       // 10. Spawn Docker and pipe I/O natively
       const child = spawn("docker", dockerArgs, { stdio: ["pipe", "inherit", "inherit"] });
@@ -174,7 +176,8 @@ program
     const workingDir = path.resolve(options.workingDir);
     const allowedDirs = options.allowedDir.map((d: string) => path.resolve(d));
     const profile = options.profile;
-    const server = createServer("staff-mcp", "1.0.0", workingDir, allowedDirs, profile);
+    const maxMcpSessions = parseInt(options.maxMcpSessions, 10) || 5;
+    const server = createServer("staff-mcp", "1.0.0", workingDir, allowedDirs, profile, maxMcpSessions);
 
     if (options.transport === "http") {
       await startHttpServer(server, parseInt(options.port, 10), options.host);

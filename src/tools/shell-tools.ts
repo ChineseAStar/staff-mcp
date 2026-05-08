@@ -71,21 +71,32 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
         };
 
         const output = [
+          `Exit Code: 0`,
           stdout ? `STDOUT:\n${formatOutput(stdout)}` : "",
           stderr ? `STDERR:\n${formatOutput(stderr)}` : "",
         ].filter(Boolean).join("\n\n");
 
         return {
-          content: [{ type: "text", text: output || "(No output from command)" }],
+          content: [{ type: "text", text: output || "Exit Code: 0\n(No output from command)" }],
         };
       } catch (error: any) {
         // If timed out or error occurred, still try to return what we have or a meaningful error
+        let exitCodeStr = "Exit Code: " + (error.code !== undefined ? error.code : "unknown");
         let errorMessage = error.message;
         if (error.killed && error.signal === 'SIGTERM') {
+          exitCodeStr = "Exit Code: timed out";
           errorMessage = `Command timed out after ${timeout}ms.`;
         }
+
+        const errOutput = [
+          exitCodeStr,
+          `Error Details:\n${errorMessage}`,
+          error.stdout ? `STDOUT (partial):\n${error.stdout}` : "",
+          error.stderr ? `STDERR (partial):\n${error.stderr}` : ""
+        ].filter(Boolean).join("\n\n");
+
         return {
-          content: [{ type: "text", text: `Command execution failed or timed out: ${errorMessage}` }],
+          content: [{ type: "text", text: errOutput }],
           isError: true,
         };
       }

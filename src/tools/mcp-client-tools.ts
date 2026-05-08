@@ -34,7 +34,7 @@ function getReadySession(sessionId: string): McpSession {
   return session;
 }
 
-export function registerMcpClientTools(server: McpServer): void {
+export function registerMcpClientTools(server: McpServer, options: { maxSessions: number } = { maxSessions: 5 }): void {
   // 1. manage_mcp_session (combines start, stop, list)
   server.registerTool(
     "manage_mcp_session",
@@ -78,6 +78,22 @@ export function registerMcpClientTools(server: McpServer): void {
           const existing = sessions.get(sessionId)!;
           return {
             content: [{ type: "text", text: `Session '${sessionId}' already exists with status '${existing.status}'. Please use a different ID or stop it first.` }],
+            isError: true
+          };
+        }
+
+        if (sessions.size >= options.maxSessions) {
+          const activeSessions = Array.from(sessions.entries()).map(([id, s]) => 
+            `- [${id}] (Command: ${s.command} ${s.args.join(" ")}) - Status: ${s.status}`
+          ).join("\n");
+          
+          return {
+            content: [{
+              type: "text", 
+              text: `Error: Maximum active MCP session limit (${options.maxSessions}) reached.\n` +
+                    `Please use the 'stop' action to close an unused session before starting a new one.\n\n` +
+                    `Current active sessions:\n${activeSessions}`
+            }],
             isError: true
           };
         }
@@ -130,7 +146,7 @@ export function registerMcpClientTools(server: McpServer): void {
                 status: "ready", startedAt: new Date()
               });
               
-              return { content: [{ type: "text", text: `Successfully started and connected to MCP session '${sessionId}' via http transport. Use 'explore_mcp_session' to discover available tools.` }] };
+              return { content: [{ type: "text", text: `Successfully started and connected to MCP session '${sessionId}' via http transport. (Active sessions: ${sessions.size}/${options.maxSessions})\nUse 'explore_mcp_session' to discover available tools.` }] };
           } else {
               transport = new StdioClientTransport({ command, args });
               
@@ -142,7 +158,7 @@ export function registerMcpClientTools(server: McpServer): void {
               await client.connect(transport);
               sessions.get(sessionId)!.status = "ready";
 
-              return { content: [{ type: "text", text: `Successfully started and connected to MCP session '${sessionId}' via stdio. Use 'explore_mcp_session' to discover available tools.` }] };
+              return { content: [{ type: "text", text: `Successfully started and connected to MCP session '${sessionId}' via stdio. (Active sessions: ${sessions.size}/${options.maxSessions})\nUse 'explore_mcp_session' to discover available tools.` }] };
           }
         } catch (err: any) {
           sessions.delete(sessionId);
@@ -164,12 +180,12 @@ export function registerMcpClientTools(server: McpServer): void {
         } catch (e) {} finally {
           sessions.delete(sessionId);
         }
-        return { content: [{ type: "text", text: `Session '${sessionId}' successfully stopped.` }] };
+        return { content: [{ type: "text", text: `Session '${sessionId}' successfully stopped. (Active sessions: ${sessions.size}/${options.maxSessions})` }] };
       } else if (action === "list") {
         if (sessions.size === 0) {
-          return { content: [{ type: "text", text: "No active MCP sessions." }] };
+          return { content: [{ type: "text", text: `No active MCP sessions. (Active sessions: 0/${options.maxSessions})` }] };
         }
-        let output = "Active MCP Sessions:\n";
+        let output = `Active MCP Sessions (${sessions.size}/${options.maxSessions}):\n`;
         for (const [id, session] of sessions.entries()) {
           output += `- [${id}] Status: ${session.status}, Command: ${session.command} ${session.args.join(" ")}\n`;
         }
