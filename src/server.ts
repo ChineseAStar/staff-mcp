@@ -16,29 +16,31 @@ import { getMcpInstructions } from "./tools/system-tools.js";
  * @param profile The active profile for skills and instructions.
  * @returns An initialized McpServer instance.
  */
-export function createServer(name: string, version: string, workingDir: string, allowedDirs: string[], profile: string = "default", maxMcpSessions: number = 5): McpServer {
+export function createServerFactory(name: string, version: string, workingDir: string, allowedDirs: string[], profile: string = "default", maxMcpSessions: number = 5): () => McpServer {
   const security = new SecurityManager(workingDir, allowedDirs);
 
   // Generate instructions with system-specific details (OS, shell, etc.)
   const instructions = getMcpInstructions(workingDir, security);
 
-  const server = new McpServer(
-    {
-      name,
-      version,
-    },
-    {
-      // Pass the instruction string to the initialize response
-      instructions,
-    }
-  );
+  return () => {
+    const server = new McpServer(
+      {
+        name,
+        version,
+      },
+      {
+        // Pass the instruction string to the initialize response
+        instructions,
+      }
+    );
 
-  // Register all functional tool modules
-  registerFileTools(server, security);
-  registerShellTools(server, security);
-  registerLspTools(server, security);
-  registerSkillTools(server, workingDir, security, profile);
-  registerMcpClientTools(server, { maxSessions: maxMcpSessions });
+    // Register all functional tool modules
+    registerFileTools(server, security);
+    registerShellTools(server, security);
+    registerLspTools(server, security);
+    registerSkillTools(server, workingDir, security, profile);
+    registerMcpClientTools(server, { maxSessions: maxMcpSessions });
 
-  return server;
+    return server;
+  };
 }

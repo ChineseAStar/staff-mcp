@@ -5,7 +5,7 @@ import * as fs from "fs";
 import * as os from "os";
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
-import { createServer } from "./server.js";
+import { createServerFactory } from "./server.js";
 import { startStdioServer } from "./transports/stdio.js";
 import { startHttpServer } from "./transports/http.js";
 import { startReverseServer } from "./transports/reverse.js";
@@ -177,18 +177,18 @@ program
     const allowedDirs = options.allowedDir.map((d: string) => path.resolve(d));
     const profile = options.profile;
     const maxMcpSessions = parseInt(options.maxMcpSessions, 10) || 5;
-    const server = createServer("staff-mcp", "1.0.0", workingDir, allowedDirs, profile, maxMcpSessions);
+    const serverFactory = createServerFactory("staff-mcp", "1.0.0", workingDir, allowedDirs, profile, maxMcpSessions);
 
     if (options.transport === "http") {
-      await startHttpServer(server, parseInt(options.port, 10), options.host);
+      await startHttpServer(serverFactory, parseInt(options.port, 10), options.host);
     } else if (options.transport === "reverse") {
       if (!options.reverseUrl || !options.reverseToken || !options.reverseName) {
         console.error("[staff-mcp] Error: --ru (reverse-url), --rt (reverse-token), and --rn (reverse-name) are required for reverse transport.");
         process.exit(1);
       }
-      await startReverseServer(server, options.reverseUrl, options.reverseToken, options.reverseName);
+      await startReverseServer(serverFactory(), options.reverseUrl, options.reverseToken, options.reverseName);
     } else {
-      await startStdioServer(server);
+      await startStdioServer(serverFactory());
     }
   });
 
