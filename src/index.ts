@@ -83,6 +83,20 @@ program
         dockerArgs.push("-v", `${toDockerVolumePath(outerNodeModules)}:/opt/node_modules:ro`);
       }
 
+      // 3.8 Mount Host User-Level Skills and Profiles
+      // Do not mount the entire ~/.staff to avoid cross-platform binary conflicts (e.g., native extensions, ripgrep)
+      ensureStaffDirs(); // Ensure host directories exist to avoid Docker creating them with root permissions
+      const hostHome = os.homedir();
+      const hostSkills = path.join(hostHome, ".staff", "skills");
+      const hostProfiles = path.join(hostHome, ".staff", "profiles");
+      
+      // Mount to a fixed, safe path in the container and point the containerized staff-mcp to it
+      // This avoids making any assumptions about the container's user or HOME directory
+      const containerStaffDir = "/opt/.staff";
+      dockerArgs.push("-e", `STAFF_GLOBAL_DIR=${containerStaffDir}`);
+      dockerArgs.push("-v", `${toDockerVolumePath(hostSkills)}:${containerStaffDir}/skills`);
+      dockerArgs.push("-v", `${toDockerVolumePath(hostProfiles)}:${containerStaffDir}/profiles`);
+
       // 4. Mount additional allowed directories
       if (options.allowedDir && options.allowedDir.length > 0) {
         options.allowedDir.forEach((dir: string) => {

@@ -2,7 +2,7 @@ import * as os from "os";
 import * as path from "path";
 import * as fs from "fs";
 
-export const STAFF_DIR = path.join(os.homedir(), ".staff");
+export const STAFF_DIR = process.env.STAFF_GLOBAL_DIR || path.join(os.homedir(), ".staff");
 export const STAFF_TOOLS_DIR = path.join(STAFF_DIR, "tools");
 export const STAFF_SKILLS_DIR = path.join(STAFF_DIR, "skills");
 export const STAFF_PROFILES_DIR = path.join(STAFF_DIR, "profiles");
