@@ -21,7 +21,7 @@ export const SKILL_SUBDIRS = ["skills", "skill"];
  */
 export function getSearchPaths(workingDir: string, profile: string = "default"): string[] {
   const searchPaths: string[] = [];
-  const homeDir = os.homedir();
+  const homeDir = process.env.STAFF_GLOBAL_DIR ? path.dirname(process.env.STAFF_GLOBAL_DIR) : os.homedir();
 
   // 辅助函数：构造特定基准目录下的所有变体路径
   const addVariations = (basePaths: string[], suffixes: string[]) => {

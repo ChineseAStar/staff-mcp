@@ -9,7 +9,7 @@ import { createServerFactory } from "./server.js";
 import { startStdioServer } from "./transports/stdio.js";
 import { startHttpServer } from "./transports/http.js";
 import { startReverseServer } from "./transports/reverse.js";
-import { ensureStaffDirs } from "./utils/paths.js";
+import { ensureStaffDirs, STAFF_SKILLS_DIR, STAFF_PROFILES_DIR } from "./utils/paths.js";
 
 // Global error handlers to prevent the MCP server from crashing due to unhandled child process errors
 process.on("uncaughtException", (err: any) => {
@@ -86,16 +86,13 @@ program
       // 3.8 Mount Host User-Level Skills and Profiles
       // Do not mount the entire ~/.staff to avoid cross-platform binary conflicts (e.g., native extensions, ripgrep)
       ensureStaffDirs(); // Ensure host directories exist to avoid Docker creating them with root permissions
-      const hostHome = os.homedir();
-      const hostSkills = path.join(hostHome, ".staff", "skills");
-      const hostProfiles = path.join(hostHome, ".staff", "profiles");
       
       // Mount to a fixed, safe path in the container and point the containerized staff-mcp to it
       // This avoids making any assumptions about the container's user or HOME directory
       const containerStaffDir = "/opt/.staff";
       dockerArgs.push("-e", `STAFF_GLOBAL_DIR=${containerStaffDir}`);
-      dockerArgs.push("-v", `${toDockerVolumePath(hostSkills)}:${containerStaffDir}/skills`);
-      dockerArgs.push("-v", `${toDockerVolumePath(hostProfiles)}:${containerStaffDir}/profiles`);
+      dockerArgs.push("-v", `${toDockerVolumePath(STAFF_SKILLS_DIR)}:${containerStaffDir}/skills`);
+      dockerArgs.push("-v", `${toDockerVolumePath(STAFF_PROFILES_DIR)}:${containerStaffDir}/profiles`);
 
       // 4. Mount additional allowed directories
       if (options.allowedDir && options.allowedDir.length > 0) {
