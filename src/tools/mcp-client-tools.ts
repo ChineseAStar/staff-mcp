@@ -45,11 +45,12 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
         sessionId: z.string().optional().describe("A unique identifier for this session. Required for 'start' and 'stop'."),
         command: z.string().optional().describe("Required for 'start'. The executable command to run the server."),
         args: z.array(z.string()).optional().describe("Required for 'start'. Arguments to pass to the command."),
+        env: z.record(z.string()).optional().describe("Optional for 'start'. Additional environment variables to pass to the command. They will be merged with the system environment."),
         transportType: z.enum(["stdio", "http"]).optional().describe("Optional for 'start'. Transport type. Default is 'stdio'. Use 'http' for HTTP/SSE based MCP servers."),
         port: z.number().optional().describe("Required for 'start' if transportType is 'http'. The port number the server is listening on.")
       }).strict(),
     },
-    async ({ action, sessionId, command, args, transportType, port }) => {
+    async ({ action, sessionId, command, args, env, transportType, port }) => {
       if (action === "start") {
         if (!sessionId || !command || !args) {
           return { content: [{ type: "text", text: "Error: 'sessionId', 'command', and 'args' are required to start a session." }], isError: true };
@@ -107,7 +108,8 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
               if (!effectivePort) {
                   return { content: [{ type: "text", text: `port is required when transportType is 'http'` }], isError: true };
               }
-              sessionProcess = spawn(command, args, { stdio: 'ignore', detached: true });
+              const mergedEnv = { ...process.env, ...env } as Record<string, string>;
+              sessionProcess = spawn(command, args, { stdio: 'ignore', detached: true, env: mergedEnv });
               sessionProcess.unref();
               
               // Wait for server to boot up
@@ -148,7 +150,8 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
               
               return { content: [{ type: "text", text: `Successfully started and connected to MCP session '${sessionId}' via http transport. (Active sessions: ${sessions.size}/${options.maxSessions})\nUse 'explore_mcp_session' to discover available tools.` }] };
           } else {
-              transport = new StdioClientTransport({ command, args });
+              const mergedEnv = { ...process.env, ...env } as Record<string, string>;
+              transport = new StdioClientTransport({ command, args, env: mergedEnv });
               
               sessions.set(sessionId, {
                 sessionId, command, args, process: sessionProcess, client, transport,
