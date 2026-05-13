@@ -6,7 +6,7 @@ async function run() {
   console.log("Starting full LSP suite test via MCP...");
   const transport = new StdioClientTransport({
     command: "npx",
-    args: ["tsx", "src/index.ts"]
+    args: ["tsx", "src/index.ts", "--enable-lsp"]
   });
 
   const client = new Client(

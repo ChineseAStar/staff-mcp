@@ -43,6 +43,7 @@ program
   .option("-d, --allowed-dir <paths...>", "Additional directories allowed for sandbox", [])
   .option("-r, --profile <name>", "The active profile for skills and instructions (e.g., android-reverse, default)", "default")
   .option("-m, --max-mcp-sessions <number>", "Maximum number of concurrent MCP sessions allowed", "5")
+  .option("--enable-lsp", "Enable LSP capabilities (disabled by default)", false)
   .option("--docker <image>", "Run the MCP server inside a Docker container using the specified image")
   .option("-D, --docker-args <args...>", "Additional arguments to pass to the docker run command (e.g., -e ADB_SERVER_SOCKET=...)")
   .allowUnknownOption()
@@ -151,6 +152,9 @@ program
       }
       dockerArgs.push("-r", options.profile);
       dockerArgs.push("-m", String(options.maxMcpSessions));
+      if (options.enableLsp) {
+        dockerArgs.push("--enable-lsp");
+      }
 
       // 10. Spawn Docker and pipe I/O natively
       const child = spawn("docker", dockerArgs, { stdio: ["pipe", "inherit", "inherit"] });
@@ -188,7 +192,8 @@ program
     const allowedDirs = options.allowedDir.map((d: string) => path.resolve(d));
     const profile = options.profile;
     const maxMcpSessions = parseInt(options.maxMcpSessions, 10) || 5;
-    const serverFactory = createServerFactory("staff-mcp", "1.0.0", workingDir, allowedDirs, profile, maxMcpSessions);
+    const enableLsp = !!options.enableLsp;
+    const serverFactory = createServerFactory("staff-mcp", "1.0.0", workingDir, allowedDirs, profile, maxMcpSessions, enableLsp);
 
     if (options.transport === "http") {
       await startHttpServer(serverFactory, parseInt(options.port, 10), options.host);

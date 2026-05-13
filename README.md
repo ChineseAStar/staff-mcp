@@ -99,6 +99,7 @@ It will securely download, configure, and reload the skill without you lifting a
 | `-w, --working-dir` | Root directory for the sandbox | `process.cwd()` |
 | `-d, --allowed-dir` | Extra directories allowed for access | `[]` |
 | `-r, --profile` | The active profile for skills (e.g., android-reverse) | `default` |
+| `--enable-lsp` | Enable LSP capabilities (disabled by default) | `false` |
 | `--docker` | Run inside a Docker container using this image | `undefined` |
 | `-D, --docker-args` | Extra args for `docker run` (e.g., `-e FOO=BAR`) | `[]` |
 | `-t, --transport` | Transport type (`stdio`, `http`, or `reverse`) | `stdio` |

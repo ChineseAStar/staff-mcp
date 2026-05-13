@@ -14,9 +14,19 @@ import { getMcpInstructions } from "./tools/system-tools.js";
  * @param workingDir The working directory for the server.
  * @param allowedDirs Additional directories for the SecurityManager.
  * @param profile The active profile for skills and instructions.
+ * @param maxMcpSessions Maximum concurrent MCP sessions allowed.
+ * @param enableLsp Whether to enable LSP tools.
  * @returns An initialized McpServer instance.
  */
-export function createServerFactory(name: string, version: string, workingDir: string, allowedDirs: string[], profile: string = "default", maxMcpSessions: number = 5): () => McpServer {
+export function createServerFactory(
+  name: string, 
+  version: string, 
+  workingDir: string, 
+  allowedDirs: string[], 
+  profile: string = "default", 
+  maxMcpSessions: number = 5,
+  enableLsp: boolean = false
+): () => McpServer {
   const security = new SecurityManager(workingDir, allowedDirs);
 
   // Generate instructions with system-specific details (OS, shell, etc.)
@@ -37,7 +47,11 @@ export function createServerFactory(name: string, version: string, workingDir: s
     // Register all functional tool modules
     registerFileTools(server, security);
     registerShellTools(server, security);
-    registerLspTools(server, security);
+    
+    if (enableLsp) {
+      registerLspTools(server, security);
+    }
+    
     registerSkillTools(server, workingDir, security, profile);
     registerMcpClientTools(server, { maxSessions: maxMcpSessions });
 

@@ -99,6 +99,7 @@ npx -y staff-mcp@latest --profile android-reverse
 | `-w, --working-dir` | 沙盒的根目录 (工作区) | `process.cwd()` |
 | `-d, --allowed-dir` | 额外允许 AI 访问的宿主机目录 | `[]` |
 | `-r, --profile` | 当前激活的技能档案/工种 (如 android-reverse) | `default` |
+| `--enable-lsp` | 启用 LSP 语言服务器功能 (默认禁用) | `false` |
 | `--docker` | 在指定的 Docker 镜像内运行 AI | `undefined` |
 | `-D, --docker-args` | 传递给 `docker run` 的自定义底层参数 | `[]` |
 | `-t, --transport` | 传输协议 (`stdio`, `http`, 或 `reverse`) | `stdio` |
