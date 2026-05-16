@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import * as yaml from "js-yaml";
 import { getSearchPaths } from "./resolver.js";
 
 export interface SkillInfo {
@@ -79,14 +80,18 @@ export class SkillManager {
     const yamlStr = match[1];
     const body = match[2];
     const data: Record<string, string> = {};
-    
-    for (const line of yamlStr.split("\n")) {
-      const colonIndex = line.indexOf(":");
-      if (colonIndex > -1) {
-        const key = line.slice(0, colonIndex).trim();
-        const value = line.slice(colonIndex + 1).trim().replace(/^['"]|['"]$/g, "");
-        data[key] = value;
+
+    try {
+      const parsed = yaml.load(yamlStr);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        for (const [key, value] of Object.entries(parsed)) {
+          if (value !== null && value !== undefined) {
+            data[key] = String(value);
+          }
+        }
       }
+    } catch (e) {
+      console.error(`[SkillManager] Failed to parse YAML frontmatter:`, e);
     }
     return { data, content: body };
   }
