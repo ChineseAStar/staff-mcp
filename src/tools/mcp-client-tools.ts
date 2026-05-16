@@ -346,7 +346,7 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
           const result = await session.client.callTool({
             name: method,
             arguments: parsedParams,
-          });
+          }, undefined, { timeout: 300000 }); // 5 minutes timeout (300,000 ms)
 
           // Process and return result
           let isErrorResult = false;
