@@ -194,8 +194,10 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
     dummy.remove();
   }
 
-  // Watcher logic
-  const watchPaths = SkillManager.getSearchPaths(workingDir, profile);
+  // Watcher logic — 仅监听项目级 .staff/skills 目录
+  // 目录不存在则自动创建；被删除后自动重建并恢复监听
+  // 全局目录和内置目录的 skill 变动需重启才能生效
+  const projectSkillDir = path.join(workingDir, ".staff", "skills");
 
   let watchTimeout: NodeJS.Timeout | null = null;
   const DEBOUNCE_MS = 1000; // 1秒防抖
@@ -215,17 +217,24 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
     }, DEBOUNCE_MS);
   };
 
-  const dirsToWatch = new Set(watchPaths.map(p => path.dirname(p)));
-
-  dirsToWatch.forEach(parentDir => {
-    if (fsSync.existsSync(parentDir)) {
-      try {
-        fsSync.watch(parentDir, { recursive: true }, handleWatchEvent);
-      } catch (e) {
-        console.error(`[SkillTools] Failed to watch ${parentDir}:`, e);
-      }
+  const startWatcher = () => {
+    if (!fsSync.existsSync(projectSkillDir)) {
+      fsSync.mkdirSync(projectSkillDir, { recursive: true });
+      console.log(`[SkillTools] Created project skill dir: ${projectSkillDir}`);
     }
-  });
+    try {
+      const watcher = fsSync.watch(projectSkillDir, { recursive: true }, handleWatchEvent);
+      console.log(`[SkillTools] Watching project skill dir: ${projectSkillDir}`);
+      watcher.on("close", () => {
+        console.log(`[SkillTools] Watch closed, re-establishing on: ${projectSkillDir}`);
+        startWatcher();
+      });
+    } catch (e) {
+      console.error(`[SkillTools] Failed to watch ${projectSkillDir}:`, e);
+    }
+  };
+
+  startWatcher();
 }
 
 function buildSkillOutput(skill: SkillInfo): string {

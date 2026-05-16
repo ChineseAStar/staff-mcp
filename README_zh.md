@@ -67,18 +67,26 @@ npx -y staff-mcp@latest -t reverse \
 - 提供 `--docker-args` 硬件透传后门（如 ADB USB 调试、GPU 计算、宿主机网络）。
 
 ### 2. 技能与工种生态系统 (`--profile`)
-`staff-mcp` 充当了“AI 工位配置器”的角色。它采用 **5 级级联寻址架构 (Cascade Resolution)** 动态加载角色专属的技能包 (SOP 与提示词)：
-1. **项目级 (最高优)**：\`<cwd>/.staff/skills\`
-2. **项目级角色层**：\`<cwd>/.staff/profiles/<profile>/skills\`
-3. **全局级角色层**：\`~/.staff/profiles/<profile>/skills\`
-4. **全局级默认层**：\`~/.staff/skills\`
-5. **内置基建层**：\`staff-mcp/builtin-profiles\` (如系统自带的 \`skill-manager\`)
+`staff-mcp` 充当了"AI 工位配置器"的角色。它采用 **5 级级联寻址架构 (Cascade Resolution)** 动态加载角色专属的技能包 (SOP 与提示词)，统一使用 `.staff` 目录规范：
+
+| 优先级 | 层级 | 路径 | 热更新 |
+|:---:|:---|:---|:---:|
+| 1 (最高) | 项目级 | \`<cwd>/.staff/skills\` | ✅ 实时（自动创建目录） |
+| 2 | 项目角色层 | \`<cwd>/.staff/profiles/<profile>/skills\` | 🔄 需重启 |
+| 3 | 全局角色层 | \`~/.staff/profiles/<profile>/skills\` | 🔄 需重启 |
+| 4 | 全局默认层 | \`~/.staff/skills\` | 🔄 需重启 |
+| 5 (最低) | 内置基建层 | \`staff-mcp/builtin-profiles\` | 🔄 需重启 |
+
+**Profile 是加性参数**——第 1 级和第 4 级不受 profile 影响，永远被加载；第 2、3、5 级根据 profile 值追加对应目录。多层级出现同名 skill 时，高优先级覆盖低优先级（取并集+同名覆盖，而非整层替换）。
+
+只有项目级 `.staff/skills/` 目录被实时监听。目录在启动时如不存在则自动创建，运行中被删除后自动重建并恢复监听。其他层级需重启生效。
 
 在不同角色中自由切换：
 ```bash
 npx -y staff-mcp@latest --profile default
 npx -y staff-mcp@latest --profile android-reverse
 ```
+
 
 ### 3. 聪明的“技能管家” (`skill-manager`)
 系统内置了基础设施技能，AI 助手生来就知道如何管理自己！你可以直接对它说：

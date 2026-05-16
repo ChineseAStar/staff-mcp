@@ -67,12 +67,19 @@ Never pollute your host machine again. By simply appending `--docker <image>`, `
 - Provides a `--docker-args` backdoor for hardware pass-through (e.g., ADB USB debugging, GPUs, host network).
 
 ### 2. Skill & Profile Ecosystem (`--profile`)
-`staff-mcp` acts as an "AI Workspace Configurator". It uses a **5-tier Cascade Resolution** architecture to load role-specific skills (SOPs & Prompts) dynamically:
-1. **Project Level**: \`<cwd>/.staff/skills\` (Highest priority)
-2. **Project Profile Level**: \`<cwd>/.staff/profiles/<profile>/skills\`
-3. **Global Profile Level**: \`~/.staff/profiles/<profile>/skills\`
-4. **Global Level**: \`~/.staff/skills\`
-5. **Built-in Infrastructure**: \`staff-mcp/builtin-profiles\` (e.g., the built-in \`skill-manager\`)
+`staff-mcp` acts as an "AI Workspace Configurator". It uses a **5-tier Cascade Resolution** architecture to load role-specific skills (SOPs & Prompts) dynamically, all under the unified `.staff` directory convention:
+
+| Priority | Tier | Path | Watch |
+|:---:|:---|:---|:---:|
+| 1 (Highest) | Project | `<cwd>/.staff/skills` | ✅ 实时生效（自动创建目录） |
+| 2 | Project Profile | `<cwd>/.staff/profiles/<profile>/skills` | 🔄 需重启 |
+| 3 | Global Profile | `~/.staff/profiles/<profile>/skills` | 🔄 需重启 |
+| 4 | Global | `~/.staff/skills` | 🔄 需重启 |
+| 5 (Lowest) | Built-in | `staff-mcp/builtin-profiles` | 🔄 需重启 |
+
+**Profile** is an additive parameter — tiers 1 and 4 are always loaded regardless of profile. Tiers 2, 3, and 5 append profile-specific paths. When skills with the same name exist at multiple tiers, the higher-priority one wins (merge with override, not whole-tier replacement).
+
+Only the project-level `.staff/skills/` directory is live-watched. The directory is auto-created on startup if absent, and auto-recovered if deleted at runtime. All other tiers require restart.
 
 Switch roles on the fly:
 ```bash
