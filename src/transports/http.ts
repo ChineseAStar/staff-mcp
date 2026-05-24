@@ -10,8 +10,10 @@ export async function startHttpServer(serverFactory: () => McpServer, port: numb
   // Enable CORS for all origins, including the MCP Inspector
   app.use(cors());
   
-  // Necessary for processing JSON-RPC messages (POST)
-  app.use(express.json());
+  // Necessary for processing JSON-RPC messages (POST).
+  // Large limit required to support MCP File Transfer Extension (FTE)
+  // which sends base64-encoded file chunks up to 2 MiB (~2.67 MiB JSON).
+  app.use(express.json({ limit: '50mb' }));
 
   // === Session Pool ===
   const sessions = new Map<string, StreamableHTTPServerTransport>();

@@ -6,6 +6,7 @@ import { registerLspTools } from "./tools/lsp-tools.js";
 import { registerSkillTools } from "./tools/skills.js";
 import { registerMcpClientTools } from "./tools/mcp-client-tools.js";
 import { getMcpInstructions } from "./tools/system-tools.js";
+import { FteServer } from "mcp-fte";
 
 /**
  * Creates and initializes a new McpServer with all functional tools.
@@ -28,6 +29,7 @@ export function createServerFactory(
   enableLsp: boolean = false
 ): () => McpServer {
   const security = new SecurityManager(workingDir, allowedDirs);
+  const sandbox = security.getAllowedDirs();
 
   // Generate instructions with system-specific details (OS, shell, etc.)
   const instructions = getMcpInstructions(workingDir, security);
@@ -41,6 +43,10 @@ export function createServerFactory(
       {
         // Pass the instruction string to the initialize response
         instructions,
+        // Advertise FTE capabilities
+        capabilities: {
+          ...FteServer.capabilities({ sandbox }),
+        },
       }
     );
 
@@ -54,6 +60,13 @@ export function createServerFactory(
     
     registerSkillTools(server, workingDir, security, profile);
     registerMcpClientTools(server, { maxSessions: maxMcpSessions });
+
+    // Intercept connect to wrap transport with FTE server-side processing
+    const originalConnect = server.connect.bind(server);
+    server.connect = (transport) => {
+      const wrapped = FteServer.wrapTransport(transport, { sandbox });
+      return originalConnect(wrapped);
+    };
 
     return server;
   };
