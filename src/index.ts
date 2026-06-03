@@ -10,6 +10,7 @@ import { startStdioServer } from "./transports/stdio.js";
 import { startHttpServer } from "./transports/http.js";
 import { startReverseServer } from "./transports/reverse.js";
 import { ensureStaffDirs, STAFF_SKILLS_DIR, STAFF_PROFILES_DIR } from "./utils/paths.js";
+import { ensureRipgrep } from "./utils/tool-utils.js";
 
 // Global error handlers to prevent the MCP server from crashing due to unhandled child process errors
 process.on("uncaughtException", (err: any) => {
@@ -188,6 +189,13 @@ program
     }
 
     ensureStaffDirs();
+
+    // Pre-warm ripgrep: trigger background install if not present, so it's
+    // likely ready by the time the first search_workspace call happens.
+    ensureRipgrep().catch(err => {
+      console.error("[staff-mcp] Background ripgrep install failed:", err.message);
+    });
+
     const workingDir = path.resolve(options.workingDir);
     const allowedDirs = options.allowedDir.map((d: string) => path.resolve(d));
     const profile = options.profile;
