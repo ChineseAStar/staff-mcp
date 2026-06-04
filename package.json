@@ -26,7 +26,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@vscode/ripgrep": "^1.17.1",
+    "@vscode/ripgrep": "1.18.0",
     "commander": "^12.1.0",
     "cors": "^2.8.5",
     "express": "^4.21.1",

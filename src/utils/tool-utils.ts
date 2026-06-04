@@ -2,6 +2,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { exec, spawn } from "child_process";
 import { promisify } from "util";
+import { createRequire } from "node:module";
 import { STAFF_TOOLS_DIR, ensureStaffDirs } from "./paths.js";
 
 const execAsync = promisify(exec);
@@ -29,6 +30,88 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
+// ============================================================
+//  ripgrep resolution helpers
+// ============================================================
+
+/** Run `which rg` / `where rg` — non-throwing, returns null if not found. */
+function whichAsync(name: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const cmd = process.platform === "win32" ? `where ${name}` : `which ${name}`;
+    exec(cmd, (err, stdout) => {
+      if (err || !stdout.trim()) return resolve(null);
+      resolve(stdout.trim().split(/\r?\n/)[0] || null);
+    });
+  });
+}
+
+/**
+ * Try to load @vscode/ripgrep from staff-mcp's own bundled dependency.
+ * In cross-platform Docker (e.g. Windows host → Linux container) this will
+ * naturally fail: process.platform = "linux", but the mounted host node_modules
+ * only contain the Windows sub-package → MODULE_NOT_FOUND → caught → null.
+ */
+async function tryImportRgPath(): Promise<string | null> {
+  try {
+    const pkg = await import("@vscode/ripgrep");
+    if (pkg.rgPath && fs.existsSync(pkg.rgPath)) {
+      return pkg.rgPath;
+    }
+  } catch { /* cross-platform Docker or not installed */ }
+  return null;
+}
+
+/**
+ * Try to load @vscode/ripgrep from .staff/tools/node_modules/ (container
+ * self-install or host fallback install). Uses createRequire so resolution
+ * starts inside the tools directory, bypassing host-mounted node_modules.
+ */
+function tryImportRgPathFromTools(): string | null {
+  try {
+    const placeholder = path.join(STAFF_TOOLS_DIR, "node_modules", "_noop_.js");
+    const toolsRequire = createRequire(placeholder);
+    const { rgPath } = toolsRequire("@vscode/ripgrep");
+    if (rgPath && fs.existsSync(rgPath)) return rgPath;
+  } catch { /* not installed yet */ }
+  return null;
+}
+
+// Prevent concurrent background installs
+let _rgInstalling = false;
+
+/**
+ * Fire-and-forget background installation of @vscode/ripgrep into .staff/tools/.
+ * Uses stdio:"pipe" to avoid polluting the MCP JSON-RPC channel on stdio transport.
+ */
+function installRgBackground(): void {
+  if (_rgInstalling) return;
+  _rgInstalling = true;
+
+  console.log("[staff-mcp] ripgrep not found, installing to .staff/tools/ ...");
+
+  const npmCmd = getPlatformCommand("npm");
+  const child = spawn(npmCmd, ["install", "@vscode/ripgrep"], {
+    cwd: STAFF_TOOLS_DIR,
+    shell: true,
+    stdio: "pipe",
+  });
+
+  let stderr = "";
+  child.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
+
+  child.on("close", (code) => {
+    _rgInstalling = false;
+    if (code === 0) {
+      console.log("[staff-mcp] ripgrep installed to .staff/tools/");
+    } else {
+      console.error(
+        `[staff-mcp] ripgrep install failed (exit ${code}):`,
+        stderr.slice(-300)
+      );
+    }
+  });
+}
+
 /**
  * Ensures a tool is available. If not found in .staff or system PATH, 
  * it attempts to install it into .staff/tools.
@@ -53,14 +136,7 @@ export async function ensureTool(name: string, installCmd?: string): Promise<str
     if (resolvedPath) return resolvedPath;
   } catch {}
 
-  // 3. Check node_modules in .staff/tools
-  if (name === "rg") {
-    // Special check for @vscode/ripgrep if installed in the tool directory
-    const rgInStaff = path.join(staffNodeModulesPath, "@vscode", "ripgrep", "bin", binaryName);
-    if (await exists(rgInStaff)) return rgInStaff;
-  }
-
-  // 4. Trigger Auto-Installation if missing
+  // 3. Trigger Auto-Installation if missing
   if (installCmd) {
     console.log(`Tool '${name}' not found. Installing into ${STAFF_TOOLS_DIR}...`);
     
@@ -100,37 +176,30 @@ export async function ensureTool(name: string, installCmd?: string): Promise<str
 }
 
 /**
- * Specialized version for ripgrep since it's a critical dependency.
- * If not found, it triggers an async background installation to prevent blocking
- * the current search request, allowing it to gracefully fall back to JS search.
+ * Resolves the path to the ripgrep (rg) binary.
+ *
+ * Look-up order:
+ *   1. System PATH              — fastest, always correct platform
+ *   2. Bundled @vscode/ripgrep  — from staff-mcp's own node_modules
+ *   3. .staff/tools/ install    — container self-install / host fallback
+ *
+ * If none found, triggers an async background installation to .staff/tools/
+ * and returns null so the caller can fall back to JS search for this request.
  */
 export async function ensureRipgrep(): Promise<string | null> {
-  // 1. Try to find it in the project's own node_modules
-  const localRgPaths = process.platform === "win32" ? [
-    path.join(process.cwd(), "node_modules", "@vscode", "ripgrep", "bin", "rg.exe"),
-    path.join(process.cwd(), "node_modules", "vscode-ripgrep", "bin", "rg.exe"),
-  ] : [
-    path.join(process.cwd(), "node_modules", "@vscode", "ripgrep", "bin", "rg"),
-    path.join(process.cwd(), "node_modules", "vscode-ripgrep", "bin", "rg"),
-  ];
+  // 1. System rg
+  const systemRg = await whichAsync("rg");
+  if (systemRg) return systemRg;
 
-  for (const p of localRgPaths) {
-    if (await exists(p)) return p;
-  }
+  // 2. Bundled dependency (skipped naturally in cross-platform Docker)
+  const bundledRg = await tryImportRgPath();
+  if (bundledRg) return bundledRg;
 
-  // 2. Check .staff/tools or global PATH without triggering blocking installation
-  try {
-    return await ensureTool("rg");
-  } catch (e) {
-    // 3. Not found anywhere. Trigger a background installation.
-    // We do NOT await this promise, so the current search will return null instantly 
-    // and fallback to JS, but next time it might be available.
-    console.log("[Background Task] Ripgrep not found. Initiating async background installation...");
-    ensureTool("rg", "npm install @vscode/ripgrep").catch(err => {
-      console.error("[Background Task] Failed to install ripgrep async:", err.message);
-    });
+  // 3. .staff/tools/ self-install
+  const toolsRg = tryImportRgPathFromTools();
+  if (toolsRg) return toolsRg;
 
-    // Return null to signal fallback for THIS specific request.
-    return null;
-  }
+  // 4. None available — install in background, fall back to JS for this request
+  installRgBackground();
+  return null;
 }
