@@ -2,13 +2,36 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
+import * as readline from "readline";
+import { createReadStream } from "fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SecurityManager } from "../security.js";
-import { CHARACTER_LIMIT } from "../constants.js";
+import { CHARACTER_LIMIT, SEARCH_MAX_COLUMNS, SEARCH_MAX_MATCHES, SEARCH_EXEC_MAX_BUFFER } from "../constants.js";
 import { ensureRipgrep } from "../utils/tool-utils.js";
 
 const execAsync = promisify(exec);
+
+/**
+ * Truncate a long line of text, centered around the match position (colNum).
+ * colNum is 1-based. Adds "..." prefix/suffix when truncated.
+ */
+function truncateContext(context: string, colNum: number, maxLen: number): string {
+  const trimmed = context.trim();
+  if (trimmed.length <= maxLen) return trimmed;
+
+  // colNum is 1-based; use as approximate character position for centering
+  const center = Math.max(0, colNum - 1);
+  const halfLen = Math.floor(maxLen / 2);
+  let start = Math.max(0, center - halfLen);
+  let end = Math.min(trimmed.length, start + maxLen);
+  // Adjust start if we hit the end of the string
+  start = Math.max(0, end - maxLen);
+
+  const prefix = start > 0 ? "..." : "";
+  const suffix = end < trimmed.length ? "..." : "";
+  return prefix + trimmed.substring(start, end) + suffix;
+}
 
 /**
  * Registers file-related tools using the latest registerTool API.
@@ -259,7 +282,9 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
             args.push(baseDir);
 
             const command = `"${rgPath}" ${args.map(a => `"${a.replace(/"/g, '\\"')}"`).join(" ")}`;
-            const { stdout } = await execAsync(command);
+            const { stdout } = await execAsync(command, {
+              maxBuffer: SEARCH_EXEC_MAX_BUFFER,
+            });
 
             let lines = stdout.trim().split("\n").filter(l => l.length > 0);
 
@@ -274,14 +299,15 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
                  if (match) {
                     const [_, absPath, lineNum, colNum, context] = match;
                     const relPath = path.relative(baseDir, absPath);
-                    return `${relPath.replace(/\\/g, '/')}:${lineNum} - ${context.trim()}`;
+                    const truncated = truncateContext(context, parseInt(colNum, 10), SEARCH_MAX_COLUMNS);
+                    return `${relPath.replace(/\\/g, '/')}:${lineNum} - ${truncated}`;
                  }
                  return line;
               });
             }
 
-            if (lines.length > 200) {
-              lines = lines.slice(0, 200);
+            if (lines.length > SEARCH_MAX_MATCHES) {
+              lines = lines.slice(0, SEARCH_MAX_MATCHES);
               lines.push("... [Search results truncated after 200 matches]");
             }
 
@@ -328,26 +354,43 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
                  if (includeRegex && !includeRegex.test(relPath)) continue;
                  if (excludeRegex && excludeRegex.test(relPath)) continue;
                  results.push(relPath);
-                 if (results.length > 200) return;
+                 if (results.length > SEARCH_MAX_MATCHES) return;
               } else {
                  if (includeRegex && !includeRegex.test(relPath)) continue;
                  if (excludeRegex && excludeRegex.test(relPath)) continue;
 
                  try {
-                   const contentStr = await fs.readFile(fullPath, "utf-8");
-                   if (contentStr.includes("\0")) continue; // Skip binary
+                   const fileStream = createReadStream(fullPath, { encoding: "utf-8" });
+                   const rl = readline.createInterface({
+                     input: fileStream,
+                     crlfDelay: Infinity,
+                   });
 
-                   let match;
-                   while ((match = searchRegex!.exec(contentStr)) !== null) {
-                     const lineNum = contentStr.substring(0, match.index).split(/\r?\n/).length;
-                     const context = contentStr.split(/\r?\n/)[lineNum - 1];
-                     results.push(`${relPath}:${lineNum} - ${context.trim()}`);
-                     
-                     if (results.length > 200) {
-                       results.push("... [Search results truncated after 200 matches]");
-                       return;
+                   let lineNum = 0;
+                   let hitLimit = false;
+
+                   for await (const line of rl) {
+                     lineNum++;
+                     if (line.includes("\0")) break; // Skip binary files
+
+                     searchRegex!.lastIndex = 0;
+                     let match;
+                     while ((match = searchRegex!.exec(line)) !== null) {
+                       const colNum = match.index + 1; // 1-based
+                       const truncated = truncateContext(line, colNum, SEARCH_MAX_COLUMNS);
+                       results.push(`${relPath}:${lineNum} - ${truncated}`);
+
+                       if (results.length >= SEARCH_MAX_MATCHES) {
+                         results.push("... [Search results truncated after 200 matches]");
+                         hitLimit = true;
+                         break;
+                       }
                      }
+                     if (hitLimit) break;
                    }
+                   rl.close();
+                   fileStream.destroy();
+                   if (hitLimit) return;
                  } catch (e) {}
               }
             }

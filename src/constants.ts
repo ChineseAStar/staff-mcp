@@ -1,2 +1,5 @@
-export const CHARACTER_LIMIT = 25000;
+export const CHARACTER_LIMIT = 100000;
 export const DEFAULT_TIMEOUT = 10000;
+export const SEARCH_MAX_COLUMNS = 200;
+export const SEARCH_MAX_MATCHES = 200;
+export const SEARCH_EXEC_MAX_BUFFER = 50 * 1024 * 1024; // 50MB
