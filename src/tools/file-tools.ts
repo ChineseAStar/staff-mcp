@@ -251,6 +251,7 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
             
             if (search_type === "content") {
               args.push("--line-number", "--column", "--no-heading");
+              args.push("--max-count", "5");
               if (!caseSensitive) args.push("--ignore-case");
               if (wholeWord) args.push("--word-regexp");
             } else {
@@ -306,25 +307,85 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
               });
             }
 
-            if (lines.length > SEARCH_MAX_MATCHES) {
+            const wasTruncated = lines.length > SEARCH_MAX_MATCHES;
+            if (wasTruncated) {
               lines = lines.slice(0, SEARCH_MAX_MATCHES);
-              lines.push("... [Search results truncated after 200 matches]");
+            }
+
+            // If truncated, try to get total match count for better feedback
+            let truncationNote = "";
+            if (wasTruncated) {
+              try {
+                const countArgs = ["--color", "never", "--hidden", "--count"];
+                if (!caseSensitive) countArgs.push("--ignore-case");
+                if (wholeWord) countArgs.push("--word-regexp");
+                countArgs.push("--glob", "!.git/**");
+                countArgs.push("--glob", "!node_modules/**");
+                if (includeGlob) { countArgs.push("--glob", includeGlob); }
+                if (excludeGlob) { countArgs.push("--glob", `!${excludeGlob}`); }
+                if (noIgnore) { countArgs.push("--no-ignore"); }
+                countArgs.push("--");
+                countArgs.push(query);
+                countArgs.push(baseDir);
+                const countCmd = `"${rgPath}" ${countArgs.map(a => `"${a.replace(/"/g, '\\"')}"`).join(" ")}`;
+                const { stdout: countOut } = await execAsync(countCmd, { maxBuffer: 1024 * 1024 });
+                const countLines = countOut.trim().split("\n").filter((l: string) => l.length > 0);
+                const totalMatches = countLines.reduce((sum: number, line: string) => {
+                  const parts = line.split(":");
+                  return sum + parseInt(parts[parts.length - 1] || "0", 10);
+                }, 0);
+                const fileCount = countLines.length;
+                truncationNote = `\n... [Search results truncated. Showing ${SEARCH_MAX_MATCHES} of ${totalMatches} matches across ${fileCount} files. Use includeGlob/excludeGlob to narrow results.]`;
+              } catch {
+                truncationNote = `\n... [Search results truncated at ${SEARCH_MAX_MATCHES} matches. More results exist — use includeGlob/excludeGlob to narrow your search.]`;
+              }
             }
 
             return {
-              content: [{ type: "text", text: lines.join("\n") || "No matches found." }],
+              content: [{ type: "text", text: (lines.join("\n") || "No matches found.") + truncationNote }],
             };
           } catch (rgError: any) {
             if (rgError.code === 1) {
               return { content: [{ type: "text", text: "No matches found." }] };
             }
+            // Handle maxBuffer or other errors: use partial stdout if available
+            if (rgError.stdout && rgError.stdout.trim().length > 0) {
+              let partialLines: string[] = rgError.stdout.trim().split("\n").filter((l: string) => l.length > 0);
+              if (search_type === "path") {
+                partialLines = partialLines.map((line: string) => {
+                  const relPath = path.relative(baseDir, line.trim());
+                  return relPath.replace(/\\/g, '/');
+                });
+              } else {
+                partialLines = partialLines.map((line: string) => {
+                  const match = line.match(/^((?:[a-zA-Z]:)?[^:]+):(\d+):(\d+):(.*)$/);
+                  if (match) {
+                    const [_, absPath, lineNum, colNum, context] = match;
+                    const relPath = path.relative(baseDir, absPath);
+                    const truncated = truncateContext(context, parseInt(colNum, 10), SEARCH_MAX_COLUMNS);
+                    return `${relPath.replace(/\\/g, '/')}:${lineNum} - ${truncated}`;
+                  }
+                  return line;
+                });
+              }
+              if (partialLines.length > SEARCH_MAX_MATCHES) {
+                partialLines = partialLines.slice(0, SEARCH_MAX_MATCHES);
+              }
+              const note = `\n... [Search results truncated at ${SEARCH_MAX_MATCHES} matches (ripgrep output exceeded buffer). More results exist — use includeGlob/excludeGlob to narrow your search.]`;
+              return {
+                content: [{ type: "text", text: (partialLines.join("\n") || "No matches found.") + note }],
+              };
+            }
+            // Other errors: fall through to JS fallback
+            console.error("[staff-mcp] ripgrep failed, falling back to JS:", rgError.message);
           }
         }
 
         // JS Fallback
         const results: string[] = [];
+        let jsHitLimit = false;
         function globToRegex(glob: string) {
-          const escaped = glob.replace(/[.+^${()|[\]\\]/g, '\\$&');
+          const escaped = glob.replace(/[.+^${()|[\]\\*?]/g, '\\$&');
           const replaced = escaped.replace(/\\\*\\\*/g, '.*').replace(/\\\*/g, '[^/]*').replace(/\\\?/g, '.');
           return new RegExp(`^${replaced}$`);
         }
@@ -339,9 +400,13 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
         const excludeRegex = excludeGlob ? globToRegex(excludeGlob) : null;
 
         async function searchRecursively(currentDir: string) {
+          if (results.length >= SEARCH_MAX_MATCHES) return;
+
           const entries = await fs.readdir(currentDir, { withFileTypes: true });
 
           for (const entry of entries) {
+            if (results.length >= SEARCH_MAX_MATCHES) return;
+
             const fullPath = path.join(currentDir, entry.name);
             const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
 
@@ -349,12 +414,16 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
 
             if (entry.isDirectory()) {
               await searchRecursively(fullPath);
+              if (results.length >= SEARCH_MAX_MATCHES) return;
             } else if (entry.isFile()) {
               if (search_type === "path") {
                  if (includeRegex && !includeRegex.test(relPath)) continue;
                  if (excludeRegex && excludeRegex.test(relPath)) continue;
                  results.push(relPath);
-                 if (results.length > SEARCH_MAX_MATCHES) return;
+                 if (results.length >= SEARCH_MAX_MATCHES) {
+                   jsHitLimit = true;
+                   return;
+                 }
               } else {
                  if (includeRegex && !includeRegex.test(relPath)) continue;
                  if (excludeRegex && excludeRegex.test(relPath)) continue;
@@ -367,30 +436,29 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
                    });
 
                    let lineNum = 0;
-                   let hitLimit = false;
+                   let shouldStop = false;
 
                    for await (const line of rl) {
                      lineNum++;
                      if (line.includes("\0")) break; // Skip binary files
 
                      searchRegex!.lastIndex = 0;
-                     let match;
-                     while ((match = searchRegex!.exec(line)) !== null) {
+                     const match = searchRegex!.exec(line);
+                     if (match) {
                        const colNum = match.index + 1; // 1-based
                        const truncated = truncateContext(line, colNum, SEARCH_MAX_COLUMNS);
                        results.push(`${relPath}:${lineNum} - ${truncated}`);
 
                        if (results.length >= SEARCH_MAX_MATCHES) {
-                         results.push("... [Search results truncated after 200 matches]");
-                         hitLimit = true;
+                         jsHitLimit = true;
+                         shouldStop = true;
                          break;
                        }
                      }
-                     if (hitLimit) break;
                    }
                    rl.close();
                    fileStream.destroy();
-                   if (hitLimit) return;
+                   if (shouldStop) return;
                  } catch (e) {}
               }
             }
@@ -398,9 +466,13 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
         }
 
         await searchRecursively(baseDir);
-        
+
         let outputText = results.join("\n") || "No matches found.";
-        
+
+        if (jsHitLimit) {
+          outputText += `\n... [Search results truncated at ${SEARCH_MAX_MATCHES} matches. More results exist — use includeGlob/excludeGlob to narrow your search.]`;
+        }
+
         // Let the LLM know it fell back to JS search, so it can decide if it wants to install ripgrep.
         if (!rgPath) {
            const installCmd = process.platform === "win32" ? "scoop install ripgrep (or winget install ripgrep)" : "apt-get install ripgrep (or apk add ripgrep)";
