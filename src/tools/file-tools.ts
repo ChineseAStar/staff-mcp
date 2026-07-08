@@ -7,7 +7,7 @@ import { createReadStream } from "fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SecurityManager } from "../security.js";
-import { CHARACTER_LIMIT, SEARCH_MAX_COLUMNS, SEARCH_MAX_MATCHES, SEARCH_EXEC_MAX_BUFFER } from "../constants.js";
+import { CHARACTER_LIMIT, SEARCH_MAX_COLUMNS, SEARCH_MAX_MATCHES, SEARCH_EXEC_MAX_BUFFER, IMAGE_SIZE_LIMIT, FILE_SNIFF_SIZE, SUPPORTED_IMAGE_MIMES, IMAGE_MIME_BY_EXTENSION, sniffImageMime, isBinaryFile } from "../constants.js";
 import { ensureRipgrep } from "../utils/tool-utils.js";
 
 const execAsync = promisify(exec);
@@ -41,7 +41,10 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
   server.registerTool(
     "read_file",
     {
-      description: "Read the content of a file from the allowed workspace.",
+      description:
+        "Read the content of a file from the allowed workspace. " +
+        "Supports line range selection via startLine/endLine. " +
+        "This tool can read image files and return them for visual analysis.",
       inputSchema: z.object({
         path: z.string().describe("Relative path from the workspace to the file to read."),
         startLine: z.number().optional().describe("1-based line number to start reading from."),
@@ -51,6 +54,66 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
     async ({ path: filePath, startLine, endLine }) => {
       try {
         const validatedPath = security.resolveAndValidatePath(filePath);
+
+        // --- Image detection: magic-byte sniff + extension fallback ---
+        const ext = path.extname(validatedPath).toLowerCase();
+        const extMime = IMAGE_MIME_BY_EXTENSION[ext];
+
+        // Read first few bytes for magic-byte sniffing + binary detection
+        let sniffedMime: string | null = null;
+        let fileStat = await fs.stat(validatedPath);
+        let sampleBytes: Uint8Array = new Uint8Array(0);
+
+        if (fileStat.size > 0) {
+          const fd = await fs.open(validatedPath, "r");
+          const sample = Buffer.alloc(FILE_SNIFF_SIZE);
+          const { bytesRead } = await fd.read(sample, 0, FILE_SNIFF_SIZE, 0);
+          await fd.close();
+          if (bytesRead > 0) {
+            sampleBytes = sample.subarray(0, bytesRead);
+            sniffedMime = sniffImageMime(sampleBytes);
+          }
+        }
+
+        const mime = sniffedMime || extMime || null;
+        const isImage = mime !== null && SUPPORTED_IMAGE_MIMES.has(mime);
+
+        if (isImage) {
+          // --- Image path: return as ImageContent, ignore startLine/endLine ---
+          if (fileStat.size > IMAGE_SIZE_LIMIT) {
+            return {
+              content: [{ type: "text", text: `Error: Image file is too large (${(fileStat.size / 1024 / 1024).toFixed(1)}MB). Maximum allowed size is ${IMAGE_SIZE_LIMIT / 1024 / 1024}MB.` }],
+              isError: true,
+            };
+          }
+
+          const imageBuffer = await fs.readFile(validatedPath);
+          const base64Data = imageBuffer.toString("base64");
+
+          return {
+            content: [
+              {
+                type: "image" as const,
+                data: base64Data,
+                mimeType: mime,
+              },
+              {
+                type: "text" as const,
+                text: `Image file: ${filePath} (${fileStat.size} bytes, ${mime})`,
+              },
+            ],
+          };
+        }
+
+        // --- Binary file detection: reject non-text files ---
+        if (isBinaryFile(validatedPath, sampleBytes)) {
+          return {
+            content: [{ type: "text", text: `Error: Cannot read binary file: ${filePath}. This file type is not supported for text reading.` }],
+            isError: true,
+          };
+        }
+
+        // --- Text path: original logic ---
         const fullContent = await fs.readFile(validatedPath, "utf-8");
         const lines = fullContent.split(/\r?\n/);
 
