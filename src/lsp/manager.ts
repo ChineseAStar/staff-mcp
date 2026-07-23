@@ -3,6 +3,7 @@ import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
 import { pathToFileURL, fileURLToPath } from "url";
+import { STAFF_MCP_VERSION } from "../package-info.js";
 import { STAFF_TOOLS_DIR, ensureStaffDirs } from "../utils/paths.js";
 
 function pathToUri(filePath: string): string {
@@ -266,7 +267,7 @@ export class LSPManager {
           if (!fs.existsSync(packageJsonPath)) {
             fs.writeFileSync(packageJsonPath, JSON.stringify({ 
               name: "staff-mcp-tools", 
-              version: "1.0.0",
+              version: STAFF_MCP_VERSION,
               private: true 
             }, null, 2));
           }

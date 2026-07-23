@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import * as path from "path";
-import * as fs from "fs";
 import * as os from "os";
-import { spawn } from "child_process";
-import { fileURLToPath } from "url";
 import { createServerFactory } from "./server.js";
+import { runDockerProxy, validateAdditionalDockerArgs } from "./docker-proxy.js";
+import { STAFF_MCP_PACKAGE_ROOT, STAFF_MCP_VERSION } from "./package-info.js";
 import { startStdioServer } from "./transports/stdio.js";
 import { startHttpServer } from "./transports/http.js";
 import { startReverseServer } from "./transports/reverse.js";
@@ -25,15 +24,12 @@ process.on("unhandledRejection", (reason, promise) => {
   console.error("[staff-mcp] Unhandled Rejection at:", promise, "reason:", reason);
 });
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 const program = new Command();
 
 program
   .name("staff-mcp")
   .description("MCP Server with file, shell, and LSP capabilities.")
-  .version("1.0.0")
+  .version(STAFF_MCP_VERSION)
   .option("-t, --transport <type>", "Transport type (stdio, http, reverse)", "stdio")
   .option("-p, --port <number>", "Port for HTTP server", "3000")
   .option("-h, --host <address>", "Host for HTTP server", "127.0.0.1")
@@ -54,10 +50,7 @@ program
     // -------------------------------------------------------------
     if (options.docker) {
       // 1. Locate the package root (where package.json is)
-      let pkgRoot = path.resolve(__dirname, "..");
-      while (!fs.existsSync(path.join(pkgRoot, "package.json")) && pkgRoot !== "/") {
-        pkgRoot = path.dirname(pkgRoot);
-      }
+      const pkgRoot = STAFF_MCP_PACKAGE_ROOT;
 
       // 2. Cross-platform path normalizer for Volume Mounts
       const toDockerVolumePath = (p: string) => {
@@ -111,13 +104,25 @@ program
 
       // 6. Inject advanced custom args (e.g., ADB pass-through, network configs)
       if (options.dockerArgs && options.dockerArgs.length > 0) {
+        const additionalDockerArgs: string[] = [];
+
         // commander parses varargs as an array of strings
         options.dockerArgs.forEach((arg: string) => {
           // simple split by space if the user quoted them (e.g., "-e FOO=1")
           // If the user uses standard bash expansion, commander already handles it.
           const parts = arg.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [arg];
-          parts.forEach(p => dockerArgs.push(p.replace(/^['"]|['"]$/g, '')));
+          parts.forEach((part) => additionalDockerArgs.push(part.replace(/^['"]|['"]$/g, "")));
         });
+
+        try {
+          validateAdditionalDockerArgs(additionalDockerArgs);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`[staff-mcp] Invalid Docker arguments: ${message}`);
+          process.exit(1);
+        }
+
+        dockerArgs.push(...additionalDockerArgs);
       }
 
       // 7. Inject environment variable to detect docker proxy mode
@@ -157,17 +162,14 @@ program
         dockerArgs.push("--enable-lsp");
       }
 
-      // 10. Spawn Docker and pipe I/O natively
-      const child = spawn("docker", dockerArgs, { stdio: ["pipe", "inherit", "inherit"] });
-      process.stdin.pipe(child.stdin);
-      
-      child.on("exit", (code) => process.exit(code ?? 0));
-      child.on("error", (err) => {
-        console.error("[staff-mcp] Failed to start docker proxy:", err.message);
-        process.exit(1);
-      });
-      
-      return; // Terminate host process execution
+      // 10. Run Docker with transport-aware stdin and a controlled shutdown lifecycle.
+      // Reverse/HTTP keep a private lifecycle pipe open instead of depending on
+      // the supervisor's stdin, which may be /dev/null or already closed.
+      const exitCode = await runDockerProxy(dockerArgs, options.transport);
+      // Supervisors such as PM2 keep an IPC channel open, so setting exitCode is
+      // not sufficient to terminate after the Docker child has been reaped.
+      // At this point cleanup has completed, making an explicit exit safe.
+      process.exit(exitCode);
     }
 
     // -------------------------------------------------------------
@@ -201,7 +203,7 @@ program
     const profile = options.profile;
     const maxMcpSessions = parseInt(options.maxMcpSessions, 10) || 5;
     const enableLsp = !!options.enableLsp;
-    const serverFactory = createServerFactory("staff-mcp", "1.0.0", workingDir, allowedDirs, profile, maxMcpSessions, enableLsp);
+    const serverFactory = createServerFactory("staff-mcp", STAFF_MCP_VERSION, workingDir, allowedDirs, profile, maxMcpSessions, enableLsp);
 
     if (options.transport === "http") {
       await startHttpServer(serverFactory, parseInt(options.port, 10), options.host);
@@ -216,4 +218,4 @@ program
     }
   });
 
-program.parse(process.argv);
+await program.parseAsync(process.argv);

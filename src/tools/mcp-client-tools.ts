@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { STAFF_MCP_VERSION } from "../package-info.js";
 
 interface McpSession {
   sessionId: string;
@@ -100,7 +101,7 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
         }
 
         try {
-          const client = new Client({ name: "staff-mcp-proxy", version: "1.0.0" }, { capabilities: {} });
+          const client = new Client({ name: "staff-mcp-proxy", version: STAFF_MCP_VERSION }, { capabilities: {} });
           let transport: any;
           let sessionProcess: ChildProcess | null = null;
 
