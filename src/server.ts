@@ -7,6 +7,7 @@ import { registerSkillTools } from "./tools/skills.js";
 import { registerMcpClientTools } from "./tools/mcp-client-tools.js";
 import { getMcpInstructions } from "./tools/system-tools.js";
 import { FteServer } from "mcp-fte";
+import { installFteTransportLifecycle } from "./transports/fte-lifecycle.js";
 
 /**
  * Creates and initializes a new McpServer with all functional tools.
@@ -62,11 +63,8 @@ export function createServerFactory(
     registerMcpClientTools(server, { maxSessions: maxMcpSessions });
 
     // Intercept connect to wrap transport with FTE server-side processing
-    const originalConnect = server.connect.bind(server);
-    server.connect = (transport) => {
-      const wrapped = FteServer.wrapTransport(transport, { sandbox });
-      return originalConnect(wrapped);
-    };
+    // while ensuring each reconnect also disposes the previous FTE wrapper.
+    installFteTransportLifecycle(server, sandbox);
 
     return server;
   };
