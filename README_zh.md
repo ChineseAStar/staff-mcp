@@ -116,6 +116,25 @@ npx -y staff-mcp@latest --profile android-reverse
 | `--ru, --reverse-url` | Reverse MCP 网关的远端 URL | `undefined` |
 | `--rt, --reverse-token` | Reverse MCP 的安全认证令牌 | `undefined` |
 | `--rn, --reverse-name` | Reverse MCP 的服务注册名称 | `undefined` |
+| `--proxy` | 出站请求的 HTTP(S) 代理 URL | `undefined` |
+
+### 🌐 代理支持（企业内网）
+
+staff-mcp 会自动识别标准代理环境变量，作用于**所有**出站请求（Reverse MCP 的 SSE 长连接、消息回传 POST、远程 MCP 客户端调用），且在任意受支持的 Node.js 版本上生效——无需 `NODE_USE_ENV_PROXY` 开关：
+
+```bash
+export HTTPS_PROXY=http://proxy.company.com:8080
+export NO_PROXY=localhost,127.0.0.1   # 精确主机/IP 或域名后缀；不支持 CIDR 网段写法
+npx -y staff-mcp@latest -t reverse --ru https://chat.example.com/api/mcp/reverse --rt <token> --rn myserver
+```
+
+也可以通过参数显式指定代理（优先级高于环境变量；该模式下不应用 `NO_PROXY`）：
+
+```bash
+npx -y staff-mcp@latest --proxy http://proxy.company.com:8080 ...
+```
+
+在 `--docker` 模式下，同样的逻辑会在容器内部执行：由 Docker 注入的代理环境变量（如 `~/.docker/config.json` 的 proxies 配置）会被自动识别，也可以通过 `-D "-e HTTP_PROXY=..."` 或 `--proxy` 显式传递。若代理做 TLS 拦截，请通过 `NODE_EXTRA_CA_CERTS=/path/to/ca.pem` 追加企业根证书。
 
 ### 硬件透传案例 (Android 移动端逆向)
 如果你希望 AI 在容器内运行时，仍能连接并控制物理机上的 Android 手机，利用基于网络端口的 ADB 透传是最稳妥的跨平台方案：

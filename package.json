@@ -33,6 +33,7 @@
     "js-yaml": "^4.1.1",
     "mcp-fte": "^1.0.2",
     "mcp-reverse": "1.3.0",
+    "undici": "^6.22.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

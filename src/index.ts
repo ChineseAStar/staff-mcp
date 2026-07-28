@@ -10,6 +10,7 @@ import { startHttpServer } from "./transports/http.js";
 import { startReverseServer } from "./transports/reverse.js";
 import { ensureStaffDirs, STAFF_SKILLS_DIR, STAFF_PROFILES_DIR } from "./utils/paths.js";
 import { ensureRipgrep } from "./utils/tool-utils.js";
+import { configureGlobalProxy } from "./utils/proxy.js";
 
 // Global error handlers to prevent the MCP server from crashing due to unhandled child process errors
 process.on("uncaughtException", (err: any) => {
@@ -43,8 +44,13 @@ program
   .option("--enable-lsp", "Enable LSP capabilities (disabled by default)", false)
   .option("--docker <image>", "Run the MCP server inside a Docker container using the specified image")
   .option("-D, --docker-args <args...>", "Additional arguments to pass to the docker run command (e.g., -e ADB_SERVER_SOCKET=...)")
+  .option("--proxy <url>", "HTTP(S) proxy for outbound requests (e.g. http://127.0.0.1:8080); defaults to honoring HTTP_PROXY/HTTPS_PROXY/NO_PROXY env vars")
   .allowUnknownOption()
   .action(async (options, command) => {
+    // Install a proxy-aware global fetch dispatcher before anything can
+    // issue an outbound request. In --docker mode this also runs inside the
+    // container, where the same entry point is re-executed.
+    configureGlobalProxy(options.proxy);
     // -------------------------------------------------------------
     // Docker Transparent Proxy Mode
     // -------------------------------------------------------------
@@ -160,6 +166,12 @@ program
       dockerArgs.push("-m", String(options.maxMcpSessions));
       if (options.enableLsp) {
         dockerArgs.push("--enable-lsp");
+      }
+      // Forward an explicit --proxy so the containerized process uses it too.
+      // (Env-var proxies reach the container through docker's own env injection
+      // or user-supplied -D "-e HTTP_PROXY=..." args.)
+      if (options.proxy) {
+        dockerArgs.push("--proxy", options.proxy);
       }
 
       // 10. Run Docker with transport-aware stdin and a controlled shutdown lifecycle.

@@ -13,6 +13,21 @@ export interface ReverseServerOptions {
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 
+/**
+ * Render an error with its full `cause` chain. Network failures from
+ * Node's fetch surface as a bare "fetch failed" message; the actionable
+ * reason (ECONNREFUSED, certificate errors, ...) lives in error.cause.
+ */
+function formatErrorChain(error: unknown): string {
+    const messages: string[] = [];
+    let current: unknown = error;
+    while (current instanceof Error) {
+        messages.push(current.message);
+        current = (current as { cause?: unknown }).cause;
+    }
+    return messages.length > 0 ? messages.join("; cause: ") : String(error);
+}
+
 function createReverseLogger(): Logger {
     const debugEnabled = process.env.STAFF_MCP_REVERSE_DEBUG === "1";
     return {
@@ -80,11 +95,11 @@ export async function startReverseServer(
     });
 
     client.on("error", (error: Error) => {
-        reverseLogger.error(`Transport reported an error: ${error.message}`);
+        reverseLogger.error(`Transport reported an error: ${formatErrorChain(error)}`);
     });
 
     client.on("failed", (error: Error) => {
-        reverseLogger.error(`Reconnect budget exhausted: ${error.message}`);
+        reverseLogger.error(`Reconnect budget exhausted: ${formatErrorChain(error)}`);
     });
 
     await client.start();

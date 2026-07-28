@@ -115,6 +115,25 @@ It will securely download, configure, and reload the skill without you lifting a
 | `--ru, --reverse-url` | URL for Reverse MCP Gateway | `undefined` |
 | `--rt, --reverse-token` | Security token for Reverse MCP | `undefined` |
 | `--rn, --reverse-name` | Server name for Reverse MCP | `undefined` |
+| `--proxy` | HTTP(S) proxy URL for outbound requests | `undefined` |
+
+### 🌐 Proxy Support (Corporate Networks)
+
+staff-mcp automatically honors the standard proxy environment variables for **all** outbound requests (Reverse MCP SSE connections, message POSTs, and remote MCP client calls), on any supported Node.js version — no `NODE_USE_ENV_PROXY` flag required:
+
+```bash
+export HTTPS_PROXY=http://proxy.company.com:8080
+export NO_PROXY=localhost,127.0.0.1   # exact hosts/IPs or domain suffixes; CIDR is not supported
+npx -y staff-mcp@latest -t reverse --ru https://chat.example.com/api/mcp/reverse --rt <token> --rn myserver
+```
+
+Alternatively, force a proxy explicitly (takes precedence over env vars; `NO_PROXY` is not applied):
+
+```bash
+npx -y staff-mcp@latest --proxy http://proxy.company.com:8080 ...
+```
+
+In `--docker` mode the same logic runs inside the container: proxy env vars injected by Docker (e.g. via `~/.docker/config.json`) are picked up automatically, or pass them / `--proxy` through explicitly. If your proxy performs TLS interception, add its CA via `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`.
 
 ### Hardware Pass-through Example (Android Reverse Engineering)
 If you need the AI to interact with an Android device connected via USB while running inside a container, utilizing network-based ADB pass-through is the most reliable cross-platform solution:
