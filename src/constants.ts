@@ -6,6 +6,29 @@ export const SEARCH_MAX_COLUMNS = 200;
 export const SEARCH_MAX_MATCHES = 200;
 export const SEARCH_EXEC_MAX_BUFFER = 50 * 1024 * 1024; // 50MB
 
+// --- Background task management (unified shell execution) ---
+
+/** Max log chunks kept per background task. */
+export const TASK_LOG_MAX_CHUNKS = 1000;
+
+/** Max total log characters kept per background task (oldest output dropped first). */
+export const TASK_LOG_MAX_CHARS = 100 * 1024; // 100KB
+
+/** How many exited tasks are kept for postmortem log inspection. */
+export const TASK_EXITED_KEEP = 20;
+
+/** Upper bound for the 'wait' param of manage_background_task action "logs". */
+export const LOGS_WAIT_MAX = 60000;
+
+/** Lines of recent output included when execute_command moves a running process to background. */
+export const YIELD_TAIL_LINES = 100;
+
+/** Grace period after SIGTERM before escalating to SIGKILL when stopping a task. */
+export const STOP_GRACE_MS = 2000;
+
+/** Max characters returned in a single tool result for command output. */
+export const RESULT_MAX_CHARS = 50000;
+
 // --- Image reading support ---
 
 /** Maximum image file size (10MB). Base64 encoding adds ~33% overhead. */

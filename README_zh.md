@@ -94,7 +94,7 @@ npx -y staff-mcp@latest --profile android-reverse
 它会自动帮你下载、配置并热更新技能文件，全程不需要你动手。
 
 ### 4. 增强的终端与代码智能
-- **智能终端执行**：自动检测并在支持的环境中升级为 `/bin/bash`，完美支持复杂的管道命令、后台守护进程 (如开发服务器) 及日志持续读取。
+- **统一命令执行**：所有命令（快速命令、构建、开发服务器）统一走 `execute_command` 入口。命令超过等待窗口（默认 10s）不会被杀死，而是转入后台并返回任务 ID 和近期输出；随后用 `manage_background_task` 跟进（`logs` 支持 `wait` 阻塞等待新输出或退出、`stop` 终止整个进程组、`list` 列出全部）。自动检测并在支持的环境中升级为 `/bin/bash`，完美支持复杂管道命令。
 - **LSP 深度集成**：支持提取符号 (Symbols)、获取诊断信息 (Diagnostics)、跳转定义 (Definition) 和查找引用 (References)，大幅提升 AI 理解 TypeScript/Python 等代码的能力。
 - **沙盒安全**：将 AI 严格限制在你指定的工作区和允许的目录内，对全局破坏“零容忍”。
 

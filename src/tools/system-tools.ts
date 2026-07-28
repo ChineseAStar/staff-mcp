@@ -62,8 +62,8 @@ Tool Usage Guidance:
    - Use 'search_workspace' (search_type: "path") to find files by name/glob.
    - Use 'get_document_symbols' for a quick structural overview of a file.
 3. Command Execution:
-   - For quick, non-interactive tasks, use 'execute_command'.
-   - For long-running processes (e.g., dev servers), use 'manage_background_task' (action: "start") and follow up with action "logs".
+   - Use 'execute_command' for ALL command execution (quick commands, builds, tests, dev servers, watchers). It waits up to 'timeout' ms (default 10s); if the command is still running, it is NOT killed — it moves to the background and returns a task ID with recent output.
+   - Follow up on a returned task ID with 'manage_background_task': action "logs" (optionally with "wait" to block until new output or exit, "tail" for line count), action "stop" (terminates the whole process group; logs remain available), or action "list".
    - ${isWin ? "Critical: Use Windows-compatible commands (e.g., 'dir', 'copy', 'del', 'type'). Use backslashes '\\\\' for paths in commands." : "Critical: Use POSIX-compatible commands (e.g., 'ls', 'cp', 'rm', 'cat'). Use forward slashes '/' for paths."}
 4. Specialized Skills: If a '.staff/skills' or '.claude/skills' directory exists, use the 'skill' tool to load domain-specific workflows which will augment your current context.
 5. Search & Replace: When refactoring, use 'search_workspace' to find all occurrences, then 'edit_file_by_replace' for precise, line-based replacements.

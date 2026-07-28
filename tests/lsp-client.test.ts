@@ -53,7 +53,13 @@ async function run() {
     }
   }
 
+  // Close the transport so the spawned server process is terminated
+  // instead of leaking as an orphan (which also hangs `npm test`).
+  await client.close();
   process.exit(0);
 }
 
-run().catch(console.error);
+run().catch(async (err) => {
+  console.error(err);
+  process.exit(1);
+});

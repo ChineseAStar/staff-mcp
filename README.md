@@ -93,7 +93,7 @@ Out of the box, the AI assistant knows how to manage its own skills! You can sim
 It will securely download, configure, and reload the skill without you lifting a finger.
 
 ### 4. Advanced Shell & Code Intelligence
-- **Intelligent Shell Execution**: Auto-detects and upgrades to `/bin/bash` if available, supporting complex pipelines and background tasks (e.g., starting dev servers and tailing logs).
+- **Unified Shell Execution**: A single `execute_command` entry point for everything — quick commands, builds, and dev servers. If a command outlives its wait window (default 10s), it is NOT killed: it moves to the background and returns a task ID with its recent output. Follow up via `manage_background_task` (`logs` with optional blocking `wait`, `stop` kills the whole process group, `list`). Auto-detects and upgrades to `/bin/bash` if available, supporting complex pipelines.
 - **LSP Integration**: Extract symbols, get diagnostics, go to definitions, and find references for TypeScript, Python, and more.
 - **Secure Sandbox**: Strictly confines the AI to the specified working directory and user-defined allowed paths.
 
