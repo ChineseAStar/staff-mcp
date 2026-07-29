@@ -123,7 +123,9 @@ staff-mcp automatically honors the standard proxy environment variables for **al
 
 ```bash
 export HTTPS_PROXY=http://proxy.company.com:8080
-export NO_PROXY=localhost,127.0.0.1   # exact hosts/IPs or domain suffixes; CIDR is not supported
+export NO_PROXY=localhost,127.0.0.1,10.0.0.0/8,.internal.example.com
+# NO_PROXY supports: exact hosts/IPs, domain suffixes (.example.com or bare example.com),
+# "*" wildcard, host:port qualifiers, and IPv4/IPv6 CIDR ranges (e.g. 172.16.0.0/12, fd00::/8)
 npx -y staff-mcp@latest -t reverse --ru https://chat.example.com/api/mcp/reverse --rt <token> --rn myserver
 ```
 
