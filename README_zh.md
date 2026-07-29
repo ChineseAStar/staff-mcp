@@ -124,7 +124,9 @@ staff-mcp 会自动识别标准代理环境变量，作用于**所有**出站请
 
 ```bash
 export HTTPS_PROXY=http://proxy.company.com:8080
-export NO_PROXY=localhost,127.0.0.1   # 精确主机/IP 或域名后缀；不支持 CIDR 网段写法
+export NO_PROXY=localhost,127.0.0.1,10.0.0.0/8,.internal.example.com
+# NO_PROXY 支持：精确主机/IP、域名后缀（.example.com 或裸写 example.com）、
+# "*" 通配、host:port 端口限定，以及 IPv4/IPv6 CIDR 网段（如 172.16.0.0/12、fd00::/8）
 npx -y staff-mcp@latest -t reverse --ru https://chat.example.com/api/mcp/reverse --rt <token> --rn myserver
 ```
 

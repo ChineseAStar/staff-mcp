@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
     Agent,
-    EnvHttpProxyAgent,
     ProxyAgent,
     getGlobalDispatcher,
     setGlobalDispatcher,
 } from "undici";
 import {
+    EnvProxyDispatcher,
     configureGlobalProxy,
     hasProxyEnv,
     maskProxyUrl,
@@ -69,12 +69,12 @@ test("explicit --proxy installs a ProxyAgent for all traffic", () =>
         }
     }));
 
-test("proxy env vars install an EnvHttpProxyAgent", () =>
+test("proxy env vars install an EnvProxyDispatcher", () =>
     withCleanProxyEnv(() => {
         process.env.HTTPS_PROXY = "http://127.0.0.1:8080";
         try {
             assert.equal(configureGlobalProxy(), true);
-            assert.ok(getGlobalDispatcher() instanceof EnvHttpProxyAgent);
+            assert.ok(getGlobalDispatcher() instanceof EnvProxyDispatcher);
         } finally {
             restoreDefaultDispatcher();
         }
