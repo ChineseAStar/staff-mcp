@@ -64,6 +64,7 @@ npx -y staff-mcp@latest -t reverse \
 Never pollute your host machine again. By simply appending `--docker <image>`, `staff-mcp`:
 - Instantly injects itself into the container via read-only bind mounts (no `npm install` inside the container).
 - Automatically translates Windows/Mac paths to Linux container paths.
+- Names containers after their launch context (e.g. `staff-mcp-myproj-3000-a1b2c3` = workspace `myproj`, HTTP port `3000`, random suffix `a1b2c3`), so multiple sessions are easy to tell apart in `docker ps`.
 - Provides a `--docker-args` backdoor for hardware pass-through (e.g., ADB USB debugging, GPUs, host network).
 
 ### 2. Skill & Profile Ecosystem (`--profile`)

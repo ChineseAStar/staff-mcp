@@ -64,6 +64,7 @@ npx -y staff-mcp@latest -t reverse \
 告别污染宿主机的时代。只要加上 `--docker <image>`，`staff-mcp` 将会：
 - 通过只读挂载 (`read-only bind mounts`) 瞬间注入容器（无需网络重下）。
 - 自动处理 Windows/Mac 与 Linux 容器之间的路径转换问题。
+- 容器名自带启动上下文（例如 `staff-mcp-myproj-3000-a1b2c3` = 工作区 `myproj`、HTTP 端口 `3000`、随机后缀 `a1b2c3`），多个会话并存时在 `docker ps` 中一眼可辨。
 - 提供 `--docker-args` 硬件透传后门（如 ADB USB 调试、GPU 计算、宿主机网络）。
 
 ### 2. 技能与工种生态系统 (`--profile`)
