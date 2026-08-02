@@ -9,6 +9,7 @@ import { z } from "zod";
 import { SecurityManager } from "../security.js";
 import { CHARACTER_LIMIT, SEARCH_MAX_COLUMNS, SEARCH_MAX_MATCHES, SEARCH_EXEC_MAX_BUFFER, IMAGE_SIZE_LIMIT, FILE_SNIFF_SIZE, SUPPORTED_IMAGE_MIMES, IMAGE_MIME_BY_EXTENSION, sniffImageMime, isBinaryFile } from "../constants.js";
 import { ensureRipgrep } from "../utils/tool-utils.js";
+import { enqueueFileWrite, atomicWriteFile } from "../utils/file-write-queue.js";
 
 const execAsync = promisify(exec);
 
@@ -159,42 +160,47 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
     async ({ path: filePath, oldText: originalOldText, newText }) => {
       try {
         const validatedPath = security.resolveAndValidatePath(filePath);
-        const content = await fs.readFile(validatedPath, "utf-8");
 
-        let oldText = originalOldText;
-        let index = content.indexOf(oldText);
+        // Serialize the whole read-modify-write cycle per file: concurrent
+        // edits must not read-then-overwrite each other (see file-write-queue).
+        return await enqueueFileWrite(validatedPath, async () => {
+          const content = await fs.readFile(validatedPath, "utf-8");
 
-        // If exact match fails, try fuzzy matching (ignoring whitespace differences)
-        if (index === -1) {
-          const escapedOld = originalOldText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          // Replace whitespace sequences with \s+ to match any whitespace
-          const fuzzyRegex = new RegExp(escapedOld.replace(/\s+/g, '\\s+'), 'g');
-          const matches = [...content.matchAll(fuzzyRegex)];
-          
-          if (matches.length === 1) {
-             index = matches[0].index!;
-             oldText = matches[0][0]; // Use the actual matched text for replacement
-          } else if (matches.length > 1) {
-             return {
-               content: [{ type: "text", text: `Error: Multiple fuzzy matches found for the provided text. Please provide more context to uniquely identify the block.` }],
-               isError: true,
-             };
+          let oldText = originalOldText;
+          let index = content.indexOf(oldText);
+
+          // If exact match fails, try fuzzy matching (ignoring whitespace differences)
+          if (index === -1) {
+            const escapedOld = originalOldText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // Replace whitespace sequences with \s+ to match any whitespace
+            const fuzzyRegex = new RegExp(escapedOld.replace(/\s+/g, '\\s+'), 'g');
+            const matches = [...content.matchAll(fuzzyRegex)];
+
+            if (matches.length === 1) {
+               index = matches[0].index!;
+               oldText = matches[0][0]; // Use the actual matched text for replacement
+            } else if (matches.length > 1) {
+               return {
+                 content: [{ type: "text", text: `Error: Multiple fuzzy matches found for the provided text. Please provide more context to uniquely identify the block.` }],
+                 isError: true,
+               };
+            }
           }
-        }
 
-        if (index === -1) {
+          if (index === -1) {
+            return {
+              content: [{ type: "text", text: `Error: Could not find the text block to replace in ${filePath}. Ensure the text matches exactly (including whitespace) or provide more surrounding context.` }],
+              isError: true,
+            };
+          }
+
+          const updatedContent = content.slice(0, index) + newText + content.slice(index + oldText.length);
+          await atomicWriteFile(validatedPath, updatedContent);
+
           return {
-            content: [{ type: "text", text: `Error: Could not find the text block to replace in ${filePath}. Ensure the text matches exactly (including whitespace) or provide more surrounding context.` }],
-            isError: true,
+            content: [{ type: "text", text: `Successfully updated ${filePath}` }],
           };
-        }
-
-        const updatedContent = content.slice(0, index) + newText + content.slice(index + oldText.length);
-        await fs.writeFile(validatedPath, updatedContent, "utf-8");
-
-        return {
-          content: [{ type: "text", text: `Successfully updated ${filePath}` }],
-        };
+        });
       } catch (error: any) {
         return {
           content: [{ type: "text", text: `Error editing file: ${error.message}` }],
@@ -217,8 +223,10 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
     async ({ path: filePath, content }) => {
       try {
         const validatedPath = security.resolveAndValidatePath(filePath);
-        await fs.mkdir(path.dirname(validatedPath), { recursive: true });
-        await fs.writeFile(validatedPath, content, "utf-8");
+        await enqueueFileWrite(validatedPath, async () => {
+          await fs.mkdir(path.dirname(validatedPath), { recursive: true });
+          await atomicWriteFile(validatedPath, content);
+        });
 
         return {
           content: [{ type: "text", text: `Successfully wrote file: ${filePath}` }],
@@ -244,7 +252,11 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
     async ({ path: filePath }) => {
       try {
         const validatedPath = security.resolveAndValidatePath(filePath);
-        await fs.unlink(validatedPath);
+        // Queue with writes to the same path so a delete cannot interleave
+        // with an in-flight read-modify-write.
+        await enqueueFileWrite(validatedPath, async () => {
+          await fs.unlink(validatedPath);
+        });
 
         return {
           content: [{ type: "text", text: `Successfully deleted file: ${filePath}` }],

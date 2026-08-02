@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -25,6 +25,8 @@ export interface DockerProxyOptions {
   containerIdWaitTimeoutMs?: number;
   containerCleanupTimeoutMs?: number;
   forceKillTimeoutMs?: number;
+  /** Human-readable hint (workspace, port, ...) embedded in the container name. */
+  nameHint?: string;
 }
 
 interface ContainerIdentityConfig {
@@ -64,7 +66,70 @@ function hasManagedIdentityArg(args: readonly string[]): boolean {
   );
 }
 
-function prepareContainerIdentity(dockerArgs: readonly string[]): ContainerIdentityConfig {
+const CONTAINER_NAME_PREFIX = "staff-mcp";
+const CONTAINER_NAME_HINT_MAX_LENGTH = 40;
+const NAME_SEGMENT_FALLBACK = "session";
+
+/**
+ * Sanitize an arbitrary string into a Docker-name-safe segment.
+ * Docker names only accept [a-zA-Z0-9][a-zA-Z0-9_.-], so everything else is
+ * folded to '-'. Returns an empty string when nothing usable remains.
+ */
+export function sanitizeNameSegment(value: string, maxLength = 24): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^[-_.]+|[-_.]+$/g, "")
+    .slice(0, maxLength)
+    .replace(/[-_.]+$/g, "");
+}
+
+/**
+ * Build a human-meaningful hint for the container name from launch context,
+ * so users can tell containers apart in `docker ps`:
+ *   stdio:   <workspace>
+ *   http:    <workspace>-<port>
+ *   reverse: <workspace>[-<reverseName>]  (reverseName omitted when redundant)
+ */
+export function buildDockerNameHint(parts: {
+  workspaceDir: string;
+  transport: string;
+  port?: number | string;
+  reverseName?: string;
+}): string {
+  const workspace = path.basename(parts.workspaceDir);
+  if (parts.transport === "http" && parts.port) {
+    return `${workspace}-${parts.port}`;
+  }
+  if (parts.transport === "reverse" && parts.reverseName) {
+    const workspaceSlug = sanitizeNameSegment(workspace);
+    const reverseSlug = sanitizeNameSegment(parts.reverseName);
+    if (workspaceSlug && workspaceSlug === reverseSlug) {
+      return workspace;
+    }
+    return `${workspace}-${parts.reverseName}`;
+  }
+  return workspace;
+}
+
+/**
+ * Compose the final container name: a fixed prefix, a human-readable
+ * discriminator and a short random suffix. The suffix keeps the name unique
+ * enough for the by-name fallback cleanup path; duplicate names are also
+ * rejected safely by Docker at container creation time.
+ */
+function buildContainerName(nameHint?: string): string {
+  const randomSuffix = randomBytes(3).toString("hex");
+  const hint = sanitizeNameSegment(nameHint ?? "", CONTAINER_NAME_HINT_MAX_LENGTH);
+  const discriminator = hint || NAME_SEGMENT_FALLBACK;
+  return `${CONTAINER_NAME_PREFIX}-${discriminator}-${randomSuffix}`;
+}
+
+function prepareContainerIdentity(
+  dockerArgs: readonly string[],
+  nameHint?: string
+): ContainerIdentityConfig {
   const args = [...dockerArgs];
   if (hasManagedIdentityArg(args)) {
     throw new Error("--cidfile and --name are managed internally by staff-mcp.");
@@ -77,7 +142,7 @@ function prepareContainerIdentity(dockerArgs: readonly string[]): ContainerIdent
 
   const ownedDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "staff-mcp-container-"));
   const cidFilePath = path.join(ownedDirectory, "container.cid");
-  const containerName = `staff-mcp-${process.pid}-${randomUUID()}`;
+  const containerName = buildContainerName(nameHint);
   args.splice(runIndex + 1, 0, "--cidfile", cidFilePath, "--name", containerName);
   return { args, cidFilePath, containerName, ownedDirectory };
 }
@@ -176,7 +241,7 @@ export async function runDockerProxy(
 
   let containerIdentity: ContainerIdentityConfig;
   try {
-    containerIdentity = prepareContainerIdentity(dockerArgs);
+    containerIdentity = prepareContainerIdentity(dockerArgs, options.nameHint);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[staff-mcp] Failed to prepare Docker proxy: ${message}`);

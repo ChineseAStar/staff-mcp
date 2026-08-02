@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
-import { runDockerProxy, validateAdditionalDockerArgs } from "../src/docker-proxy.js";
+import { buildDockerNameHint, runDockerProxy, sanitizeNameSegment, validateAdditionalDockerArgs } from "../src/docker-proxy.js";
 
 const FIXTURE_CONTAINER_ID = "a".repeat(64);
 
@@ -142,7 +142,8 @@ function runFixture(
     containerIdWaitTimeoutMs?: number;
     containerCleanupTimeoutMs?: number;
     forceKillTimeoutMs?: number;
-  } = {}
+  } = {},
+  proxyOptions: { nameHint?: string } = {}
 ): Promise<number> {
   return runDockerProxy(["run", "fake-image"], transport, {
     command: process.execPath,
@@ -154,6 +155,7 @@ function runFixture(
     containerCleanupTimeoutMs: 500,
     forceKillTimeoutMs: 200,
     ...timeoutOverrides,
+    ...proxyOptions,
   });
 }
 
@@ -322,7 +324,7 @@ test("a Docker CLI killed before writing its cidfile falls back to the unique ge
 
   assert.equal(await resultPromise, 137);
   const containerName = createdEvent.slice("created:".length);
-  assert.match(containerName, /^staff-mcp-\d+-[0-9a-f-]{36}$/);
+  assert.match(containerName, /^staff-mcp-session-[0-9a-f]{6}$/);
   assert.ok(readEvents(eventsPath).includes(`rm:${containerName}`));
 });
 
@@ -529,4 +531,72 @@ test("Docker proxy refuses a pre-existing user cidfile to avoid cleaning a stale
   assert.equal(code, 1);
   assert.equal(fs.readFileSync(cidFilePath, "utf8"), "unrelated-container\n");
   assert.equal(signals.listenerCount("SIGTERM"), 0);
+});
+
+test("sanitizeNameSegment folds Docker-invalid characters and trims decorations", () => {
+  assert.equal(sanitizeNameSegment("Chat Poc!"), "chat-poc");
+  assert.equal(sanitizeNameSegment("--Weird__Name--"), "weird__name");
+  assert.equal(sanitizeNameSegment("my_app.v2"), "my_app.v2");
+  assert.equal(sanitizeNameSegment("工作 目录"), "");
+  assert.equal(sanitizeNameSegment(""), "");
+  assert.equal(sanitizeNameSegment("abc-def", 4), "abc");
+  assert.equal(sanitizeNameSegment("a".repeat(50)), "a".repeat(24));
+});
+
+test("buildDockerNameHint derives transport-aware hints from launch context", () => {
+  assert.equal(
+    buildDockerNameHint({ workspaceDir: "/data/projs/chat-poc", transport: "stdio" }),
+    "chat-poc"
+  );
+  assert.equal(
+    buildDockerNameHint({ workspaceDir: "/data/projs/test", transport: "http", port: "18000" }),
+    "test-18000"
+  );
+  assert.equal(
+    buildDockerNameHint({ workspaceDir: "/data/projs/app", transport: "http" }),
+    "app"
+  );
+  // reverseName identical to the workspace is redundant and therefore omitted
+  assert.equal(
+    buildDockerNameHint({ workspaceDir: "/data/projs/chat-poc", transport: "reverse", reverseName: "chat-poc" }),
+    "chat-poc"
+  );
+  assert.equal(
+    buildDockerNameHint({ workspaceDir: "/data/projs/myapp", transport: "reverse", reverseName: "android-dev" }),
+    "myapp-android-dev"
+  );
+});
+
+test("container name embeds a sanitized hint and a short random suffix", async (t) => {
+  const { fixturePath, eventsPath, capturePath } = createFixture(t);
+  const hostInput = new PassThrough();
+  const signals = new EventEmitter();
+
+  const resultPromise = runFixture(
+    fixturePath,
+    eventsPath,
+    capturePath,
+    "crash-before-cidfile",
+    "reverse",
+    hostInput,
+    signals,
+    {},
+    { nameHint: "My Proj_18000" }
+  );
+
+  const deadline = Date.now() + 3_000;
+  let createdEvent: string | undefined;
+  while (!createdEvent && Date.now() < deadline) {
+    createdEvent = readEvents(eventsPath).find((event) => event.startsWith("created:"));
+    if (!createdEvent) {
+      await delay(10);
+    }
+  }
+  assert.ok(createdEvent, "fixture should expose the generated container name");
+
+  assert.equal(await resultPromise, 137);
+  const containerName = createdEvent.slice("created:".length);
+  assert.match(containerName, /^staff-mcp-my-proj_18000-[0-9a-f]{6}$/);
+  assert.ok(containerName.length <= 63, "container name should stay within 63 characters");
+  assert.ok(readEvents(eventsPath).includes(`rm:${containerName}`));
 });

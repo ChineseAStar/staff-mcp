@@ -3,7 +3,7 @@ import { Command } from "commander";
 import * as path from "path";
 import * as os from "os";
 import { createServerFactory } from "./server.js";
-import { runDockerProxy, validateAdditionalDockerArgs } from "./docker-proxy.js";
+import { buildDockerNameHint, runDockerProxy, validateAdditionalDockerArgs } from "./docker-proxy.js";
 import { STAFF_MCP_PACKAGE_ROOT, STAFF_MCP_VERSION } from "./package-info.js";
 import { startStdioServer } from "./transports/stdio.js";
 import { startHttpServer } from "./transports/http.js";
@@ -177,7 +177,16 @@ program
       // 10. Run Docker with transport-aware stdin and a controlled shutdown lifecycle.
       // Reverse/HTTP keep a private lifecycle pipe open instead of depending on
       // the supervisor's stdin, which may be /dev/null or already closed.
-      const exitCode = await runDockerProxy(dockerArgs, options.transport);
+      // The name hint makes containers distinguishable in `docker ps`
+      // (e.g. staff-mcp-chat-poc-18000-a1b2c3).
+      const exitCode = await runDockerProxy(dockerArgs, options.transport, {
+        nameHint: buildDockerNameHint({
+          workspaceDir: hostCwd,
+          transport: options.transport,
+          port: options.port,
+          reverseName: options.reverseName,
+        }),
+      });
       // Supervisors such as PM2 keep an IPC channel open, so setting exitCode is
       // not sufficient to terminate after the Docker child has been reaped.
       // At this point cleanup has completed, making an explicit exit safe.
