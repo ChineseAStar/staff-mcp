@@ -6,6 +6,7 @@ import { z } from "zod";
 import { SecurityManager } from "../security.js";
 import {
   DEFAULT_TIMEOUT,
+  MAX_WAIT_TIMEOUT,
   TASK_LOG_MAX_CHUNKS,
   TASK_LOG_MAX_CHARS,
   TASK_EXITED_KEEP,
@@ -443,13 +444,22 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
       inputSchema: z.object({
         command: z.string().describe("The shell command to execute."),
         cwd: z.string().optional().describe("Directory to execute command from (must be allowed). Defaults to the workspace root."),
-        timeout: z.number().optional().default(DEFAULT_TIMEOUT).describe(`How long to wait (in milliseconds) for the command to finish before it is moved to the background (default: ${DEFAULT_TIMEOUT}ms). The process is NOT killed when this elapses — you receive a task ID to follow up via manage_background_task.`),
+        timeout: z.number().optional().default(DEFAULT_TIMEOUT).describe(`How long to wait (in milliseconds) for the command to finish before it is moved to the background (default: ${DEFAULT_TIMEOUT}ms). The process is NOT killed when this elapses — you receive a task ID to follow up via manage_background_task. Values above ${MAX_WAIT_TIMEOUT}ms are clamped to ${MAX_WAIT_TIMEOUT}ms; for longer waits, poll via manage_background_task (action: logs, with wait).`),
       }).strict(),
     },
-    async ({ command, cwd, timeout }) => {
+    async ({ command, cwd, timeout }, extra) => {
       try {
         const validatedCwd = security.validateDirectory(cwd || ".");
-        const result = await executeCommandCore(command, validatedCwd, timeout);
+        // Clamp the blocking wait so the tool always responds well before any MCP
+        // client-side request timeout (chat-ai: 1 hour). Otherwise the caller gives
+        // up first and the auto-backgrounded task's ID is lost (orphaned task).
+        const waitMs = Math.min(timeout, MAX_WAIT_TIMEOUT);
+        const onAbort = () => console.error("[shell-tools] MCP request cancelled while the command may still be " +
+          "running; it continues and auto-backgrounds on its own (locate it via manage_background_task, " +
+          `action: list). command: ${command.slice(0, 200)}`);
+        extra?.signal?.addEventListener("abort", onAbort, { once: true });
+        const result = await executeCommandCore(command, validatedCwd, waitMs);
+        extra?.signal?.removeEventListener("abort", onAbort);
         return {
           content: [{ type: "text", text: result.text }],
           ...(result.isError ? { isError: true } : {}),

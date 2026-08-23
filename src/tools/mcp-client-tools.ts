@@ -315,7 +315,7 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
         params: z.string().optional().describe("A JSON-encoded string containing the arguments for the tool (e.g., '{\"query\": \"secret\"}')"),
       }).strict(),
     },
-    async ({ sessionId, method, params }) => {
+    async ({ sessionId, method, params }, extra) => {
       try {
         const session = getReadySession(sessionId);
 
@@ -347,7 +347,11 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
           const result = await session.client.callTool({
             name: method,
             arguments: parsedParams,
-          }, undefined, { timeout: 300000 }); // 5 minutes timeout (300,000 ms)
+          }, undefined, {
+            timeout: 3600000, // 1 hour, aligned with the chat-ai MCP client. Nested long-running
+            // tools manage their own lifecycle; a short cap here orphans their work.
+            signal: extra?.signal, // propagate caller cancellation (e.g. user stop) to the nested call
+          });
 
           // Process and return result
           let isErrorResult = false;
