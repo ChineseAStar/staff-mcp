@@ -58,6 +58,17 @@ npx -y staff-mcp@latest -t reverse \
 
 ---
 
+## Reverse 1.2 upgrade notes
+
+Reverse mode uses `mcp-reverse@1.4.0` and MCP SDK `1.30.0`. Readiness is reported only after MCP initialization, and short-lived connections no longer reset exponential backoff. Reconnection never replays tool calls.
+
+Optional CLI controls (milliseconds, also forwarded in Docker mode):
+
+- `--reverse-connect-timeout`: 15000; 0 disables the HTTP/SSE connection deadline.
+- `--reverse-initialization-timeout`: 15000; must be positive.
+- `--reverse-read-timeout`: 45000; liveness monitoring, not tool execution duration.
+- `--reverse-stable-time`: 30000; lifetime required before resetting the retry cycle (0 restores immediate reset).
+
 ## 🛠️ Core Capabilities
 
 ### 1. Seamless Containerization (`--docker`)

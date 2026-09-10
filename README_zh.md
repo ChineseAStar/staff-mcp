@@ -58,6 +58,12 @@ npx -y staff-mcp@latest -t reverse \
 
 ---
 
+### Reverse 1.2 升级说明
+
+- 使用 `mcp-reverse@1.4.0` 和 MCP SDK `1.30.0`。只有 MCP 初始化完成才报告 ready；SSE 打开不等于协议就绪。
+- 初始化失败或短暂连接后断开会继续指数退避，默认稳定连接 30 秒后才重置失败周期，不重放工具请求。
+- 可配置 `--reverse-connect-timeout`（默认 15000ms，0 禁用建连超时）、`--reverse-initialization-timeout`（15000ms）、`--reverse-read-timeout`（45000ms）和 `--reverse-stable-time`（30000ms，0 为立即重置）。Docker 模式也透传这些参数。读取活性超时与工具运行时长不同，不建议仅靠放宽超时掩盖故障。
+
 ## 🛠️ 核心能力
 
 ### 1. 无缝容器化支持 (`--docker`)
