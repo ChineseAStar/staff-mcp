@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import * as path from "path";
 import * as os from "os";
 import { createServerFactory } from "./server.js";
@@ -25,6 +25,14 @@ process.on("unhandledRejection", (reason, promise) => {
   console.error("[staff-mcp] Unhandled Rejection at:", promise, "reason:", reason);
 });
 
+function milliseconds(value: string, minimum = 1): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > 2_147_483_647) {
+    throw new InvalidArgumentError(`Expected milliseconds between ${minimum} and 2147483647.`);
+  }
+  return parsed;
+}
+
 const program = new Command();
 
 program
@@ -37,6 +45,10 @@ program
   .option("--ru, --reverse-url <url>", "URL for Reverse MCP Gateway (e.g. http://localhost:3000/api/mcp-reverse)")
   .option("--rt, --reverse-token <token>", "Security token for Reverse MCP")
   .option("--rn, --reverse-name <name>", "Server name for Reverse MCP")
+  .option("--reverse-connect-timeout <ms>", "SSE connection timeout (0 disables it)", value => milliseconds(value, 0), 15000)
+  .option("--reverse-initialization-timeout <ms>", "MCP initialization timeout after SSE opens", value => milliseconds(value), 15000)
+  .option("--reverse-read-timeout <ms>", "SSE inactivity timeout, independent of tool duration", value => milliseconds(value), 45000)
+  .option("--reverse-stable-time <ms>", "Connection lifetime required to reset reconnect backoff", value => milliseconds(value, 0), 30000)
   .option("-w, --working-dir <path>", "Working directory for the server (defaults to current execution path)", process.cwd())
   .option("-d, --allowed-dir <paths...>", "Additional directories allowed for sandbox", [])
   .option("-r, --profile <name>", "The active profile for skills and instructions (e.g., android-reverse, default)", "default")
@@ -145,6 +157,10 @@ program
         if (options.reverseUrl) dockerArgs.push("--ru", options.reverseUrl);
         if (options.reverseToken) dockerArgs.push("--rt", options.reverseToken);
         if (options.reverseName) dockerArgs.push("--rn", options.reverseName);
+        dockerArgs.push("--reverse-connect-timeout", String(options.reverseConnectTimeout));
+        dockerArgs.push("--reverse-initialization-timeout", String(options.reverseInitializationTimeout));
+        dockerArgs.push("--reverse-read-timeout", String(options.reverseReadTimeout));
+        dockerArgs.push("--reverse-stable-time", String(options.reverseStableTime));
       } else {
         dockerArgs.push("-p", String(options.port));
         // Inside container, we must listen on all interfaces for HTTP to be exposed
@@ -233,7 +249,12 @@ program
         console.error("[staff-mcp] Error: --ru (reverse-url), --rt (reverse-token), and --rn (reverse-name) are required for reverse transport.");
         process.exit(1);
       }
-      await startReverseServer(serverFactory(), options.reverseUrl, options.reverseToken, options.reverseName);
+      await startReverseServer(serverFactory(), options.reverseUrl, options.reverseToken, options.reverseName, {
+        connectTimeout: options.reverseConnectTimeout,
+        initializationTimeout: options.reverseInitializationTimeout,
+        heartbeat: { readTimeout: options.reverseReadTimeout },
+        reconnect: { stableConnectionMs: options.reverseStableTime },
+      });
     } else {
       await startStdioServer(serverFactory());
     }

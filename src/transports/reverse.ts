@@ -1,10 +1,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Logger, ReconnectOptions } from "mcp-reverse";
+import type { Logger, ReconnectOptions, SSEHeartbeatOptions } from "mcp-reverse";
 import { ReverseMCPClient } from "mcp-reverse/client";
 
 export interface ReverseServerOptions {
     /** Timeout for establishing each SSE connection. 0 disables the timeout. */
     connectTimeout?: number;
+    /** Deadline for MCP initialization after the SSE transport opens. */
+    initializationTimeout?: number;
+    /** Override liveness monitoring without changing tool execution timeouts. */
+    heartbeat?: SSEHeartbeatOptions;
     /** Override the automatic reconnect policy. */
     reconnect?: ReconnectOptions;
     /** Override reverse transport and lifecycle logging. */
@@ -63,6 +67,8 @@ export async function startReverseServer(
             serverName: name,
             authToken: token,
             connectTimeout: options.connectTimeout ?? DEFAULT_CONNECT_TIMEOUT_MS,
+            initializationTimeout: options.initializationTimeout,
+            heartbeat: options.heartbeat,
             reconnect: {
                 initialDelay: 1000,
                 maxDelay: 30000,
@@ -75,7 +81,7 @@ export async function startReverseServer(
     );
 
     client.on("connected", () => {
-        reverseLogger.info(`SSE transport connected as "${name}"`);
+        reverseLogger.info(`MCP initialized and ready as "${name}"`);
     });
 
     client.on("disconnected", () => {
@@ -90,7 +96,7 @@ export async function startReverseServer(
         if (completedAttempts === 0) {
             reverseLogger.info("Reconnect cycle started");
         } else {
-            reverseLogger.info(`${completedAttempts} reconnect attempt(s) have failed`);
+            reverseLogger.info(`Connection lost after ${completedAttempts} attempt(s) in the current retry cycle`);
         }
     });
 

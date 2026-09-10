@@ -58,6 +58,14 @@ npx -y staff-mcp@latest -t reverse \
 
 ---
 
+### Reverse 1.2 升级说明
+
+- 使用 `mcp-reverse@1.4.0` 和 MCP SDK `1.30.0`。只有 MCP 初始化完成才报告 ready；SSE 打开不等于协议就绪。
+- 初始化失败或短暂连接后断开会继续指数退避，默认稳定连接 30 秒后才重置失败周期，不重放工具请求。
+- 可配置 `--reverse-connect-timeout`（默认 15000ms，0 禁用建连超时）、`--reverse-initialization-timeout`（15000ms）、`--reverse-read-timeout`（45000ms）和 `--reverse-stable-time`（30000ms，0 为立即重置）。Docker 模式也透传这些参数。读取活性超时与工具运行时长不同，不建议仅靠放宽超时掩盖故障。
+- `skill` / `read_skill_file` 使用结果级 `_meta: { persistent: true }`，不再占用业务 `structuredContent`。`persistent` 是 chat-ai 历史回填约定，不是 MCP 标准存储选项。
+- **先升级 chat-ai 的 `_meta` 兼容读取，再部署 staff-mcp 1.2。** 旧 chat-ai 仍能调用工具，但不识别新标记，可能不再回填技能结果。新 chat-ai 继续接受旧版 staff-mcp 的布尔旧标记。
+
 ## 🛠️ 核心能力
 
 ### 1. 无缝容器化支持 (`--docker`)

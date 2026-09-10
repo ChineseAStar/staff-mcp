@@ -2,6 +2,12 @@ import * as path from "path";
 
 export const CHARACTER_LIMIT = 100000;
 export const DEFAULT_TIMEOUT = 10000;
+/**
+ * Upper bound for blocking waits in execute_command. The tool must respond well before
+ * any MCP client-side request timeout (chat-ai: 1 hour), otherwise the caller gives up
+ * and the auto-backgrounded task's taskId is lost (orphaned background task).
+ */
+export const MAX_WAIT_TIMEOUT = 1800000; // 30 minutes
 export const SEARCH_MAX_COLUMNS = 200;
 export const SEARCH_MAX_MATCHES = 200;
 export const SEARCH_EXEC_MAX_BUFFER = 50 * 1024 * 1024; // 50MB
