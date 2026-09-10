@@ -50,7 +50,7 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
           type: "text",
           text: buildSkillOutput(skill),
         }],
-        structuredContent: { persistent: true },
+        _meta: { persistent: true },
       };
     }
   );
@@ -93,7 +93,7 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
             type: "text",
             text: content,
           }],
-          structuredContent: { persistent: true },
+          _meta: { persistent: true },
         };
       } catch (e: any) {
         return {

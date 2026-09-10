@@ -69,6 +69,8 @@ Optional CLI controls (milliseconds, also forwarded in Docker mode):
 - `--reverse-read-timeout`: 45000; liveness monitoring, not tool execution duration.
 - `--reverse-stable-time`: 30000; lifetime required before resetting the retry cycle (0 restores immediate reset).
 
+`skill` and `read_skill_file` return `_meta: { persistent: true }` instead of putting this host hint in business `structuredContent`. Upgrade chat-ai's result converter first: older chat-ai still calls tools but does not recognize this new history-enrichment hint. Updated chat-ai accepts both the legacy boolean marker and `_meta`, preferring the latter. No new wire protocol or storage migration is required.
+
 ## 🛠️ Core Capabilities
 
 ### 1. Seamless Containerization (`--docker`)
