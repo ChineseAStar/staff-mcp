@@ -69,7 +69,7 @@ Optional CLI controls (milliseconds, also forwarded in Docker mode):
 - `--reverse-read-timeout`: 45000; liveness monitoring, not tool execution duration.
 - `--reverse-stable-time`: 30000; lifetime required before resetting the retry cycle (0 restores immediate reset).
 
-`skill` and `read_skill_file` return `_meta: { persistent: true }` instead of putting this host hint in business `structuredContent`. Upgrade chat-ai's result converter first: older chat-ai still calls tools but does not recognize this new history-enrichment hint. Updated chat-ai accepts both the legacy boolean marker and `_meta`, preferring the latter. No new wire protocol or storage migration is required.
+`skill` and `read_skill_file` return `_meta: { persistent: true }` instead of putting this host hint in business `structuredContent`. Updated chat-ai reads tool-result metadata only from `_meta`; the incorrect `structuredContent.persistent` format is not supported. Older chat-ai can still connect and call tools, but does not recognize the new history-enrichment hint. Publishing or upgrading staff-mcp does not require deploying chat-ai first; cross-turn skill enrichment requires a receiver that recognizes `_meta.persistent`. No new wire protocol or storage migration is required.
 
 ## 🛠️ Core Capabilities
 
