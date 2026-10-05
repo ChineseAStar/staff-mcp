@@ -10,6 +10,8 @@ It provides secure file management, shell execution, LSP-powered code intelligen
 
 ## 🚀 Quick Start
 
+Requires **Node.js 22.22.2 or newer**.
+
 ### 1. Standard Host Mode
 Run directly on your physical machine or virtual environment.
 ```bash
@@ -21,7 +23,7 @@ Seamlessly spawn the AI assistant **inside any Docker container** while keeping 
 
 ```bash
 # Debug a Node.js project inside a pure Alpine container
-npx -y staff-mcp@latest --docker node:20-alpine
+npx -y staff-mcp@latest --docker node:22-alpine
 
 # Perform security analysis inside a custom reverse-engineering image
 npx -y staff-mcp@latest --docker chineseastar/security:latest --profile android-reverse
@@ -88,7 +90,7 @@ protect the token in transit. This is a shared server token, not an OAuth flow.
 
 ## Reverse 1.2 upgrade notes
 
-Reverse mode uses `mcp-reverse@1.4.0` and MCP SDK `1.30.0`. Readiness is reported only after MCP initialization, and short-lived connections no longer reset exponential backoff. Reconnection never replays tool calls.
+Reverse mode uses `mcp-reverse@1.4.0` and MCP SDK `1.32.1`. Readiness is reported only after MCP initialization, and short-lived connections no longer reset exponential backoff. Reconnection never replays tool calls.
 
 Optional CLI controls (milliseconds, also forwarded in Docker mode):
 
@@ -137,6 +139,7 @@ It will securely download, configure, and reload the skill without you lifting a
 ### 4. Advanced Shell & Code Intelligence
 - **Unified Shell Execution**: A single `execute_command` entry point for everything — quick commands, builds, and dev servers. If a command outlives its wait window (default 10s), it is NOT killed: it moves to the background and returns a task ID with its recent output. Follow up via `manage_background_task` (`logs` with optional blocking `wait`, `stop` kills the whole process group, `list`). Auto-detects and upgrades to `/bin/bash` if available, supporting complex pipelines.
 - **LSP Integration**: Extract symbols, get diagnostics, go to definitions, and find references for TypeScript, Python, and more.
+  - TypeScript/JavaScript LSP keeps a local TypeScript 5.9.3 fallback toolchain. A usable workspace TypeScript is preferred; TypeScript 7 workspaces fall back because the current LSP ecosystem still depends on the tsserver API.
 - **Secure Sandbox**: Strictly confines the AI to the specified working directory and user-defined allowed paths.
 
 ---

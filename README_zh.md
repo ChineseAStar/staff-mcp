@@ -10,6 +10,8 @@
 
 ## 🚀 快速开始
 
+需要 **Node.js 22.22.2 或更高版本**。
+
 ### 1. 标准宿主机模式
 直接在物理机或虚拟环境中运行。
 ```bash
@@ -21,7 +23,7 @@ npx -y staff-mcp@latest --working-dir /path/to/your/project
 
 ```bash
 # 在一个纯净的 Alpine Node 容器里调试你的代码
-npx -y staff-mcp@latest --docker node:20-alpine
+npx -y staff-mcp@latest --docker node:22-alpine
 
 # 在自带逆向工程工具链的镜像里执行安全分析
 npx -y staff-mcp@latest --docker chineseastar/security:latest --profile android-reverse
@@ -83,7 +85,7 @@ token。这里使用服务端共享 token，不提供 OAuth 流程。
 
 ### Reverse 1.2 升级说明
 
-- 使用 `mcp-reverse@1.4.0` 和 MCP SDK `1.30.0`。只有 MCP 初始化完成才报告 ready；SSE 打开不等于协议就绪。
+- 使用 `mcp-reverse@1.4.0` 和 MCP SDK `1.32.1`。只有 MCP 初始化完成才报告 ready；SSE 打开不等于协议就绪。
 - 初始化失败或短暂连接后断开会继续指数退避，默认稳定连接 30 秒后才重置失败周期，不重放工具请求。
 - 可配置 `--reverse-connect-timeout`（默认 15000ms，0 禁用建连超时）、`--reverse-initialization-timeout`（15000ms）、`--reverse-read-timeout`（45000ms）和 `--reverse-stable-time`（30000ms，0 为立即重置）。Docker 模式也透传这些参数。读取活性超时与工具运行时长不同，不建议仅靠放宽超时掩盖故障。
 - `skill` / `read_skill_file` 使用结果级 `_meta: { persistent: true }`，不再占用业务 `structuredContent`。`persistent` 是 chat-ai 历史回填约定，不是 MCP 标准存储选项。
@@ -128,6 +130,7 @@ npx -y staff-mcp@latest --profile android-reverse
 ### 4. 增强的终端与代码智能
 - **统一命令执行**：所有命令（快速命令、构建、开发服务器）统一走 `execute_command` 入口。命令超过等待窗口（默认 10s）不会被杀死，而是转入后台并返回任务 ID 和近期输出；随后用 `manage_background_task` 跟进（`logs` 支持 `wait` 阻塞等待新输出或退出、`stop` 终止整个进程组、`list` 列出全部）。自动检测并在支持的环境中升级为 `/bin/bash`，完美支持复杂管道命令。
 - **LSP 深度集成**：支持提取符号 (Symbols)、获取诊断信息 (Diagnostics)、跳转定义 (Definition) 和查找引用 (References)，大幅提升 AI 理解 TypeScript/Python 等代码的能力。
+  - TypeScript/JavaScript LSP 会在 staff-mcp 工具目录保留 TypeScript 5.9.3 作为兼容回退；工作区 TypeScript 可用时仍优先使用，TypeScript 7 暂无 tsserver API 时会自动回退。
 - **沙盒安全**：将 AI 严格限制在你指定的工作区和允许的目录内，对全局破坏“零容忍”。
 
 ---
