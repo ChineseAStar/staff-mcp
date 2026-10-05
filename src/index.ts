@@ -6,7 +6,7 @@ import { createServerFactory } from "./server.js";
 import { buildDockerNameHint, runDockerProxy, validateAdditionalDockerArgs } from "./docker-proxy.js";
 import { STAFF_MCP_PACKAGE_ROOT, STAFF_MCP_VERSION } from "./package-info.js";
 import { startStdioServer } from "./transports/stdio.js";
-import { startHttpServer } from "./transports/http.js";
+import { getHttpAuthToken, startHttpServer } from "./transports/http.js";
 import { startReverseServer } from "./transports/reverse.js";
 import { ensureStaffDirs, STAFF_SKILLS_DIR, STAFF_PROFILES_DIR } from "./utils/paths.js";
 import { ensureRipgrep } from "./utils/tool-utils.js";
@@ -59,6 +59,15 @@ program
   .option("--proxy <url>", "HTTP(S) proxy for outbound requests (e.g. http://127.0.0.1:8080); defaults to honoring HTTP_PROXY/HTTPS_PROXY/NO_PROXY env vars")
   .allowUnknownOption()
   .action(async (options, command) => {
+    if (options.transport === "http") {
+      try {
+        getHttpAuthToken();
+      } catch (error) {
+        console.error(`[staff-mcp] ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
+      }
+    }
+
     // Install a proxy-aware global fetch dispatcher before anything can
     // issue an outbound request. In --docker mode this also runs inside the
     // container, where the same entry point is re-executed.
@@ -118,6 +127,8 @@ program
       // 5. Handle HTTP port forwarding
       if (options.transport === "http") {
         dockerArgs.push("-p", `${options.port}:${options.port}`);
+        // Docker reads the inherited value without exposing it in command arguments.
+        dockerArgs.push("-e", "STAFF_MCP_HTTP_TOKEN");
       }
 
       // 6. Inject advanced custom args (e.g., ADB pass-through, network configs)

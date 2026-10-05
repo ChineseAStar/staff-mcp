@@ -2,13 +2,34 @@ import express from "express";
 import cors from "cors";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
+
+export function getHttpAuthToken(): string {
+  const token = process.env.STAFF_MCP_HTTP_TOKEN;
+  if (!token || /\s/.test(token)) {
+    throw new Error("STAFF_MCP_HTTP_TOKEN must be set to a non-empty token without whitespace for HTTP transport.");
+  }
+  return token;
+}
 
 export async function startHttpServer(serverFactory: () => McpServer, port: number, host: string = "0.0.0.0") {
+  const expectedToken = Buffer.from(getHttpAuthToken());
   const app = express();
   
-  // Enable CORS for all origins, including the MCP Inspector
+  // CORS preflight is public and never reaches MCP session handling.
   app.use(cors());
+
+  // Authenticate every MCP request before parsing its body or accessing a session.
+  app.use(["/mcp", "/sse", "/messages"], (req, res, next) => {
+    const match = /^Bearer +(\S+)$/i.exec(req.headers.authorization ?? "");
+    const token = Buffer.from(match?.[1] ?? "");
+    if (token.length !== expectedToken.length || !timingSafeEqual(token, expectedToken)) {
+      res.setHeader("WWW-Authenticate", 'Bearer realm="staff-mcp"');
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    next();
+  });
   
   // Necessary for processing JSON-RPC messages (POST).
   // Large limit required to support MCP File Transfer Extension (FTE)

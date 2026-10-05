@@ -56,6 +56,30 @@ npx -y staff-mcp@latest -t reverse \
   --rn my-macbook-pro
 ```
 
+### 5. Authenticated HTTP Mode
+
+HTTP mode requires `STAFF_MCP_HTTP_TOKEN` in the server environment. Set a strong,
+random token through your service manager or secret store before starting:
+
+```bash
+npx -y staff-mcp@latest -t http -p 3000 --working-dir /path/to/your/project
+```
+
+Configure the client to send `Authorization: Bearer <token>` on every request.
+For a full Authorization-header field, enter `Bearer <token>`; for a Bearer-token
+field, enter only the token. Raw tokens without the `Bearer` scheme are rejected.
+Missing or incorrect credentials return HTTP 401, including requests with an
+existing `mcp-session-id`. Authentication covers `/mcp` and the legacy `/sse` and
+`/messages` routes. CORS `OPTIONS` preflight remains public and cannot invoke MCP.
+
+**Upgrade requirement:** existing HTTP deployments must configure this environment
+variable and update their clients. HTTP startup fails if it is absent, empty, or
+contains whitespace. `--docker` automatically forwards the variable from the
+host environment without putting its value in command arguments. Stdio and
+reverse transports are unchanged; `--reverse-token` does not configure HTTP auth.
+Use HTTPS through a reverse proxy for remote access, since plain HTTP does not
+protect the token in transit. This is a shared server token, not an OAuth flow.
+
 ---
 
 ## Reverse 1.2 upgrade notes
