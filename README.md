@@ -58,25 +58,29 @@ npx -y staff-mcp@latest -t reverse \
 
 ### 5. Authenticated HTTP Mode
 
-HTTP mode requires `STAFF_MCP_HTTP_TOKEN` in the server environment. Set a strong,
-random token through your service manager or secret store before starting:
+HTTP authentication is optional for backward compatibility. Set `--http-token`
+to a strong, random token to require authentication:
 
 ```bash
-npx -y staff-mcp@latest -t http -p 3000 --working-dir /path/to/your/project
+npx -y staff-mcp@latest -t http -p 3000 \
+  --http-token your_secure_token_here --working-dir /path/to/your/project
 ```
 
-Configure the client to send `Authorization: Bearer <token>` on every request.
+When a token is configured, clients must send `Authorization: Bearer <token>` on every request.
 For a full Authorization-header field, enter `Bearer <token>`; for a Bearer-token
 field, enter only the token. Raw tokens without the `Bearer` scheme are rejected.
 Missing or incorrect credentials return HTTP 401, including requests with an
 existing `mcp-session-id`. Authentication covers `/mcp` and the legacy `/sse` and
 `/messages` routes. CORS `OPTIONS` preflight remains public and cannot invoke MCP.
 
-**Upgrade requirement:** existing HTTP deployments must configure this environment
-variable and update their clients. HTTP startup fails if it is absent, empty, or
-contains whitespace. `--docker` automatically forwards the variable from the
-host environment without putting its value in command arguments. Stdio and
-reverse transports are unchanged; `--reverse-token` does not configure HTTP auth.
+Omitting `--http-token` preserves existing unauthenticated HTTP deployments.
+Anyone who can reach such a server can invoke its tools, so use this mode only
+on trusted networks. An explicitly empty token or one containing whitespace is
+rejected at startup. `--docker` forwards `--http-token` to the container command
+only when provided.
+Command-line tokens may be visible in shell history and process listings; keep
+access to those restricted. Stdio and reverse transports are unchanged;
+`--reverse-token` does not configure HTTP auth.
 Use HTTPS through a reverse proxy for remote access, since plain HTTP does not
 protect the token in transit. This is a shared server token, not an OAuth flow.
 
@@ -150,6 +154,7 @@ It will securely download, configure, and reload the skill without you lifting a
 | `-t, --transport` | Transport type (`stdio`, `http`, or `reverse`) | `stdio` |
 | `-p, --port` | Port for HTTP server | `3000` |
 | `-h, --host` | Host for HTTP server | `127.0.0.1` |
+| `--http-token` | Optional bearer token for HTTP transport | `undefined` (no authentication) |
 | `--ru, --reverse-url` | URL for Reverse MCP Gateway | `undefined` |
 | `--rt, --reverse-token` | Security token for Reverse MCP | `undefined` |
 | `--rn, --reverse-name` | Server name for Reverse MCP | `undefined` |

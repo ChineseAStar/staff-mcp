@@ -58,22 +58,24 @@ npx -y staff-mcp@latest -t reverse \
 
 ### 5. 带身份验证的 HTTP 模式
 
-HTTP 模式要求服务端环境变量 `STAFF_MCP_HTTP_TOKEN`。启动前，请通过服务管理器或
-密钥存储配置一个强随机 token：
+为兼容已有部署，HTTP 身份验证是可选的。设置 `--http-token` 即可开启，建议使用强随机 token：
 
 ```bash
-npx -y staff-mcp@latest -t http -p 3000 --working-dir /path/to/your/project
+npx -y staff-mcp@latest -t http -p 3000 \
+  --http-token your_secure_token_here --working-dir /path/to/your/project
 ```
 
-客户端每次请求都必须发送 `Authorization: Bearer <token>`。如果配置项接收完整的
+配置 token 后，客户端每次请求都必须发送 `Authorization: Bearer <token>`。如果配置项接收完整的
 Authorization 请求头值，填写 `Bearer <token>`；如果是 Bearer token 配置项，只填写
 token。仅发送原始 token、不带 `Bearer` 前缀的请求会被拒绝。缺失或错误的凭证返回
 HTTP 401，携带已有 `mcp-session-id` 也不能绕过验证。保护范围包括 `/mcp` 和兼容
 路由 `/sse`、`/messages`。CORS `OPTIONS` 预检无需凭证，但无法调用 MCP。
 
-**升级注意：** 现有 HTTP 部署必须配置此环境变量并更新客户端。变量缺失、为空或含有
-空白字符时，HTTP 服务拒绝启动。`--docker` 会自动透传宿主机环境中的变量，且不会把
-token 值放进命令行参数。Stdio 和 reverse 模式保持不变；`--reverse-token` 不用于
+不传 `--http-token` 时，保留原有无鉴权 HTTP 行为，已有部署可以继续运行。任何能够
+连接服务的客户端都能调用工具，因此仅应在可信网络中使用此模式。显式传入空 token
+或含空白字符的 token 时，服务拒绝启动。`--docker` 仅在提供 token 时将其透传到容器命令。
+命令行 token 可能出现在 shell 历史和进程列表中，请限制对这些信息的访问。
+Stdio 和 reverse 模式保持不变；`--reverse-token` 不用于
 HTTP 身份验证。远程访问应通过反向代理启用 HTTPS，普通 HTTP 无法保护传输中的
 token。这里使用服务端共享 token，不提供 OAuth 流程。
 
@@ -143,6 +145,7 @@ npx -y staff-mcp@latest --profile android-reverse
 | `-t, --transport` | 传输协议 (`stdio`, `http`, 或 `reverse`) | `stdio` |
 | `-p, --port` | HTTP 服务的监听端口 | `3000` |
 | `-h, --host` | HTTP 服务的监听地址 | `127.0.0.1` |
+| `--http-token` | HTTP 模式可选的 Bearer token | `undefined`（不鉴权） |
 | `--ru, --reverse-url` | Reverse MCP 网关的远端 URL | `undefined` |
 | `--rt, --reverse-token` | Reverse MCP 的安全认证令牌 | `undefined` |
 | `--rn, --reverse-name` | Reverse MCP 的服务注册名称 | `undefined` |

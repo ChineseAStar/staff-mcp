@@ -4,32 +4,35 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
-export function getHttpAuthToken(): string {
-  const token = process.env.STAFF_MCP_HTTP_TOKEN;
+export function getHttpAuthToken(token?: string): string | undefined {
+  if (token === undefined) return undefined;
   if (!token || /\s/.test(token)) {
-    throw new Error("STAFF_MCP_HTTP_TOKEN must be set to a non-empty token without whitespace for HTTP transport.");
+    throw new Error("--http-token must be non-empty and contain no whitespace when provided.");
   }
   return token;
 }
 
-export async function startHttpServer(serverFactory: () => McpServer, port: number, host: string = "0.0.0.0") {
-  const expectedToken = Buffer.from(getHttpAuthToken());
+export async function startHttpServer(serverFactory: () => McpServer, port: number, host: string = "0.0.0.0", token?: string) {
+  const authToken = getHttpAuthToken(token);
   const app = express();
   
   // CORS preflight is public and never reaches MCP session handling.
   app.use(cors());
 
-  // Authenticate every MCP request before parsing its body or accessing a session.
-  app.use(["/mcp", "/sse", "/messages"], (req, res, next) => {
-    const match = /^Bearer +(\S+)$/i.exec(req.headers.authorization ?? "");
-    const token = Buffer.from(match?.[1] ?? "");
-    if (token.length !== expectedToken.length || !timingSafeEqual(token, expectedToken)) {
-      res.setHeader("WWW-Authenticate", 'Bearer realm="staff-mcp"');
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    next();
-  });
+  // When configured, authenticate before parsing bodies or accessing sessions.
+  if (authToken !== undefined) {
+    const expectedToken = Buffer.from(authToken);
+    app.use(["/mcp", "/sse", "/messages"], (req, res, next) => {
+      const match = /^Bearer +(\S+)$/i.exec(req.headers.authorization ?? "");
+      const token = Buffer.from(match?.[1] ?? "");
+      if (token.length !== expectedToken.length || !timingSafeEqual(token, expectedToken)) {
+        res.setHeader("WWW-Authenticate", 'Bearer realm="staff-mcp"');
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      next();
+    });
+  }
   
   // Necessary for processing JSON-RPC messages (POST).
   // Large limit required to support MCP File Transfer Extension (FTE)

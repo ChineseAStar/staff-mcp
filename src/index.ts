@@ -42,6 +42,7 @@ program
   .option("-t, --transport <type>", "Transport type (stdio, http, reverse)", "stdio")
   .option("-p, --port <number>", "Port for HTTP server", "3000")
   .option("-h, --host <address>", "Host for HTTP server", "127.0.0.1")
+  .option("--http-token <token>", "Optional bearer token for HTTP transport")
   .option("--ru, --reverse-url <url>", "URL for Reverse MCP Gateway (e.g. http://localhost:3000/api/mcp-reverse)")
   .option("--rt, --reverse-token <token>", "Security token for Reverse MCP")
   .option("--rn, --reverse-name <name>", "Server name for Reverse MCP")
@@ -61,7 +62,7 @@ program
   .action(async (options, command) => {
     if (options.transport === "http") {
       try {
-        getHttpAuthToken();
+        getHttpAuthToken(options.httpToken);
       } catch (error) {
         console.error(`[staff-mcp] ${error instanceof Error ? error.message : String(error)}`);
         process.exit(1);
@@ -127,8 +128,6 @@ program
       // 5. Handle HTTP port forwarding
       if (options.transport === "http") {
         dockerArgs.push("-p", `${options.port}:${options.port}`);
-        // Docker reads the inherited value without exposing it in command arguments.
-        dockerArgs.push("-e", "STAFF_MCP_HTTP_TOKEN");
       }
 
       // 6. Inject advanced custom args (e.g., ADB pass-through, network configs)
@@ -177,6 +176,9 @@ program
         // Inside container, we must listen on all interfaces for HTTP to be exposed
         if (options.transport === "http") {
           dockerArgs.push("-h", "0.0.0.0");
+          if (options.httpToken !== undefined) {
+            dockerArgs.push("--http-token", options.httpToken);
+          }
         } else {
           dockerArgs.push("-h", options.host);
         }
@@ -254,7 +256,7 @@ program
     const serverFactory = createServerFactory("staff-mcp", STAFF_MCP_VERSION, workingDir, allowedDirs, profile, maxMcpSessions, enableLsp);
 
     if (options.transport === "http") {
-      await startHttpServer(serverFactory, parseInt(options.port, 10), options.host);
+      await startHttpServer(serverFactory, parseInt(options.port, 10), options.host, options.httpToken);
     } else if (options.transport === "reverse") {
       if (!options.reverseUrl || !options.reverseToken || !options.reverseName) {
         console.error("[staff-mcp] Error: --ru (reverse-url), --rt (reverse-token), and --rn (reverse-name) are required for reverse transport.");
