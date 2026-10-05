@@ -42,7 +42,7 @@ program
   .option("-t, --transport <type>", "Transport type (stdio, http, reverse)", "stdio")
   .option("-p, --port <number>", "Port for HTTP server", "3000")
   .option("-h, --host <address>", "Host for HTTP server", "127.0.0.1")
-  .option("--http-token <token>", "Optional bearer token for HTTP transport")
+  .option("--ht, --http-token <token>", "Optional bearer token for HTTP transport")
   .option("--ru, --reverse-url <url>", "URL for Reverse MCP Gateway (e.g. http://localhost:3000/api/mcp-reverse)")
   .option("--rt, --reverse-token <token>", "Security token for Reverse MCP")
   .option("--rn, --reverse-name <name>", "Server name for Reverse MCP")

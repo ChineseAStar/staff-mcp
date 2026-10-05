@@ -58,7 +58,7 @@ npx -y staff-mcp@latest -t reverse \
 
 ### 5. 带身份验证的 HTTP 模式
 
-为兼容已有部署，HTTP 身份验证是可选的。设置 `--http-token` 即可开启，建议使用强随机 token：
+为兼容已有部署，HTTP 身份验证是可选的。设置 `--ht` / `--http-token` 即可开启，两者等价，建议使用强随机 token：
 
 ```bash
 npx -y staff-mcp@latest -t http -p 3000 \
@@ -145,7 +145,7 @@ npx -y staff-mcp@latest --profile android-reverse
 | `-t, --transport` | 传输协议 (`stdio`, `http`, 或 `reverse`) | `stdio` |
 | `-p, --port` | HTTP 服务的监听端口 | `3000` |
 | `-h, --host` | HTTP 服务的监听地址 | `127.0.0.1` |
-| `--http-token` | HTTP 模式可选的 Bearer token | `undefined`（不鉴权） |
+| `--ht, --http-token` | HTTP 模式可选的 Bearer token | `undefined`（不鉴权） |
 | `--ru, --reverse-url` | Reverse MCP 网关的远端 URL | `undefined` |
 | `--rt, --reverse-token` | Reverse MCP 的安全认证令牌 | `undefined` |
 | `--rn, --reverse-name` | Reverse MCP 的服务注册名称 | `undefined` |

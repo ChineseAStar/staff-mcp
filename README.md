@@ -58,7 +58,7 @@ npx -y staff-mcp@latest -t reverse \
 
 ### 5. Authenticated HTTP Mode
 
-HTTP authentication is optional for backward compatibility. Set `--http-token`
+HTTP authentication is optional for backward compatibility. Set `--ht` / `--http-token`
 to a strong, random token to require authentication:
 
 ```bash
@@ -154,7 +154,7 @@ It will securely download, configure, and reload the skill without you lifting a
 | `-t, --transport` | Transport type (`stdio`, `http`, or `reverse`) | `stdio` |
 | `-p, --port` | Port for HTTP server | `3000` |
 | `-h, --host` | Host for HTTP server | `127.0.0.1` |
-| `--http-token` | Optional bearer token for HTTP transport | `undefined` (no authentication) |
+| `--ht, --http-token` | Optional bearer token for HTTP transport | `undefined` (no authentication) |
 | `--ru, --reverse-url` | URL for Reverse MCP Gateway | `undefined` |
 | `--rt, --reverse-token` | Security token for Reverse MCP | `undefined` |
 | `--rn, --reverse-name` | Server name for Reverse MCP | `undefined` |
