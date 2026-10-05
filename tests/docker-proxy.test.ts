@@ -28,6 +28,7 @@ if (command === "rm") {
   }
   if (mode === "cleanup-hang") {
     process.on("SIGTERM", () => appendEvent("rm-sigterm"));
+    appendEvent("rm-ready");
     setInterval(() => {}, 1_000);
     await new Promise(() => {});
   }
@@ -459,13 +460,17 @@ test("a hung fallback cleanup is escalated through SIGTERM and SIGKILL", async (
     signals,
     {
       gracefulShutdownTimeoutMs: 30,
-      containerCleanupTimeoutMs: 50,
-      forceKillTimeoutMs: 50,
+      // Starting the fake Docker cleanup launches a fresh Node process. Give
+      // that fixture time to reach its deliberate hung state instead of
+      // racing process startup against a 50ms timeout.
+      containerCleanupTimeoutMs: 500,
+      forceKillTimeoutMs: 100,
     }
   );
 
   await waitForEvent(eventsPath, "start");
   signals.emit("SIGTERM");
+  await waitForEvent(eventsPath, "rm-ready");
 
   assert.equal(await resultPromise, 1);
   const events = readEvents(eventsPath);

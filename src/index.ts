@@ -5,7 +5,7 @@ import * as os from "os";
 import { createServerFactory } from "./server.js";
 import { buildDockerNameHint, runDockerProxy, validateAdditionalDockerArgs } from "./docker-proxy.js";
 import { STAFF_MCP_PACKAGE_ROOT, STAFF_MCP_VERSION } from "./package-info.js";
-import { startStdioServer } from "./transports/stdio.js";
+import { redirectStdioLogsToStderr, startStdioServer } from "./transports/stdio.js";
 import { getHttpAuthToken, startHttpServer } from "./transports/http.js";
 import { startReverseServer } from "./transports/reverse.js";
 import { ensureStaffDirs, STAFF_SKILLS_DIR, STAFF_PROFILES_DIR } from "./utils/paths.js";
@@ -60,6 +60,10 @@ program
   .option("--proxy <url>", "HTTP(S) proxy for outbound requests (e.g. http://127.0.0.1:8080); defaults to honoring HTTP_PROXY/HTTPS_PROXY/NO_PROXY env vars")
   .allowUnknownOption()
   .action(async (options, command) => {
+    if (options.transport === "stdio") {
+      redirectStdioLogsToStderr();
+    }
+
     if (options.transport === "http") {
       try {
         getHttpAuthToken(options.httpToken);
