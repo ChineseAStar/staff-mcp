@@ -33,7 +33,7 @@ export function createServerFactory(
   const sandbox = security.getAllowedDirs();
 
   // Generate instructions with system-specific details (OS, shell, etc.)
-  const instructions = getMcpInstructions(workingDir, security);
+  const instructions = getMcpInstructions(workingDir, security, { enableLsp });
 
   return () => {
     const server = new McpServer(

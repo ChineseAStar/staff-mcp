@@ -5,8 +5,8 @@ import * as os from "os";
 import { createServerFactory } from "./server.js";
 import { buildDockerNameHint, runDockerProxy, validateAdditionalDockerArgs } from "./docker-proxy.js";
 import { STAFF_MCP_PACKAGE_ROOT, STAFF_MCP_VERSION } from "./package-info.js";
-import { startStdioServer } from "./transports/stdio.js";
-import { startHttpServer } from "./transports/http.js";
+import { redirectStdioLogsToStderr, startStdioServer } from "./transports/stdio.js";
+import { getHttpAuthToken, startHttpServer } from "./transports/http.js";
 import { startReverseServer } from "./transports/reverse.js";
 import { ensureStaffDirs, STAFF_SKILLS_DIR, STAFF_PROFILES_DIR } from "./utils/paths.js";
 import { ensureRipgrep } from "./utils/tool-utils.js";
@@ -42,6 +42,7 @@ program
   .option("-t, --transport <type>", "Transport type (stdio, http, reverse)", "stdio")
   .option("-p, --port <number>", "Port for HTTP server", "3000")
   .option("-h, --host <address>", "Host for HTTP server", "127.0.0.1")
+  .option("--ht, --http-token <token>", "Optional bearer token for HTTP transport")
   .option("--ru, --reverse-url <url>", "URL for Reverse MCP Gateway (e.g. http://localhost:3000/api/mcp-reverse)")
   .option("--rt, --reverse-token <token>", "Security token for Reverse MCP")
   .option("--rn, --reverse-name <name>", "Server name for Reverse MCP")
@@ -59,6 +60,19 @@ program
   .option("--proxy <url>", "HTTP(S) proxy for outbound requests (e.g. http://127.0.0.1:8080); defaults to honoring HTTP_PROXY/HTTPS_PROXY/NO_PROXY env vars")
   .allowUnknownOption()
   .action(async (options, command) => {
+    if (options.transport === "stdio") {
+      redirectStdioLogsToStderr();
+    }
+
+    if (options.transport === "http") {
+      try {
+        getHttpAuthToken(options.httpToken);
+      } catch (error) {
+        console.error(`[staff-mcp] ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
+      }
+    }
+
     // Install a proxy-aware global fetch dispatcher before anything can
     // issue an outbound request. In --docker mode this also runs inside the
     // container, where the same entry point is re-executed.
@@ -166,6 +180,9 @@ program
         // Inside container, we must listen on all interfaces for HTTP to be exposed
         if (options.transport === "http") {
           dockerArgs.push("-h", "0.0.0.0");
+          if (options.httpToken !== undefined) {
+            dockerArgs.push("--http-token", options.httpToken);
+          }
         } else {
           dockerArgs.push("-h", options.host);
         }
@@ -243,7 +260,7 @@ program
     const serverFactory = createServerFactory("staff-mcp", STAFF_MCP_VERSION, workingDir, allowedDirs, profile, maxMcpSessions, enableLsp);
 
     if (options.transport === "http") {
-      await startHttpServer(serverFactory, parseInt(options.port, 10), options.host);
+      await startHttpServer(serverFactory, parseInt(options.port, 10), options.host, options.httpToken);
     } else if (options.transport === "reverse") {
       if (!options.reverseUrl || !options.reverseToken || !options.reverseName) {
         console.error("[staff-mcp] Error: --ru (reverse-url), --rt (reverse-token), and --rn (reverse-name) are required for reverse transport.");

@@ -11,7 +11,7 @@
     "staff-mcp": "./dist/src/index.js"
   },
   "files": [
-    "dist",
+    "dist/src",
     "builtin-profiles",
     "README.md",
     "README_zh.md",
@@ -25,26 +25,25 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@vscode/ripgrep": "1.18.0",
-    "commander": "^12.1.0",
-    "cors": "^2.8.5",
-    "express": "^4.21.1",
-    "js-yaml": "^4.1.1",
+    "commander": "^15.0.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "js-yaml": "^5.4.2",
     "mcp-fte": "^1.0.2",
     "mcp-reverse": "1.4.0",
-    "undici": "^6.22.0",
-    "zod": "^3.23.8"
+    "undici": "^7.30.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.0",
-    "@types/js-yaml": "^4.0.9",
-    "@types/node": "^22.9.0",
-    "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.22.2"
   }
 }

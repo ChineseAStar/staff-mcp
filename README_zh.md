@@ -10,6 +10,8 @@
 
 ## 🚀 快速开始
 
+需要 **Node.js 22.22.2 或更高版本**。
+
 ### 1. 标准宿主机模式
 直接在物理机或虚拟环境中运行。
 ```bash
@@ -21,7 +23,7 @@ npx -y staff-mcp@latest --working-dir /path/to/your/project
 
 ```bash
 # 在一个纯净的 Alpine Node 容器里调试你的代码
-npx -y staff-mcp@latest --docker node:20-alpine
+npx -y staff-mcp@latest --docker node:22-alpine
 
 # 在自带逆向工程工具链的镜像里执行安全分析
 npx -y staff-mcp@latest --docker chineseastar/security:latest --profile android-reverse
@@ -56,15 +58,38 @@ npx -y staff-mcp@latest -t reverse \
   --rn my-macbook-pro
 ```
 
+### 5. 带身份验证的 HTTP 模式
+
+为兼容已有部署，HTTP 身份验证是可选的。设置 `--ht` / `--http-token` 即可开启，两者等价，建议使用强随机 token：
+
+```bash
+npx -y staff-mcp@latest -t http -p 3000 \
+  --http-token your_secure_token_here --working-dir /path/to/your/project
+```
+
+配置 token 后，客户端每次请求都必须发送 `Authorization: Bearer <token>`。如果配置项接收完整的
+Authorization 请求头值，填写 `Bearer <token>`；如果是 Bearer token 配置项，只填写
+token。仅发送原始 token、不带 `Bearer` 前缀的请求会被拒绝。缺失或错误的凭证返回
+HTTP 401，携带已有 `mcp-session-id` 也不能绕过验证。保护范围包括 `/mcp` 和兼容
+路由 `/sse`、`/messages`。CORS `OPTIONS` 预检无需凭证，但无法调用 MCP。
+
+不传 `--http-token` 时，保留原有无鉴权 HTTP 行为，已有部署可以继续运行。任何能够
+连接服务的客户端都能调用工具，因此仅应在可信网络中使用此模式。显式传入空 token
+或含空白字符的 token 时，服务拒绝启动。`--docker` 仅在提供 token 时将其透传到容器命令。
+命令行 token 可能出现在 shell 历史和进程列表中，请限制对这些信息的访问。
+Stdio 和 reverse 模式保持不变；`--reverse-token` 不用于
+HTTP 身份验证。远程访问应通过反向代理启用 HTTPS，普通 HTTP 无法保护传输中的
+token。这里使用服务端共享 token，不提供 OAuth 流程。
+
 ---
 
 ### Reverse 1.2 升级说明
 
-- 使用 `mcp-reverse@1.4.0` 和 MCP SDK `1.30.0`。只有 MCP 初始化完成才报告 ready；SSE 打开不等于协议就绪。
+- 使用 `mcp-reverse@1.4.0` 和 MCP SDK `1.32.1`。只有 MCP 初始化完成才报告 ready；SSE 打开不等于协议就绪。
 - 初始化失败或短暂连接后断开会继续指数退避，默认稳定连接 30 秒后才重置失败周期，不重放工具请求。
 - 可配置 `--reverse-connect-timeout`（默认 15000ms，0 禁用建连超时）、`--reverse-initialization-timeout`（15000ms）、`--reverse-read-timeout`（45000ms）和 `--reverse-stable-time`（30000ms，0 为立即重置）。Docker 模式也透传这些参数。读取活性超时与工具运行时长不同，不建议仅靠放宽超时掩盖故障。
 - `skill` / `read_skill_file` 使用结果级 `_meta: { persistent: true }`，不再占用业务 `structuredContent`。`persistent` 是 chat-ai 历史回填约定，不是 MCP 标准存储选项。
-- **先升级 chat-ai 的 `_meta` 兼容读取，再部署 staff-mcp 1.2。** 旧 chat-ai 仍能调用工具，但不识别新标记，可能不再回填技能结果。新 chat-ai 继续接受旧版 staff-mcp 的布尔旧标记。
+- chat-ai 只从 `_meta` 读取工具结果元数据，不兼容 `structuredContent.persistent` 的错误写法。旧 chat-ai 仍能连接和调用工具，但不识别新标记，无法据此跨轮回填技能结果。发布或升级 staff-mcp 无需先部署 chat-ai；若需要跨轮回填，接收端需支持 `_meta.persistent`。
 
 ## 🛠️ 核心能力
 
@@ -105,6 +130,7 @@ npx -y staff-mcp@latest --profile android-reverse
 ### 4. 增强的终端与代码智能
 - **统一命令执行**：所有命令（快速命令、构建、开发服务器）统一走 `execute_command` 入口。命令超过等待窗口（默认 10s）不会被杀死，而是转入后台并返回任务 ID 和近期输出；随后用 `manage_background_task` 跟进（`logs` 支持 `wait` 阻塞等待新输出或退出、`stop` 终止整个进程组、`list` 列出全部）。自动检测并在支持的环境中升级为 `/bin/bash`，完美支持复杂管道命令。
 - **LSP 深度集成**：支持提取符号 (Symbols)、获取诊断信息 (Diagnostics)、跳转定义 (Definition) 和查找引用 (References)，大幅提升 AI 理解 TypeScript/Python 等代码的能力。
+  - TypeScript/JavaScript LSP 会在 staff-mcp 工具目录保留 TypeScript 5.9.3 作为兼容回退；工作区 TypeScript 可用时仍优先使用，TypeScript 7 暂无 tsserver API 时会自动回退。
 - **沙盒安全**：将 AI 严格限制在你指定的工作区和允许的目录内，对全局破坏“零容忍”。
 
 ---
@@ -122,6 +148,7 @@ npx -y staff-mcp@latest --profile android-reverse
 | `-t, --transport` | 传输协议 (`stdio`, `http`, 或 `reverse`) | `stdio` |
 | `-p, --port` | HTTP 服务的监听端口 | `3000` |
 | `-h, --host` | HTTP 服务的监听地址 | `127.0.0.1` |
+| `--ht, --http-token` | HTTP 模式可选的 Bearer token | `undefined`（不鉴权） |
 | `--ru, --reverse-url` | Reverse MCP 网关的远端 URL | `undefined` |
 | `--rt, --reverse-token` | Reverse MCP 的安全认证令牌 | `undefined` |
 | `--rn, --reverse-name` | Reverse MCP 的服务注册名称 | `undefined` |

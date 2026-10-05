@@ -1,14 +1,16 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
-export async function startStdioServer(server: McpServer) {
-  const transport = new StdioServerTransport();
-
-  // Redirect stdout to stderr so console.log doesn't break protocol
-  const originalLog = console.log;
+export function redirectStdioLogsToStderr(): void {
+  // MCP stdio reserves stdout for JSON-RPC frames. Redirect ordinary
+  // console.log output before bootstrap code can write to stdout.
   console.log = (...args) => {
     console.error(...args);
   };
+}
+
+export async function startStdioServer(server: McpServer) {
+  const transport = new StdioServerTransport();
 
   try {
     await server.connect(transport);

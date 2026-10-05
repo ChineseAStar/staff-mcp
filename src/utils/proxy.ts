@@ -296,7 +296,7 @@ export class EnvProxyDispatcher extends Dispatcher {
     this.httpsAgent = opts.httpsProxy ? mkProxy(opts.httpsProxy) : this.httpAgent;
   }
 
-  dispatch(options: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandlers): boolean {
+  dispatch(options: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler): boolean {
     let agent: Dispatcher = this.directAgent;
     try {
       const url = new URL(options.origin as string | URL);

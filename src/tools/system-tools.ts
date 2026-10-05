@@ -4,72 +4,63 @@ import * as fs from "fs";
 import { SecurityManager } from "../security.js";
 import { getWorkspaceArtifactPolicy } from "../policies/workspace-artifact-policy.js";
 
+export interface McpInstructionOptions {
+  enableLsp?: boolean;
+}
+
 /**
- * Returns a concise instruction string for the MCP server to guide tool usage.
- * Focuses on environment context and tool relationships rather than defining identity.
+ * Returns server-wide MCP guidance.
+ *
+ * Keep cross-tool workflow rules here and leave tool-specific usage details to
+ * each tool's own description/schema. Put the highest-value rules first so
+ * clients that prioritize the beginning of server instructions see them.
  */
-export function getMcpInstructions(workingDir: string, security: SecurityManager): string {
+export function getMcpInstructions(
+  workingDir: string,
+  security: SecurityManager,
+  options: McpInstructionOptions = {}
+): string {
   const platform = os.platform();
   const isWin = platform === "win32";
-  
-  // Use the same logic as shell-tools.ts to determine the actual shell being used
+  const isDocker = process.env.STAFF_MCP_IS_DOCKER === "1";
+
+  // Use the same platform assumptions as shell-tools.ts.
   let shell = isWin ? "cmd.exe or PowerShell" : "/bin/sh";
   if (!isWin) {
-    if (process.env.STAFF_MCP_IS_DOCKER === "1") {
-       // If running in Docker, we dynamically probed bash in shell-tools.
-       // We can assume if /bin/bash exists, it's used.
-       shell = fs.existsSync('/bin/bash') ? "/bin/bash" : "/bin/sh";
+    if (isDocker) {
+      shell = fs.existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
     } else {
-       shell = process.env.SHELL || (fs.existsSync('/bin/bash') ? "/bin/bash" : "/bin/sh");
+      shell = process.env.SHELL || (fs.existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh");
     }
   }
 
   const allowedDirs = security.getAllowedDirs();
-  const isDocker = process.env.STAFF_MCP_IS_DOCKER === "1";
+  const environment = isDocker ? "Docker sandbox" : "host";
+  const modeGuidance = isDocker
+    ? "Docker mode: the container is isolated and disposable. Installing dependencies or changing container-level configuration is allowed when useful. File tools remain restricted to the allowed paths above."
+    : "Host mode: prefer workspace-local changes. Avoid unnecessary global installs or host system configuration changes.";
 
-  const environmentContext = isDocker ? `
-[🐳 Docker Sandbox Environment]
-- You are running inside an ISOLATED and EPHEMERAL Docker container.
-- The host system is COMPLETELY PROTECTED. You CANNOT damage the user's host machine.
-- You have root/admin privileges within this sandbox.
-- It is SAFE and ENCOURAGED to aggressively install missing dependencies (e.g., \`apt-get install\`, \`apk add\`, \`pip install\`, \`npm install -g\`) via 'execute_command' if needed to accomplish your task.
-- It is SAFE to modify system configurations (\`/etc\`) or use advanced/unsafe flags in tools (e.g., \`--unsafe\` in idalib-mcp).
-- Feel free to experiment fearlessly. If the environment breaks, the container can be easily destroyed and recreated.
-- Note on Files: While you can modify system paths via commands, file tools ('read_file', 'write_file') are STILL RESTRICTED to the Access Constraints below.
-` : `
-[💻 Host Environment]
-- You are running directly on the user's host system.
-- Exercise CAUTION when executing commands, installing global packages, or modifying files outside the immediate working directory.
-- Avoid commands that could permanently alter or damage the host OS configuration.
-`;
+  const lspGuidance = options.enableLsp
+    ? `
+- LSP is enabled. Use semantic navigation for symbol definitions/references when it is more precise than text search, and use diagnostics after code edits when relevant.`
+    : "";
 
   return `
 # MCP Context: staff-mcp
-Environment:
-- OS: ${platform}
-- Default Shell: ${shell}
-- Working Directory: ${workingDir}
-- Access Constraints: Only paths within [${allowedDirs.join(", ")}] are accessible.
-- Path Separator: '${path.sep}'
+Workspace: ${workingDir}
+Allowed paths: [${allowedDirs.join(", ")}]
+Environment: ${environment}; OS ${platform}; shell ${shell}; path separator '${path.sep}'.
+Use 'execute_command' for all shell commands. If it returns a task ID, continue that task with 'manage_background_task'; do not rerun the command.
+Keep assistant-only temporary files, logs, experiments, notes, and caches under '.staff/' unless the workspace defines another scratch location.
 
-${environmentContext.trim()}
+${modeGuidance}
 
-Tool Usage Guidance:
-1. File Navigation: Always start by using 'list_dir' to understand the project structure before reading files.
-2. Content Inspection: 
-   - Use 'read_file' for specific files. 
-   - Use 'search_workspace' (search_type: "content") to find patterns or usage across the codebase.
-   - Use 'search_workspace' (search_type: "path") to find files by name/glob.
-   - Use 'get_document_symbols' for a quick structural overview of a file.
-3. Command Execution:
-   - Use 'execute_command' for ALL command execution (quick commands, builds, tests, dev servers, watchers). It waits up to 'timeout' ms (default 10s); if the command is still running, it is NOT killed — it moves to the background and returns a task ID with recent output.
-   - Follow up on a returned task ID with 'manage_background_task': action "logs" (optionally with "wait" to block until new output or exit, "tail" for line count), action "stop" (terminates the whole process group; logs remain available), or action "list".
-   - ${isWin ? "Critical: Use Windows-compatible commands (e.g., 'dir', 'copy', 'del', 'type'). Use backslashes '\\\\' for paths in commands." : "Critical: Use POSIX-compatible commands (e.g., 'ls', 'cp', 'rm', 'cat'). Use forward slashes '/' for paths."}
-4. Specialized Skills: If a '.staff/skills' or '.claude/skills' directory exists, use the 'skill' tool to load domain-specific workflows which will augment your current context.
-5. Search & Replace: When refactoring, use 'search_workspace' to find all occurrences, then 'edit_file_by_replace' for precise, line-based replacements.
-6. Code Understanding: Use 'symbol_lookup' to find definitions and references in code.
-7. MCP Server Integration: Use 'manage_mcp_session' to start/stop child MCP sessions, and 'explore_mcp_session' to discover their tools.
-8. Verification: Use 'get_diagnostics' after editing code to ensure no errors were introduced.
+Cross-tool workflow:
+- If the target file is already known, inspect it directly. If the relevant location is unclear, inspect or search the workspace first.
+- Before broad refactors, search for all affected usages, then make focused edits and verify the result.
+- When an available skill matches the task, load it with 'skill' and follow its workflow.
+- Use 'manage_mcp_session' for child MCP servers and 'explore_mcp_session' to discover their capabilities.${lspGuidance}
+- Verify meaningful code changes with the most relevant build, checks, or tests available in the workspace.
 
 ${getWorkspaceArtifactPolicy()}
 `.trim();

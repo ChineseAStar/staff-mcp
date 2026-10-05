@@ -2,13 +2,37 @@ import express from "express";
 import cors from "cors";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 
-export async function startHttpServer(serverFactory: () => McpServer, port: number, host: string = "0.0.0.0") {
+export function getHttpAuthToken(token?: string): string | undefined {
+  if (token === undefined) return undefined;
+  if (!token || /\s/.test(token)) {
+    throw new Error("--http-token must be non-empty and contain no whitespace when provided.");
+  }
+  return token;
+}
+
+export async function startHttpServer(serverFactory: () => McpServer, port: number, host: string = "0.0.0.0", token?: string) {
+  const authToken = getHttpAuthToken(token);
   const app = express();
   
-  // Enable CORS for all origins, including the MCP Inspector
+  // CORS preflight is public and never reaches MCP session handling.
   app.use(cors());
+
+  // When configured, authenticate before parsing bodies or accessing sessions.
+  if (authToken !== undefined) {
+    const expectedToken = Buffer.from(authToken);
+    app.use(["/mcp", "/sse", "/messages"], (req, res, next) => {
+      const match = /^Bearer +(\S+)$/i.exec(req.headers.authorization ?? "");
+      const token = Buffer.from(match?.[1] ?? "");
+      if (token.length !== expectedToken.length || !timingSafeEqual(token, expectedToken)) {
+        res.setHeader("WWW-Authenticate", 'Bearer realm="staff-mcp"');
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      next();
+    });
+  }
   
   // Necessary for processing JSON-RPC messages (POST).
   // Large limit required to support MCP File Transfer Extension (FTE)

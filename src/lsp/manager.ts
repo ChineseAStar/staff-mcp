@@ -15,6 +15,8 @@ export interface LSPConfig {
   command: string[];
   installCommand?: string;
   extensions: string[];
+  initializationOptions?: Record<string, unknown>;
+  requiredPaths?: string[];
 }
 
 const STAFF_NODE_MODULES = path.join(STAFF_TOOLS_DIR, "node_modules");
@@ -22,17 +24,23 @@ const STAFF_NODE_MODULES = path.join(STAFF_TOOLS_DIR, "node_modules");
 const DEFAULT_CONFIGS: Record<string, LSPConfig> = {
   typescript: {
     command: ["node", path.join(STAFF_NODE_MODULES, "typescript-language-server/lib/cli.mjs"), "--stdio"],
-    installCommand: `npm install --no-save typescript-language-server@latest typescript@latest`,
-    extensions: [".ts", ".tsx", ".js", ".jsx"]
+    installCommand: `npm install --save-exact --no-audit --no-fund typescript-language-server@6.0.1 typescript@5.9.3`,
+    extensions: [".ts", ".tsx", ".js", ".jsx"],
+    initializationOptions: {
+      tsserver: {
+        fallbackPath: path.join(STAFF_NODE_MODULES, "typescript", "lib")
+      }
+    },
+    requiredPaths: [path.join(STAFF_NODE_MODULES, "typescript", "lib", "tsserver.js")]
   },
   python: {
     command: ["node", path.join(STAFF_NODE_MODULES, "pyright/dist/pyright-langserver.js"), "--stdio"],
-    installCommand: `npm install --no-save pyright@latest`,
+    installCommand: `npm install --save-exact --no-audit --no-fund pyright@1.1.414`,
     extensions: [".py"]
   },
   bash: {
     command: ["node", path.join(STAFF_NODE_MODULES, "bash-language-server/out/cli.js"), "start"],
-    installCommand: `npm install --no-save bash-language-server@latest`,
+    installCommand: `npm install --save-exact --no-audit --no-fund bash-language-server@5.8.1`,
     extensions: [".sh", ".bash"]
   }
 };
@@ -50,8 +58,7 @@ export class LSPClient {
     const executable = getPlatformCommand(this.config.command[0]);
     this.process = spawn(executable, this.config.command.slice(1), {
       cwd: this.rootPath,
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: true // Using shell helps with path resolution on Windows
+      stdio: ["pipe", "pipe", "pipe"]
     });
 
     this.process.on("error", (err) => {
@@ -89,7 +96,8 @@ export class LSPClient {
                 }
               }
             },
-            workspaceFolders: [{ uri: pathToUri(this.rootPath), name: "workspace" }]
+            workspaceFolders: [{ uri: pathToUri(this.rootPath), name: "workspace" }],
+            initializationOptions: this.config.initializationOptions
           });
           await this.notification("initialized", {});
 
@@ -244,10 +252,11 @@ export class LSPManager {
       // Check if it's a node-managed server script
       const isNodeManaged = cmd === "node" && serverPath && path.isAbsolute(serverPath);
       if (isNodeManaged) {
-        if (fs.existsSync(serverPath)) {
+        const requiredPathsPresent = (config.requiredPaths ?? []).every((requiredPath) => fs.existsSync(requiredPath));
+        if (fs.existsSync(serverPath) && requiredPathsPresent) {
           return;
         }
-        // If node-managed but script is missing, we must install
+        // If the server script or a required runtime dependency is missing, install/reinstall.
       } else {
         // Check if the command exists in PATH
         try {
@@ -283,9 +292,14 @@ export class LSPManager {
             shell: true
           } as any);
           
-          // After installation, verify the serverPath if it's node-managed
+          // After installation, verify the server and any required runtime dependencies.
           if (isNodeManaged && !fs.existsSync(serverPath)) {
             console.error(`Installation finished but ${serverPath} still not found.`);
+          }
+          for (const requiredPath of config.requiredPaths ?? []) {
+            if (!fs.existsSync(requiredPath)) {
+              console.error(`Installation finished but required LSP dependency ${requiredPath} is still missing.`);
+            }
           }
         } catch (e) {
           console.error(`Failed to install LSP for ${language}:`, e);
