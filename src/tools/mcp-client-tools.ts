@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { spawn, ChildProcess } from "child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -27,12 +28,34 @@ const sessions = new Map<string, McpSession>();
 function getReadySession(sessionId: string): McpSession {
   const session = sessions.get(sessionId);
   if (!session) {
-    throw new Error(`MCP Session '${sessionId}' not found. Please use 'list_mcp_sessions' to check active sessions or start it first.`);
+    throw new Error(`MCP Session '${sessionId}' not found. Please use 'manage_mcp_session' with action: "list" to check active sessions or start it first.`);
   }
   if (session.status !== "ready") {
     throw new Error(`MCP Session '${sessionId}' is not in ready state. Current status: ${session.status}. It might have failed to start or crashed. Check logs if necessary.`);
   }
   return session;
+}
+
+async function listAllTools(client: Client, signal?: AbortSignal): Promise<Tool[]> {
+  const tools: Tool[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+
+  do {
+    const page = await client.listTools(cursor === undefined ? undefined : { cursor }, { signal });
+    for (const tool of page.tools) {
+      tools.push(tool);
+    }
+    cursor = page.nextCursor;
+    if (cursor !== undefined) {
+      if (seenCursors.has(cursor)) {
+        throw new Error(`Cannot retrieve a complete tool list: repeated pagination cursor '${cursor}'.`);
+      }
+      seenCursors.add(cursor);
+    }
+  } while (cursor !== undefined);
+
+  return tools;
 }
 
 export function registerMcpClientTools(server: McpServer, options: { maxSessions: number } = { maxSessions: 5 }): void {
@@ -209,19 +232,27 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
         toolName: z.string().optional().describe("Optional. The specific tool name to get detailed argument schema for"),
       }).strict(),
     },
-    async ({ sessionId, toolName }) => {
+    async ({ sessionId, toolName }, extra) => {
       try {
         const session = getReadySession(sessionId);
         
-        // Fetch tools list first (always needed)
-        const toolsResult = await session.client.listTools();
+        // Fetch every page before displaying or searching the current tools.
+        const tools = await listAllTools(session.client, extra?.signal);
 
         if (toolName) {
           // --- Detailed view: full schema for ONE specific tool ---
-          const tool = toolsResult.tools.find((t) => t.name === toolName);
+          const tool = tools.find((t) => t.name === toolName);
           if (!tool) {
+            let output = `Tool '${toolName}' not found in session '${sessionId}'.\nAvailable Tools (${tools.length} total):\n`;
+            if (tools.length === 0) {
+              output += "No available tools.\n";
+            }
+            for (const availableTool of tools) {
+              output += `\n[${availableTool.name}]\n${availableTool.description ?? "N/A"}\n`;
+            }
+            output += `\nTip: Use explore_mcp_session with "toolName" to inspect a specific tool's full schema.`;
             return {
-              content: [{ type: "text", text: `Tool '${toolName}' not found in session '${sessionId}'. Available tools: ${toolsResult.tools.map(t => t.name).join(", ")}` }],
+              content: [{ type: "text", text: output }],
               isError: true
             };
           }
@@ -259,8 +290,8 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
           }
           
           // List ALL tools with compact info (NO full schemas - those are expensive)
-          output += `Available Tools (${toolsResult.tools.length} total):\n`;
-          for (const t of toolsResult.tools) {
+          output += `Available Tools (${tools.length} total):\n`;
+          for (const t of tools) {
             const props = t.inputSchema?.properties;
             const argCount = props ? Object.keys(props).length : 0;
             const required = t.inputSchema?.required || [];
@@ -277,19 +308,6 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
             } else {
               output += `\n    Args: none`;
             }
-          }
-          
-          // Prompts (if server provides them)
-          try {
-            const promptsResult = await session.client.listPrompts();
-            if (promptsResult?.prompts?.length > 0) {
-              output += `\n\nAvailable Prompts (${promptsResult.prompts.length} total):\n`;
-              for (const p of promptsResult.prompts) {
-                output += `  [${p.name}] ${p.description || ""}\n`;
-              }
-            }
-          } catch (e) {
-            // MCP server may not support prompts
           }
           
           output += `\n💡 Tip: Use explore_mcp_session with "toolName" to inspect a specific tool's full schema before calling it.`;
