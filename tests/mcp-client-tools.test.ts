@@ -351,11 +351,11 @@ test("pagination forwards cancellation on every request without introducing time
     }, { once: true }));
     return { tools: [writeTool], nextCursor: "third" };
   } });
-  const listTools = Client.prototype.listTools;
-  const spy = t.mock.method(Client.prototype, "listTools", function (
-    this: Client, ...args: Parameters<Client["listTools"]>
+  const protocolRequest = Client.prototype.request;
+  const spy = t.mock.method(Client.prototype, "request", function (
+    this: Client, ...args: Parameters<Client["request"]>
   ) {
-    return listTools.apply(this, args);
+    return protocolRequest.apply(this, args);
   });
   const controller = new AbortController();
   t.after(() => controller.abort());
@@ -364,16 +364,21 @@ test("pagination forwards cancellation on every request without introducing time
   controller.abort(new Error("exploration cancelled"));
   await Promise.all([rejection, cancelled.promise]);
   assert.deepEqual(h.cursors, [undefined, "second"]);
-  assert.equal(spy.mock.callCount(), 2);
-  const firstOptions = spy.mock.calls[0].arguments[1]!;
+  const listRequests = spy.mock.calls.filter((call) =>
+    (call.arguments[0] as { method?: string }).method === "tools/list" && call.this === h.nestedClient
+  );
+  assert.equal(listRequests.length, 2);
+  const firstOptions = listRequests[0].arguments[2]!;
   assert.ok(firstOptions.signal instanceof AbortSignal);
   assert.equal(firstOptions.signal.aborted, true);
   assert.deepEqual(Object.keys(firstOptions), ["signal"]);
-  assert.equal(spy.mock.calls[1].arguments[1]!.signal, firstOptions.signal);
+  assert.equal(listRequests[1].arguments[2]!.signal, firstOptions.signal);
 });
 
-test("T16: calls retain exact JSON arguments, one-page validation, timeout and caller signal", async (t) => {
-  const h = await createHarness(t, { page: () => ({ tools: [readTool], nextCursor: "not-followed-by-call" }) });
+test("T16: calls retain exact JSON arguments, paginated validation, timeout and caller signal", async (t) => {
+  const h = await createHarness(t, { page: (cursor) => cursor === undefined
+    ? { tools: [readTool], nextCursor: "second" }
+    : { tools: [writeTool] } });
   const callTool = Client.prototype.callTool;
   const spy = t.mock.method(Client.prototype, "callTool", function (
     this: Client, ...args: Parameters<Client["callTool"]>
@@ -385,7 +390,7 @@ test("T16: calls retain exact JSON arguments, one-page validation, timeout and c
   });
   assert.equal(result.isError, false);
   assert.equal(text(result), '{"path":"example.txt","startLine":2}');
-  assert.deepEqual(h.cursors, [undefined]);
+  assert.deepEqual(h.cursors, [undefined, "second"]);
   const nestedCall = spy.mock.calls.find((call) => call.this === h.nestedClient)!;
   assert.ok(nestedCall);
   assert.deepEqual(nestedCall.arguments[0], { name: "read_file", arguments: { path: "example.txt", startLine: 2 } });
@@ -447,4 +452,35 @@ test("T16: management and calls work end to end with an actual local stdio subpr
   assert.notEqual((await invoke("explore_mcp_session", { sessionId: "dev", toolName: "read_file" })).isError, true);
   assert.equal(text(await invoke("manage_mcp_session", { action: "stop", sessionId: "dev" })), "Session 'dev' successfully stopped. (Active sessions: 0/1)");
   assert.equal(text(await invoke("manage_mcp_session", { action: "list" })), "No active MCP sessions. (Active sessions: 0/1)");
+});
+
+
+test("tools on later pages can be called after discovery", async (t) => {
+  const h = await createHarness(t, { page: (cursor) => cursor === undefined
+    ? { tools: [readTool], nextCursor: "next" }
+    : { tools: [writeTool] } });
+  const discovered = await h.explore("write_file");
+  assert.notEqual(discovered.isError, true);
+  const result = await h.invoke("call_mcp_session_tool", {
+    sessionId: "dev", method: "write_file", params: JSON.stringify({ path: "demo.txt" }),
+  });
+  assert.equal(result.isError, false);
+  assert.equal(text(result), '{"path":"demo.txt"}');
+  assert.deepEqual(h.cursors, [undefined, "next", undefined, "next"]);
+});
+
+test("a completed paginated discovery retains SDK output validation for earlier pages", async (t) => {
+  const first: Tool = { ...readTool, outputSchema: {
+    type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"],
+  } };
+  const h = await createHarness(t, { page: (cursor) => cursor === undefined
+    ? { tools: [first], nextCursor: "next" }
+    : { tools: [writeTool] }, callResult: {
+      content: [{ type: "text", text: "invalid structured output" }],
+      structuredContent: { ok: "not a boolean" },
+    } });
+  assert.notEqual((await h.explore()).isError, true);
+  const result = await h.invoke("call_mcp_session_tool", { sessionId: "dev", method: "read_file" });
+  assert.equal(result.isError, true);
+  assert.match(text(result), /Structured content does not match the tool's output schema/);
 });

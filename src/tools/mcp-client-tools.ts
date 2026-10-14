@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { spawn, ChildProcess } from "child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { ListToolsResultSchema, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -42,7 +42,14 @@ async function listAllTools(client: Client, signal?: AbortSignal): Promise<Tool[
   let cursor: string | undefined;
 
   do {
-    const page = await client.listTools(cursor === undefined ? undefined : { cursor }, { signal });
+    // Use the protocol request rather than Client.listTools(): SDK v1 replaces
+    // its output-schema/task metadata cache on *every page*, which can affect
+    // concurrent tool calls while discovery is still in progress.
+    const page = await client.request(
+      { method: "tools/list", ...(cursor === undefined ? {} : { params: { cursor } }) },
+      ListToolsResultSchema,
+      { signal },
+    );
     for (const tool of page.tools) {
       tools.push(tool);
     }
@@ -55,6 +62,12 @@ async function listAllTools(client: Client, signal?: AbortSignal): Promise<Tool[
     }
   } while (cursor !== undefined);
 
+  // SDK v1's listTools() ordinarily installs per-tool output validators and
+  // task metadata, but only for its last page. Install the complete snapshot
+  // once after a successful traversal. Do not clear metadata on partial reads.
+  // This SDK method is private in TypeScript; keep the compatibility access
+  // centralized until the SDK exposes a public full-list metadata API.
+  (client as unknown as { cacheToolMetadata(tools: Tool[]): void }).cacheToolMetadata(tools);
   return tools;
 }
 
@@ -337,12 +350,12 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
       try {
         const session = getReadySession(sessionId);
 
-        // Pre-fetch tools to validate the tool exists and fetch its schema
-        const toolsResult = await session.client.listTools();
-        const tool = toolsResult.tools.find(t => t.name === method);
+        // Validate against the complete list, including tools on later pages.
+        const tools = await listAllTools(session.client, extra?.signal);
+        const tool = tools.find(t => t.name === method);
         
         if (!tool) {
-          const availableTools = toolsResult.tools.map(t => t.name).join(", ");
+          const availableTools = tools.map(t => t.name).join(", ");
           return {
             content: [{ type: "text", text: `Tool '${method}' not found in session '${sessionId}'. Available tools: ${availableTools}` }],
             isError: true
