@@ -93,6 +93,10 @@ token。这里使用服务端共享 token，不提供 OAuth 流程。
 
 ## 🛠️ 核心能力
 
+### 独立文件工作区
+
+通过协商的文件管理扩展提供自包含编辑器 UI、版本检查写入和私有分块传输，独立于模型 Tools；普通 MCP 客户端仍可使用标准文件 Resources，legacy FTE 保持兼容。授权边界、草稿与传输生命周期、限额及 UI 打包见[文件管理合同与构建说明（英文）](docs/file-manager.md)。
+
 ### 1. 无缝容器化支持 (`--docker`)
 告别污染宿主机的时代。只要加上 `--docker <image>`，`staff-mcp` 将会：
 - 通过只读挂载 (`read-only bind mounts`) 瞬间注入容器（无需网络重下）。

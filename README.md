@@ -103,6 +103,10 @@ Optional CLI controls (milliseconds, also forwarded in Docker mode):
 
 ## 🛠️ Core Capabilities
 
+### Independent file workspace
+
+The negotiated file-manager extension provides a self-contained editor UI, version-checked writes, and private chunked transfers, independently of model Tools. Standard file Resources remain available to ordinary MCP clients; legacy FTE is retained. See [File manager contract and UI build](docs/file-manager.md) for host authorization, draft/transfer lifecycle, limits, and packaging.
+
 ### 1. Seamless Containerization (`--docker`)
 Never pollute your host machine again. By simply appending `--docker <image>`, `staff-mcp`:
 - Instantly injects itself into the container via read-only bind mounts (no `npm install` inside the container).
