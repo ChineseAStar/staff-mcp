@@ -163,8 +163,8 @@ export function TextEditor(props: Props) {
                     EditorView.theme({
                         '&': {
                             height: '100%',
-                            fontSize: '13px',
-                            backgroundColor: 'var(--bg-primary)',
+                            fontSize: 'calc(var(--font-size-base) * 0.8125)',
+                            backgroundColor: 'var(--app-panel-solid)',
                             color: 'var(--text-primary)',
                         },
                         '.cm-scroller': {
@@ -174,7 +174,7 @@ export function TextEditor(props: Props) {
                         },
                         '.cm-content': { padding: '12px 0', minHeight: '100%' },
                         '.cm-gutters': {
-                            background: 'var(--bg-secondary)',
+                            background: 'var(--color-surface)',
                             color: 'var(--text-muted)',
                             borderRight: '1px solid var(--color-border-light)',
                         },
@@ -189,12 +189,14 @@ export function TextEditor(props: Props) {
                             backgroundColor:
                                 'var(--color-surface-active) !important',
                         },
-                        '.cm-searchMatch': { backgroundColor: '#fff0b2' },
+                        '.cm-searchMatch': {
+                            backgroundColor: 'var(--color-primary-light)',
+                        },
                         '.cm-searchMatch-selected': {
-                            backgroundColor: '#ffd887',
+                            backgroundColor: 'var(--color-surface-active)',
                         },
                         '.cm-panels': {
-                            background: 'var(--bg-secondary)',
+                            background: 'var(--color-surface)',
                             color: 'var(--text-primary)',
                         },
                         '.cm-textfield': {

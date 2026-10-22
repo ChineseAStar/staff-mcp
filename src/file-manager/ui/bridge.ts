@@ -55,7 +55,7 @@ export function errorMessage(error: unknown): string {
 
 // Theme values are accepted only on the authenticated MessagePort, never from
 // window messages. Keep this list aligned with chat-ai's semantic palette.
-const themeVariables = new Set([
+const colorVariables = new Set([
     '--background',
     '--foreground',
     '--color-primary',
@@ -86,6 +86,13 @@ const themeVariables = new Set([
     '--app-panel-solid',
     '--app-panel-border',
 ]);
+const themeProperties = new Map([
+    ...[...colorVariables].map((name) => [name, 'color'] as const),
+    ['--font-family', 'font-family'],
+    ['--font-code-family', 'font-family'],
+    ['--font-size-base', 'font-size'],
+    ['--app-radius-control', 'border-radius'],
+]);
 
 function applyTheme(data: Record<string, unknown>) {
     const root = document.documentElement;
@@ -93,15 +100,16 @@ function applyTheme(data: Record<string, unknown>) {
     root.style.colorScheme = data.dark === true ? 'dark' : 'light';
     const variables = data.variables;
     // A theme event is a complete snapshot; clear stale overrides on theme switch.
-    for (const name of themeVariables) root.style.removeProperty(name);
+    for (const name of themeProperties.keys()) root.style.removeProperty(name);
     if (!variables || typeof variables !== 'object' || Array.isArray(variables))
         return;
     for (const [name, value] of Object.entries(variables)) {
+        const property = themeProperties.get(name);
         if (
-            themeVariables.has(name) &&
+            property &&
             typeof value === 'string' &&
             value.length <= 256 &&
-            CSS.supports('color', value)
+            CSS.supports(property, value)
         ) {
             root.style.setProperty(name, value);
         }

@@ -380,7 +380,10 @@ export function App() {
                 try {
                     const result = await bridge.request<TextResult>(
                         'readText',
-                        { rootId: targetRoot, path },
+                        {
+                            rootId: targetRoot,
+                            path,
+                        },
                     );
                     Object.assign(tab, {
                         kind: 'text',
@@ -747,6 +750,7 @@ export function App() {
             return;
         }
         if (!files.length) return;
+        setShowTransfers(true);
         transfers.upload(files, rootId, directory);
     };
 
@@ -768,6 +772,7 @@ export function App() {
     };
 
     const download = (targetRoot: string, path: string, size: number) => {
+        setShowTransfers(true);
         transfers.download(targetRoot, path, size);
     };
 
@@ -793,8 +798,8 @@ export function App() {
               )
             : [];
 
-    const transferErrors = transfers.jobs.some(
-        (job) => job.status === 'error' || job.status === 'confirm',
+    const transferErrors = transfers.jobs.some((job) =>
+        ['error', 'confirm', 'ready'].includes(job.status),
     );
     const queueVisible = showTransfers || activeTransfers > 0 || transferErrors;
     const parentDirectory = directory.split('/').slice(0, -1).join('/');
@@ -1643,7 +1648,7 @@ export function App() {
                                 <button
                                     className="text-button"
                                     onClick={() => {
-                                        transfers.clearFinished();
+                                        void transfers.clearFinished();
                                         if (!activeTransfers)
                                             setShowTransfers(false);
                                     }}
@@ -1683,22 +1688,49 @@ export function App() {
                                             >
                                                 {job.name}
                                             </strong>
-                                            <span>
-                                                {transferLabels[job.status]}
+                                            <span
+                                                role="status"
+                                                aria-live="polite"
+                                            >
+                                                {job.direction === 'download' &&
+                                                job.status === 'running' &&
+                                                job.loaded === job.size
+                                                    ? '接收完毕，等待完整性校验…'
+                                                    : transferLabels[
+                                                          job.status
+                                                      ]}
                                             </span>
                                         </div>
                                         <progress
                                             max={job.size || 1}
                                             value={
-                                                job.status === 'done'
-                                                    ? job.size || 1
-                                                    : job.loaded
+                                                [
+                                                    'queued',
+                                                    'checking',
+                                                    'preparing',
+                                                    'finishing',
+                                                    'cancelling',
+                                                    'saving',
+                                                ].includes(job.status)
+                                                    ? undefined
+                                                    : [
+                                                            'done',
+                                                            'ready',
+                                                            'handed-off',
+                                                        ].includes(job.status)
+                                                      ? job.size || 1
+                                                      : job.loaded
                                             }
                                             aria-label={`${job.name} 传输进度`}
                                         />
                                         <div className="transfer-meta">
-                                            {formatSize(job.loaded)} /{' '}
-                                            {formatSize(job.size)}
+                                            {job.status === 'preparing'
+                                                ? '正在准备文件或等待服务器响应，尚未收到数据。'
+                                                : `${formatSize(job.loaded)} / ${formatSize(job.size)}${job.size > 0 ? ` · ${Math.floor((job.loaded / job.size) * 100)}%` : ''}`}
+                                            {job.status === 'ready' &&
+                                                ' · 文件已完整接收，请在 5 分钟内保存或丢弃。'}
+                                            {job.status === 'handed-off' &&
+                                                ' · 是否保存成功请查看浏览器下载记录。'}
                                         </div>
                                         {job.status === 'confirm' && (
                                             <div className="upload-confirm">
@@ -1726,30 +1758,57 @@ export function App() {
                                         )}
                                     </div>
                                     <div className="transfer-actions">
-                                        {transferActive(job) && (
-                                            <IconButton
-                                                name="close"
-                                                title={
-                                                    job.status === 'finishing'
-                                                        ? '提交阶段不可取消'
-                                                        : '取消传输'
-                                                }
-                                                disabled={
-                                                    job.status ===
-                                                        'finishing' ||
-                                                    job.status === 'cancelling'
-                                                }
-                                                onClick={() =>
-                                                    void transfers.cancel(
-                                                        job.id,
-                                                    )
-                                                }
-                                            />
+                                        {job.status === 'ready' && (
+                                            <>
+                                                <button
+                                                    disabled={!available}
+                                                    onClick={() =>
+                                                        void transfers.save(
+                                                            job.id,
+                                                        )
+                                                    }
+                                                >
+                                                    保存到本机
+                                                </button>
+                                                <button
+                                                    onClick={() =>
+                                                        void transfers.cancel(
+                                                            job.id,
+                                                        )
+                                                    }
+                                                >
+                                                    丢弃
+                                                </button>
+                                            </>
                                         )}
+                                        {transferActive(job) &&
+                                            job.status !== 'ready' && (
+                                                <IconButton
+                                                    name="close"
+                                                    title={
+                                                        job.status ===
+                                                        'finishing'
+                                                            ? '提交阶段不可取消'
+                                                            : '取消传输'
+                                                    }
+                                                    disabled={
+                                                        job.status ===
+                                                            'finishing' ||
+                                                        job.status ===
+                                                            'cancelling' ||
+                                                        job.status === 'saving'
+                                                    }
+                                                    onClick={() =>
+                                                        void transfers.cancel(
+                                                            job.id,
+                                                        )
+                                                    }
+                                                />
+                                            )}
                                         {(['error', 'cancelled'].includes(
                                             job.status,
                                         ) ||
-                                            (job.status === 'done' &&
+                                            (job.status === 'handed-off' &&
                                                 job.direction ===
                                                     'download')) && (
                                             <IconButton

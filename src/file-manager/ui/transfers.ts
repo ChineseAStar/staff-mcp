@@ -8,6 +8,10 @@ type TransferStatus =
     | 'queued'
     | 'checking'
     | 'confirm'
+    | 'preparing'
+    | 'ready'
+    | 'saving'
+    | 'handed-off'
     | 'running'
     | 'finishing'
     | 'cancelling'
@@ -36,6 +40,10 @@ export const transferLabels: Record<TransferStatus, string> = {
     queued: '等待上传',
     checking: '检查目标',
     confirm: '等待覆盖确认',
+    preparing: '准备下载，等待首字节…',
+    ready: '可保存',
+    saving: '正在交给浏览器…',
+    'handed-off': '已交给浏览器',
     running: '传输中',
     finishing: '校验并提交中',
     cancelling: '正在取消',
@@ -49,13 +57,20 @@ export function transferActive(job: TransferJob) {
         'queued',
         'checking',
         'confirm',
+        'preparing',
+        'ready',
         'running',
+        'saving',
         'finishing',
         'cancelling',
     ].includes(job.status);
 }
 
 function progressStatus(progress: TransferProgress): TransferStatus {
+    if (progress.status === 'ready') return 'ready';
+    if (progress.status === 'handed-off') return 'handed-off';
+    if (progress.status === 'preparing') return 'preparing';
+    if (progress.status === 'cancelling') return 'cancelling';
     if (['done', 'complete', 'completed', 'success'].includes(progress.status))
         return 'done';
     if (['error', 'failed'].includes(progress.status)) return 'error';
@@ -101,6 +116,14 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
                 }
                 return;
             }
+            // Cancellation owns the state until its cleanup promise settles.
+            // In particular, a late running/ready event must not make it clearable.
+            if (job.cancelRequested) return;
+            if (
+                job.status === 'cancelling' &&
+                !['error', 'cancelled'].includes(progressStatus(progress))
+            )
+                return;
             if (!transferActive(job)) return;
             if (job.direction === 'upload') {
                 // The upload promise, not a byte-progress event, confirms commit.
@@ -114,13 +137,8 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
                 change(job.id, {
                     loaded: progress.loaded,
                     size: progress.total,
-                    // Upload runner owns terminal state until cleanup has settled.
-                    ...(job.direction === 'download'
-                        ? {
-                              status: progressStatus(progress),
-                              error: progress.error,
-                          }
-                        : {}),
+                    status: progressStatus(progress),
+                    error: progress.error,
                 });
             }
         });
@@ -217,8 +235,9 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
                         : {}),
                 });
                 transferId = prepared.transferId;
-                change(job.id, { transferId, status: 'running', loaded: 0 });
+                change(job.id, { transferId });
                 if (cancelled()) throw new Error('已取消');
+                change(job.id, { status: 'running', loaded: 0 });
                 if (prepared.mode === 'http-stream') {
                     await bridge.request('uploadStream', {
                         transferId,
@@ -331,47 +350,120 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
         }
     };
 
+    const discardDownload = async (job: TransferJob) => {
+        if (job.direction !== 'download' || !job.transferId) return;
+        earlyProgress.current.delete(job.transferId);
+        // Lifecycle invalidation also clears the host's local cache.
+        if (!enabledRef.current) return;
+        await bridge.request('downloadDiscard', { transferId: job.transferId });
+    };
+
     const runDownload = async (job: TransferJob) => {
         change(job.id, {
-            status: 'running',
+            status: 'preparing',
             loaded: 0,
             error: undefined,
             cancelRequested: false,
             transferId: undefined,
         });
+        let transferId: string | undefined;
+        let cleanupAttempted = false;
+        const cancelled = () =>
+            !enabledRef.current ||
+            !!jobsRef.current.find((entry) => entry.id === job.id)
+                ?.cancelRequested;
         try {
+            await discardDownload(job);
+            change(job.id, { transferId: undefined });
+            if (cancelled()) {
+                change(job.id, { status: 'cancelled' });
+                return;
+            }
             const result = await bridge.request<{ transferId: string }>(
                 'download',
-                { rootId: job.rootId, path: job.path },
+                {
+                    rootId: job.rootId,
+                    path: job.path,
+                },
             );
-            const progress = earlyProgress.current.get(result.transferId);
-            earlyProgress.current.delete(result.transferId);
-            const current = jobsRef.current.find(
-                (entry) => entry.id === job.id,
-            );
-            if (current?.cancelRequested || !enabledRef.current) {
-                change(job.id, { transferId: result.transferId });
-                await bridge.request('transferCancel', {
-                    transferId: result.transferId,
-                });
+            transferId = result.transferId;
+            change(job.id, { transferId });
+            if (cancelled()) {
+                // Prepare can finish after the user cancelled. Release the new
+                // handle before acknowledging cancellation; never receive bytes.
+                change(job.id, { status: 'cancelling' });
+                cleanupAttempted = true;
+                await bridge.request('transferCancel', { transferId });
                 change(job.id, {
                     status: enabledRef.current ? 'cancelled' : 'error',
                 });
                 return;
             }
-            change(job.id, {
-                transferId: result.transferId,
-                ...(progress
-                    ? {
-                          loaded: progress.loaded,
-                          size: progress.total,
-                          status: progressStatus(progress),
-                          error: progress.error,
-                      }
-                    : {}),
-            });
+            const progress = earlyProgress.current.get(transferId);
+            earlyProgress.current.delete(transferId);
+            if (progress) {
+                change(job.id, {
+                    loaded: progress.loaded,
+                    size: progress.total,
+                    status: progressStatus(progress),
+                    error: progress.error,
+                });
+            }
+            await bridge.request('downloadReceive', { transferId });
         } catch (error) {
-            change(job.id, { status: 'error', error: errorMessage(error) });
+            if (cleanupAttempted) {
+                change(job.id, {
+                    status: 'error',
+                    error: `取消结果待核实：${errorMessage(error)}`,
+                });
+                return;
+            }
+            // Once bound, explicit/lifecycle cancellation owns its cleanup promise.
+            if (
+                transferId &&
+                jobsRef.current.find((entry) => entry.id === job.id)
+                    ?.cancelRequested
+            )
+                return;
+            // No automatic replay. On a receive/ack failure a stream may already
+            // exist, so cancel it and wait for cleanup before allowing retry.
+            if (transferId) {
+                change(job.id, { status: 'cancelling' });
+                try {
+                    await bridge.request('transferCancel', { transferId });
+                } catch (cleanupError) {
+                    change(job.id, {
+                        status: 'error',
+                        error: `${errorMessage(error)} 清理结果待核实：${errorMessage(cleanupError)}`,
+                    });
+                    return;
+                }
+            }
+            change(job.id, {
+                status: 'error',
+                error:
+                    cancelled() && !transferId
+                        ? `准备请求未确认，取消结果待核实：${errorMessage(error)}`
+                        : errorMessage(error),
+            });
+        }
+    };
+
+    const save = async (id: string) => {
+        const job = jobsRef.current.find((entry) => entry.id === id);
+        if (!job || job.status !== 'ready' || !enabledRef.current) return;
+        change(id, { status: 'saving', error: undefined });
+        try {
+            await bridge.request('downloadSave', {
+                transferId: job.transferId,
+            });
+            change(id, { status: 'handed-off' });
+        } catch (error) {
+            change(id, {
+                status: 'error',
+                error: `交给浏览器的结果未确认，请检查浏览器下载记录：${errorMessage(error)}`,
+            });
+            await discardDownload(job).catch(() => {});
         }
     };
 
@@ -384,7 +476,7 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
             name: path.split('/').pop() ?? path,
             size,
             loaded: 0,
-            status: 'running',
+            status: 'preparing',
         };
         add(job);
         void runDownload(job);
@@ -392,7 +484,12 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
 
     const cancel = async (id: string) => {
         const job = jobsRef.current.find((entry) => entry.id === id);
-        if (!job || !transferActive(job) || job.status === 'finishing') return;
+        if (
+            !job ||
+            !transferActive(job) ||
+            ['finishing', 'saving', 'cancelling'].includes(job.status)
+        )
+            return;
         change(id, { cancelRequested: true });
         if (['queued', 'confirm'].includes(job.status)) {
             change(id, { status: 'cancelled' });
@@ -428,7 +525,14 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
 
     const retry = (id: string, overwrite = false) => {
         const job = jobsRef.current.find((entry) => entry.id === id);
-        if (!job || !available) return;
+        if (
+            !job ||
+            !available ||
+            !['confirm', 'error', 'cancelled', 'handed-off'].includes(
+                job.status,
+            )
+        )
+            return;
         if (job.direction === 'download') {
             void runDownload(job);
         } else if (job.size <= MAX_FILE_SIZE) {
@@ -443,10 +547,32 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
         }
     };
 
-    const clearFinished = () => {
-        jobsRef.current = jobsRef.current.filter(transferActive);
+    const clearFinished = async () => {
+        const finished = jobsRef.current.filter((job) => !transferActive(job));
+        const removed = new Set<string>();
+        for (const job of finished) {
+            // Do not erase a record whose save/cancel/retry began while an earlier
+            // record was being released.
+            if (jobsRef.current.find((entry) => entry.id === job.id) !== job)
+                continue;
+            if (job.direction !== 'download') {
+                removed.add(job.id);
+                continue;
+            }
+            change(job.id, { status: 'cancelling', cancelRequested: true });
+            try {
+                await discardDownload(job);
+                removed.add(job.id);
+            } catch (error) {
+                change(job.id, {
+                    status: 'error',
+                    error: `释放下载缓存失败：${errorMessage(error)}`,
+                });
+            }
+        }
+        jobsRef.current = jobsRef.current.filter((job) => !removed.has(job.id));
         setJobs(jobsRef.current);
     };
 
-    return { jobs, upload, download, cancel, retry, clearFinished };
+    return { jobs, upload, download, save, cancel, retry, clearFinished };
 }

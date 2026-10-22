@@ -26,6 +26,8 @@
     --input-bg: #ffffff;
     --input-border: #d5d9e0;
     --input-focus-border: #3b82f6;
+    --app-radius-control: 12px;
+    --font-size-base: 16px;
     --app-panel-solid: #fcfcfd;
     --app-panel-border: rgb(17 24 39 / 6.5%);
     --syntax-keyword: #8250b3;
@@ -38,9 +40,9 @@
     --font-code-family:
         ui-monospace, 'SFMono-Regular', 'Cascadia Code', monospace;
     font-family: var(--font-family);
-    font-size: 13px;
+    font-size: calc(var(--font-size-base) * 0.8125);
     color: var(--text-primary);
-    background: var(--bg-primary);
+    background: var(--app-panel-solid);
 }
 :root.dark {
     --syntax-keyword: #c3aff5;
@@ -107,7 +109,7 @@ button {
     justify-content: center;
     gap: 6px;
     border: 1px solid var(--color-border);
-    border-radius: 8px;
+    border-radius: var(--app-radius-control);
     background: var(--bg-primary);
     min-height: 30px;
     padding: 5px 10px;
@@ -116,10 +118,10 @@ button {
     flex-shrink: 0;
 }
 button:hover:not(:disabled) {
-    background: var(--interactive-hover);
+    background: var(--color-surface-hover);
 }
 button:active:not(:disabled) {
-    background: var(--interactive-active);
+    background: var(--color-surface-active);
 }
 button:disabled,
 select:disabled {
@@ -140,7 +142,7 @@ input,
 textarea,
 select {
     border: 1px solid var(--input-border);
-    border-radius: 8px;
+    border-radius: var(--app-radius-control);
     background: var(--input-bg);
 }
 input,
@@ -171,7 +173,7 @@ input[type='checkbox'] {
     padding: 0;
     border: 0;
     background: transparent;
-    border-radius: 7px;
+    border-radius: var(--app-radius-control);
     color: var(--text-secondary);
 }
 .text-button {
@@ -184,7 +186,7 @@ input[type='checkbox'] {
 .primary {
     border-color: transparent;
     background: var(--color-primary);
-    color: #fff;
+    color: var(--text-inverse);
 }
 .primary:hover:not(:disabled) {
     background: var(--color-primary-hover);
@@ -218,7 +220,7 @@ input[type='checkbox'] {
     width: 100%;
     height: 100%;
     min-height: 0;
-    background: var(--bg-primary);
+    background: var(--app-panel-solid);
     overflow: hidden;
 }
 .topbar {
@@ -228,7 +230,7 @@ input[type='checkbox'] {
     min-height: 44px;
     padding: 5px 7px;
     border-bottom: 1px solid var(--color-border);
-    background: var(--app-panel-solid);
+    background: var(--color-surface);
     flex: none;
     z-index: 5;
 }
@@ -328,7 +330,7 @@ input[type='checkbox'] {
     align-items: center;
     gap: 7px;
     padding: 5px 10px;
-    background: var(--bg-secondary);
+    background: var(--color-surface);
     border-bottom: 1px solid var(--color-border-light);
     font-size: 12px;
     color: var(--text-tertiary);
@@ -393,11 +395,11 @@ input[type='checkbox'] {
     display: flex;
     align-items: center;
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: var(--app-radius-control);
     margin-bottom: 1px;
 }
 .file-row:hover {
-    background: var(--interactive-hover);
+    background: var(--color-surface-hover);
 }
 .file-row.selected {
     background: var(--color-primary-light);
@@ -412,7 +414,7 @@ input[type='checkbox'] {
     justify-content: flex-start;
     background: transparent;
     border: 0;
-    border-radius: 7px;
+    border-radius: var(--app-radius-control);
     text-align: left;
 }
 .entry-open:hover:not(:disabled) {
@@ -471,7 +473,7 @@ input[type='checkbox'] {
     align-items: center;
     min-height: 39px;
     padding: 4px 7px 4px 13px;
-    background: var(--bg-secondary);
+    background: var(--color-surface);
     border-top: 1px solid var(--color-border-light);
     flex: none;
 }
@@ -508,7 +510,7 @@ input[type='checkbox'] {
 }
 .inline-error {
     color: #c33b49;
-    background: var(--bg-secondary);
+    background: var(--color-surface);
     padding: 8px 12px;
     font-size: 12px;
     overflow-wrap: anywhere;
@@ -533,7 +535,7 @@ input[type='checkbox'] {
     overflow: auto;
     flex: none;
     padding: 0 5px;
-    background: var(--bg-secondary);
+    background: var(--color-surface);
     border-bottom: 1px solid var(--color-border);
     scrollbar-width: thin;
 }
@@ -692,7 +694,7 @@ input[type='checkbox'] {
 }
 .code-editor .cm-searchMatch,
 .code-editor .cm-searchMatch-selected {
-    color: #312500;
+    color: var(--text-primary);
 }
 .dark .code-editor .cm-content {
     caret-color: var(--color-primary);
@@ -726,7 +728,7 @@ input[type='checkbox'] {
     justify-content: center;
     gap: 12px;
     overflow: auto;
-    background: var(--bg-secondary);
+    background: var(--color-surface);
 }
 .image-preview img {
     display: block;
@@ -794,8 +796,9 @@ input[type='checkbox'] {
     color: var(--text-muted);
 }
 .transfer-item {
-    display: flex;
-    align-items: flex-start;
+    display: grid;
+    grid-template-columns: 15px minmax(0, 1fr) auto;
+    align-items: start;
     gap: 8px;
     padding: 10px 2px;
     border-top: 1px solid var(--color-border-light);
@@ -811,12 +814,14 @@ input[type='checkbox'] {
 }
 .transfer-title {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 8px;
+    row-gap: 2px;
     font-size: 11px;
 }
 .transfer-title strong {
-    flex: 1;
+    flex: 1 1 100px;
     font-weight: 500;
     white-space: nowrap;
     text-overflow: ellipsis;
@@ -836,6 +841,29 @@ input[type='checkbox'] {
     overflow: hidden;
     margin: 7px 0 4px;
     accent-color: var(--color-primary);
+}
+.transfer-description progress:indeterminate {
+    background: linear-gradient(
+            90deg,
+            var(--color-surface) 25%,
+            var(--color-primary) 50%,
+            var(--color-surface) 75%
+        )
+        0 0 / 200% 100%;
+    animation: transfer-wait 1.5s linear infinite;
+}
+progress:indeterminate::-webkit-progress-bar {
+    background: transparent;
+}
+@keyframes transfer-wait {
+    to {
+        background-position: -200% 0;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .transfer-description progress:indeterminate {
+        animation: none;
+    }
 }
 progress::-webkit-progress-bar {
     background: var(--bg-tertiary);
@@ -862,6 +890,14 @@ progress::-moz-progress-bar {
 }
 .transfer-actions {
     display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.transfer-item.ready .transfer-actions {
+    grid-column: 2 / -1;
+}
+.transfer-actions > button:not(.icon-button) {
+    font-size: 12px;
 }
 .upload-confirm {
     display: flex;
