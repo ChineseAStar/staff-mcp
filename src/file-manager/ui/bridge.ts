@@ -123,7 +123,6 @@ const mutations = new Set([
     'move',
     'delete',
     'uploadStart',
-    'uploadChunk',
     'uploadStream',
     'uploadFinish',
 ]);
@@ -243,7 +242,12 @@ class FileManagerBridge {
         this.state = state;
         if (!state.connected || !state.enabled) {
             for (const [id, pending] of this.pending) {
-                if (pending.method === 'transferCancel' && state.connected)
+                if (
+                    ['transferCancel', 'transferStatus'].includes(
+                        pending.method,
+                    ) &&
+                    state.connected
+                )
                     continue;
                 clearTimeout(pending.timer);
                 pending.reject(
@@ -283,7 +287,9 @@ class FileManagerBridge {
         transfer: Transferable[] = [],
     ): Promise<T> {
         const localHostMethod =
-            method === 'copy' || method === 'transferCancel';
+            method === 'copy' ||
+            method === 'transferCancel' ||
+            method === 'transferStatus';
         if (
             !this.port ||
             (!localHostMethod && (!this.state.connected || !this.state.enabled))

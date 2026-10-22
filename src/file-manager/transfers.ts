@@ -1,673 +1,759 @@
 import * as fs from 'node:fs/promises';
 import { constants, rmSync } from 'node:fs';
-import type { IncomingMessage, ServerResponse } from 'node:http';
-import { Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
-import type { HttpTicket, HttpTransferRouter } from './http-transfer.js';
 import type { FileHandle } from 'node:fs/promises';
-import path from 'node:path';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
+import path from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { pipeline } from 'node:stream/promises';
+import { Writable } from 'node:stream';
+import type { HttpTicket, HttpTransferRouter } from './http-transfer.js';
 import {
-    CHUNK_LIMIT,
     FILE_LIMIT,
     FileCore,
     FileError,
     Mutex,
     fail,
+    fileError,
     secureDirectory,
 } from './file-core.js';
+import {
+    FILES,
+    LEASE_MS,
+    MAX_RECORDS,
+    RECORD_TTL_MS,
+} from '../extensions/protocol.js';
+import type {
+    ChannelOpen,
+    ChannelReceiver,
+    DataChannel,
+} from '../transport-v1/ExtensionTransport.js';
 
-export const FTE_PREFIX = 'cc.qqxing/file-transfer/';
-const TTL = 300;
-// Stdio's existing EOF handler exits immediately. Only our own private staging is removed here.
-const liveManagers = new Set<TransferManager>();
-process.once('exit', () => {
-    for (const manager of liveManagers) manager.cleanupOnExit();
-});
-interface Prepared {
-    handle: string;
-    uri: string;
-    directory: string;
-    staging: string;
+export interface PrepareParams {
+    operationId: string;
+    mode: 'read' | 'write';
     rootId: string;
     path: string;
-    name: string;
-    size: number;
-    direction: 'read' | 'write';
-    version?: string;
-    overwrite: boolean;
+    size?: number;
+    sha256?: string;
+    overwrite?: boolean;
     expectedVersion?: string;
+}
+type State =
+    | 'preparing'
+    | 'prepared'
+    | 'streaming'
+    | 'ready'
+    | 'complete'
+    | 'committing'
+    | 'committed'
+    | 'released'
+    | 'expired'
+    | 'failed'
+    | 'unknown';
+interface Prepared {
+    params: PrepareParams;
+    fingerprint: string;
+    transferId: string;
+    state: State;
     expires: number;
-    transferId?: string;
+    finished?: number;
+    directory?: string;
+    staging?: string;
+    size: number;
+    loaded: number;
+    version?: string;
+    sha256?: string;
+    error?: { code: string; message: string };
+    result?: { path: string; size: number; sha256: string; version: string };
+    published?: false;
+    commitHash?: string;
+    job?: Promise<unknown>;
+    cleanup?: Promise<void>;
+    bound: boolean;
     fd?: FileHandle;
-    offset: number;
-    status: 'prepared' | 'active' | 'closed' | 'committing';
-    http?: HttpTicket;
-    stream?: AbortController;
-    hash?: string;
+    hash: ReturnType<typeof createHash>;
+    io: Mutex;
+    abort: AbortController;
+    channel?: DataChannel;
+    ticket?: HttpTicket;
 }
-function fteFail(code: string, message: string, rpcCode: number): never {
-    throw new FileError(code, message, rpcCode);
-}
-function integer(
-    value: unknown,
-    name: string,
-    min: number,
-    max: number,
-): number {
-    if (
-        typeof value !== 'number' ||
-        !Number.isSafeInteger(value) ||
-        value < min ||
-        value > max
-    )
-        fteFail('INVALID_OFFSET', `Invalid ${name}`, -32002);
-    return value;
-}
-function string(value: unknown, name: string): string {
-    if (typeof value !== 'string' || !value)
-        fail('INVALID_PARAMS', `Missing ${name}`);
-    return value;
-}
-/** Deliberately handle-only FTE adapter. No file:// paths, no direct target writes. */
+const terminal = (state: State) =>
+    ['committed', 'released', 'expired', 'failed', 'unknown'].includes(state);
+const managers = new Set<TransferManager>();
+process.once('exit', () => {
+    for (const manager of managers) manager.cleanupOnExit();
+});
+
+/** Session-owned files v1 resources. HTTP and wire consume the same one-shot transfer. */
 export class TransferManager {
-    private readonly prepared = new Map<string, Prepared>();
-    private readonly transfers = new Map<string, Prepared>();
-    private readonly mutex = new Mutex();
-    private readonly timer: NodeJS.Timeout;
+    private readonly operations = new Map<string, Prepared>();
+    private readonly resources = new Map<string, Prepared>();
     private disposed = false;
+    private readonly timer: NodeJS.Timeout;
+
     constructor(
         private readonly core: FileCore,
         private readonly runtimeDirectory: string,
         private readonly http?: HttpTransferRouter,
-        private readonly authorizeHttp?: () => void,
+        private readonly authorize: () => void = () => {},
+        private readonly wireAvailable = false,
     ) {
-        liveManagers.add(this);
-        this.timer = setInterval(() => {
-            void this.mutex.run(() => this.sweep()).catch(() => {});
-        }, 15000);
+        managers.add(this);
+        this.timer = setInterval(() => this.sweep(), 1000);
         this.timer.unref();
     }
-    private async remove(item: Prepared) {
-        // Invalidate first; a failed cleanup must not leave an accessible stale handle.
-        this.prepared.delete(item.handle);
-        item.http?.remove();
-        item.stream?.abort();
-        if (item.transferId) this.transfers.delete(item.transferId);
-        const fd = item.fd;
-        item.fd = undefined;
-        try {
-            await fd?.close();
-        } finally {
-            await fs.rm(item.directory, { recursive: true, force: true });
+
+    private sweep() {
+        const now = performance.now();
+        for (const [id, item] of this.operations) {
+            if (
+                !terminal(item.state) &&
+                item.state !== 'committing' &&
+                item.expires <= now
+            )
+                this.finish(item, 'expired');
+            if (
+                item.finished !== undefined &&
+                now - item.finished >= RECORD_TTL_MS &&
+                !item.job &&
+                !item.cleanup
+            ) {
+                this.operations.delete(id);
+                this.resources.delete(item.transferId);
+            }
         }
     }
-    private async sweep() {
-        const now = Date.now();
-        for (const item of this.prepared.values())
-            if (item.expires <= now) await this.remove(item);
+
+    private alive(item: Prepared) {
+        if (this.disposed) fail('STALE_CONNECTION', 'File session is closed');
+        if (
+            item.expires <= performance.now() &&
+            !terminal(item.state) &&
+            item.state !== 'committing'
+        )
+            this.finish(item, 'expired');
+        if (item.state === 'expired')
+            fail('LEASE_EXPIRED', 'Transfer lease expired');
+        if (terminal(item.state))
+            fail('INVALID_STATE', 'Transfer is no longer active');
     }
-    private async operation<T>(fn: () => Promise<T>): Promise<T> {
-        return this.mutex.run(async () => {
-            if (this.disposed) fail('SESSION_CLOSED', 'Session is closed');
-            await this.sweep();
-            return fn();
-        });
+
+    private finish(item: Prepared, state: State, error?: unknown) {
+        if (terminal(item.state) || item.state === 'committing') return;
+        item.state = state;
+        item.finished = performance.now();
+        item.published = false;
+        if (error) {
+            const failure = fileError(error);
+            item.error = { code: failure.code, message: failure.message };
+        }
+        item.abort.abort();
+        item.ticket?.remove();
+        item.channel?.close(state.toUpperCase());
+        void this.cleanup(item).catch(() => {});
     }
-    private async make(
-        rootId: string,
-        file: string,
-        size: number,
-        direction: 'read' | 'write',
-        overwrite = false,
-        expectedVersion?: string,
-    ): Promise<Prepared> {
-        if (this.prepared.size >= 2)
-            fail(
-                'TRANSFER_LIMIT',
-                'At most 2 prepared transfers are allowed per session',
-            );
-        await secureDirectory(this.runtimeDirectory);
-        const directory = await fs.mkdtemp(
-            path.join(this.runtimeDirectory, 'transfer-'),
-        );
-        const handle = randomUUID();
+
+    private cleanup(item: Prepared): Promise<void> {
+        if (item.cleanup) return item.cleanup;
+        const pending = item.job;
+        const cleanup = (async () => {
+            await pending?.catch(() => {});
+            await item.io.run(async () => {
+                const fd = item.fd;
+                item.fd = undefined;
+                await fd?.close().catch(() => {});
+                if (item.directory)
+                    await fs.rm(item.directory, {
+                        recursive: true,
+                        force: true,
+                    });
+            });
+        })();
+        item.cleanup = cleanup;
+        void cleanup
+            .finally(() => {
+                if (item.cleanup === cleanup) item.cleanup = undefined;
+            })
+            .catch(() => {});
+        return cleanup;
+    }
+
+    private view(item: Prepared) {
+        const operationId = item.params.operationId;
+        if (item.state === 'preparing')
+            return { operationId, state: item.state };
+        if (item.state === 'committed')
+            return {
+                operationId,
+                transferId: item.transferId,
+                state: item.state,
+                result: item.result,
+            };
+        if (item.state === 'committing')
+            return {
+                operationId,
+                transferId: item.transferId,
+                state: item.state,
+            };
+        if (item.state === 'failed')
+            return {
+                operationId,
+                state: item.state,
+                published: false,
+                error: item.error,
+            };
+        if (item.state === 'released' || item.state === 'expired')
+            return { operationId, state: item.state, published: false };
+        if (item.state === 'unknown') return { operationId, state: item.state };
         return {
-            handle,
-            uri: `staff-transfer://${handle}`,
-            directory,
-            staging: path.join(directory, 'data'),
-            rootId,
-            path: file,
-            name: path.basename(file),
-            size,
-            direction,
-            overwrite,
-            expectedVersion,
-            expires: Date.now() + TTL * 1000,
-            offset: 0,
-            status: 'prepared',
+            operationId,
+            transferId: item.transferId,
+            state: item.state,
+            loaded: item.loaded,
+            size: item.size,
         };
     }
-    async prepareUpload(
-        rootId: string,
-        file: string,
-        size: number,
-        overwrite = false,
-        expectedVersion?: string,
-    ) {
-        return this.operation(async () => {
-            if (!Number.isSafeInteger(size) || size < 0 || size > FILE_LIMIT)
-                fail('TOO_LARGE', 'Upload size must be 0..100 MiB');
-            await this.core.mutex.run(() =>
-                this.core.checkDestination(
-                    rootId,
-                    file,
-                    overwrite,
-                    expectedVersion,
-                ),
-            );
-            const item = await this.make(
-                rootId,
-                file,
-                size,
-                'write',
-                overwrite,
-                expectedVersion,
-            );
-            this.prepared.set(item.handle, item);
-            this.ticket(item);
-            return {
-                handle: item.handle,
-                ...this.httpResult(item),
-                uri: item.uri,
-                name: item.name,
-                size,
-                ...(expectedVersion ? { version: expectedVersion } : {}),
-            };
-        });
+
+    private preparedView(item: Prepared) {
+        if (terminal(item.state) || item.state === 'committing')
+            return this.view(item);
+        return {
+            ...this.view(item),
+            name: path.basename(item.params.path),
+            ...(item.sha256 ? { sha256: item.sha256 } : {}),
+            ...(item.version ? { version: item.version } : {}),
+            expiresInMs: Math.max(
+                1,
+                Math.ceil(item.expires - performance.now()),
+            ),
+            recordTtlMs: RECORD_TTL_MS,
+            ...(this.wireAvailable
+                ? {
+                      link: {
+                          kind: 'channel',
+                          purpose: FILES,
+                          resourceId: item.transferId,
+                          direction:
+                              item.params.mode === 'write'
+                                  ? 'host-to-remote'
+                                  : 'remote-to-host',
+                      },
+                  }
+                : {}),
+            ...(item.ticket && !item.bound
+                ? { http: { path: item.ticket.path, token: item.ticket.token } }
+                : {}),
+        };
     }
-    async prepareDownload(rootId: string, file: string) {
-        return this.operation(async () => {
-            // Validate before allocating staging; snapshot rechecks source identity before returning.
-            await this.core.resolve(rootId, file);
-            const item = await this.make(rootId, file, 0, 'read');
-            try {
+
+    async prepare(params: PrepareParams) {
+        this.authorize();
+        if (this.disposed) fail('STALE_CONNECTION', 'File session is closed');
+        this.sweep();
+        const normalized = { ...params, overwrite: params.overwrite ?? false };
+        const fingerprint = JSON.stringify([
+            normalized.mode,
+            normalized.rootId,
+            normalized.path,
+            normalized.size ?? null,
+            normalized.sha256 ?? null,
+            normalized.overwrite,
+            normalized.expectedVersion ?? null,
+        ]);
+        const existing = this.operations.get(params.operationId);
+        if (existing) {
+            if (existing.fingerprint && existing.fingerprint !== fingerprint)
+                fail('IDEMPOTENCY_CONFLICT', 'Operation parameters changed');
+            await existing.job?.catch(() => {});
+            return this.preparedView(existing);
+        }
+        if (!this.http && !this.wireAvailable)
+            fail('CAPABILITY_UNAVAILABLE', 'No binary transport is available');
+        if (this.operations.size >= MAX_RECORDS)
+            fail('LIMIT_EXCEEDED', 'Transfer record limit reached');
+        if (
+            [...this.operations.values()].filter(
+                (item) => !terminal(item.state),
+            ).length >= 2
+        )
+            fail(
+                'LIMIT_EXCEEDED',
+                'At most two transfers are allowed per session',
+            );
+        if (params.mode === 'write') {
+            if (
+                !Number.isSafeInteger(params.size) ||
+                params.size! < 0 ||
+                params.size! > FILE_LIMIT
+            )
+                fail('INVALID_PARAMS', 'Write size must be 0..100 MiB');
+            if (!!params.overwrite !== (params.expectedVersion !== undefined))
+                fail(
+                    'INVALID_PARAMS',
+                    'Overwrite requires expectedVersion; new files forbid it',
+                );
+        } else if (
+            params.size !== undefined ||
+            params.sha256 !== undefined ||
+            params.overwrite !== undefined ||
+            params.expectedVersion !== undefined
+        ) {
+            fail(
+                'INVALID_PARAMS',
+                'Read prepare does not accept write parameters',
+            );
+        }
+        const item: Prepared = {
+            params: normalized,
+            fingerprint,
+            transferId: randomUUID(),
+            state: 'preparing',
+            expires: performance.now() + LEASE_MS,
+            size: params.size ?? 0,
+            loaded: 0,
+            bound: false,
+            hash: createHash('sha256'),
+            io: new Mutex(),
+            abort: new AbortController(),
+        };
+        // Register synchronously, before the first filesystem await, including in-flight deduplication.
+        this.operations.set(params.operationId, item);
+        this.resources.set(item.transferId, item);
+        const job = this.prepareItem(item);
+        item.job = job;
+        try {
+            await job;
+        } finally {
+            item.job = undefined;
+            if (terminal(item.state)) await this.cleanup(item);
+        }
+        return this.preparedView(item);
+    }
+
+    private async prepareItem(item: Prepared) {
+        try {
+            const p = item.params;
+            if (p.mode === 'write')
+                await this.core.mutex.run(() =>
+                    this.core.checkDestination(
+                        p.rootId,
+                        p.path,
+                        p.overwrite,
+                        p.expectedVersion,
+                    ),
+                );
+            else await this.core.resolve(p.rootId, p.path);
+            this.alive(item);
+            await secureDirectory(this.runtimeDirectory);
+            this.alive(item);
+            item.directory = await fs.mkdtemp(
+                path.join(this.runtimeDirectory, 'transfer-'),
+            );
+            item.staging = path.join(item.directory, 'data');
+            this.alive(item);
+            if (p.mode === 'read') {
                 const snapshot = await this.core.snapshot(
-                    rootId,
-                    file,
+                    p.rootId,
+                    p.path,
                     item.staging,
                 );
-                Object.assign(item, snapshot);
-                this.prepared.set(item.handle, item);
-                this.ticket(item);
-                return {
-                    handle: item.handle,
-                    ...this.httpResult(item),
-                    sha256: snapshot.version,
-                    uri: item.uri,
-                    ...snapshot,
-                };
-            } catch (e) {
-                await this.remove(item);
-                throw e;
+                item.size = snapshot.size;
+                item.version = snapshot.version;
+                item.sha256 = snapshot.version;
             }
+            this.alive(item);
+            this.authorize();
+            item.state = 'prepared';
+            if (this.http)
+                item.ticket = this.http.register((request, response) =>
+                    this.streamHttp(item, request, response),
+                );
+        } catch (error) {
+            this.finish(item, 'failed', error);
+            throw error;
+        }
+    }
+
+    status(operationId: string) {
+        this.sweep();
+        const item = this.operations.get(operationId);
+        return item ? this.view(item) : { operationId, state: 'unknown' };
+    }
+
+    renew(operationId: string) {
+        this.authorize();
+        const item = this.operations.get(operationId);
+        if (!item) fail('RESOURCE_NOT_FOUND', 'Unknown transfer');
+        this.alive(item);
+        if (item.state === 'committing')
+            fail('TOO_LATE', 'Commit already admitted');
+        item.expires = performance.now() + LEASE_MS;
+        return { operationId, expiresInMs: LEASE_MS };
+    }
+
+    private async bind(item: Prepared, channel?: DataChannel) {
+        this.authorize();
+        this.alive(item);
+        if (item.state !== 'prepared' || item.bound)
+            fail('INVALID_STATE', 'Transfer may be bound only once');
+        item.bound = true;
+        item.state = 'streaming';
+        item.channel = channel;
+        item.ticket?.remove();
+        if (item.params.mode === 'write') {
+            try {
+                await item.io.run(async () => {
+                    this.alive(item);
+                    item.fd = await fs.open(
+                        item.staging!,
+                        constants.O_WRONLY |
+                            constants.O_CREAT |
+                            constants.O_EXCL |
+                            constants.O_NOFOLLOW,
+                        0o600,
+                    );
+                    this.alive(item);
+                });
+            } catch (error) {
+                this.finish(item, 'failed', error);
+                throw error;
+            }
+        }
+    }
+
+    private async write(item: Prepared, data: Uint8Array) {
+        await item.io.run(async () => {
+            this.authorize();
+            this.alive(item);
+            if (item.state !== 'streaming' || item.params.mode !== 'write')
+                fail('INVALID_STATE', 'Not writable');
+            if (
+                data.byteLength > 65536 ||
+                item.loaded + data.byteLength > item.size
+            )
+                fail(
+                    'SIZE_MISMATCH',
+                    'Data exceeds prepared size or frame limit',
+                );
+            let written = 0;
+            while (written < data.byteLength) {
+                const result = await item.fd!.write(
+                    data,
+                    written,
+                    data.byteLength - written,
+                    item.loaded + written,
+                );
+                if (!result.bytesWritten)
+                    fail('IO_ERROR', 'Unable to write transfer data');
+                written += result.bytesWritten;
+            }
+            item.hash.update(data);
+            item.loaded += written;
+            this.alive(item);
         });
     }
-    private httpResult(item: Prepared) {
-        return item.http
-            ? { http: { path: item.http.path, token: item.http.token } }
-            : {};
+
+    private async endWrite(item: Prepared) {
+        await item.io.run(async () => {
+            this.alive(item);
+            if (item.state !== 'streaming')
+                fail('INVALID_STATE', 'Transfer is not streaming');
+            if (item.loaded !== item.size)
+                fail('SIZE_MISMATCH', 'Transfer is incomplete');
+            await item.fd!.sync();
+            await item.fd!.close();
+            item.fd = undefined;
+            item.sha256 = item.hash.digest('hex');
+            if (item.params.sha256 && item.params.sha256 !== item.sha256)
+                fail('HASH_MISMATCH', 'Transfer digest differs');
+            this.alive(item);
+            item.state = 'ready';
+        });
     }
-    private ticket(item: Prepared) {
-        if (this.http)
-            item.http = this.http.register((request, response) =>
-                this.stream(item, request, response),
-            );
+
+    private async read(
+        item: Prepared,
+        write: (data: Uint8Array) => Promise<void>,
+    ) {
+        const input = (
+            await fs.open(
+                item.staging!,
+                constants.O_RDONLY | constants.O_NOFOLLOW,
+            )
+        ).createReadStream({ highWaterMark: 65536 });
+        const abort = () =>
+            input.destroy(new FileError('INVALID_STATE', 'Transfer closed'));
+        item.abort.signal.addEventListener('abort', abort, { once: true });
+        try {
+            for await (const chunk of input) {
+                this.authorize();
+                this.alive(item);
+                await write(chunk);
+                item.loaded += chunk.byteLength;
+            }
+            this.alive(item);
+            if (item.loaded !== item.size)
+                fail('SIZE_MISMATCH', 'Snapshot is incomplete');
+            item.state = 'complete';
+        } finally {
+            item.abort.signal.removeEventListener('abort', abort);
+            input.destroy();
+        }
     }
-    private async stream(
+
+    async acceptChannel(
+        open: ChannelOpen,
+        channel: DataChannel,
+    ): Promise<ChannelReceiver> {
+        const item = this.resources.get(open.resourceId);
+        if (!item)
+            fail('RESOURCE_NOT_FOUND', 'Unknown transfer in this session');
+        const direction =
+            item.params.mode === 'write' ? 'host-to-remote' : 'remote-to-host';
+        if (open.purpose !== FILES || open.direction !== direction)
+            fail('INVALID_PARAMS', 'Invalid files channel direction');
+        await this.bind(item, channel);
+        const failure = (error: unknown) => {
+            this.finish(item, 'failed', error);
+        };
+        if (item.params.mode === 'read') {
+            // Do not block channel acceptance on the first credit. The wire writer waits for accept.
+            void this.read(item, (data) => channel.write(data))
+                .then(() => channel.end())
+                .catch(failure);
+        }
+        return {
+            data: async (data) => {
+                try {
+                    if (item.params.mode !== 'write')
+                        fail(
+                            'INVALID_STATE',
+                            'Read channel cannot receive data',
+                        );
+                    // Resolution, and therefore wire credit, follows the async disk write.
+                    await this.write(item, data);
+                } catch (error) {
+                    failure(error);
+                    throw error;
+                }
+            },
+            end: async () => {
+                if (item.params.mode !== 'write') return;
+                try {
+                    await this.endWrite(item);
+                } catch (error) {
+                    failure(error);
+                    throw error;
+                }
+            },
+            close: (reason) => {
+                if (
+                    item.state === 'ready' ||
+                    item.state === 'complete' ||
+                    terminal(item.state) ||
+                    item.state === 'committing'
+                )
+                    return;
+                failure(
+                    reason ??
+                        new FileError(
+                            'INVALID_STATE',
+                            'Channel closed before completion',
+                        ),
+                );
+            },
+        };
+    }
+
+    private async streamHttp(
         item: Prepared,
         request: IncomingMessage,
         response: ServerResponse,
     ) {
-        // Admission is serialized, network I/O is not. Discard/expiry/close can abort it immediately.
-        await this.operation(async () => {
-            this.authorizeHttp?.();
-            if (
-                this.prepared.get(item.handle) !== item ||
-                item.status !== 'prepared'
-            )
-                fail('INVALID_HANDLE', 'Transfer has already been consumed');
-            const method = item.direction === 'write' ? 'PUT' : 'GET';
-            if (request.method !== method)
-                fail('INVALID_PARAMS', `Transfer requires ${method}`);
-            const length = request.headers['content-length'];
-            if (
-                item.direction === 'write' &&
-                length !== undefined &&
-                (!/^\d+$/.test(length) || Number(length) !== item.size)
-            )
-                fail(
-                    'SIZE_MISMATCH',
-                    'Content-Length does not match prepared size',
-                );
-            item.status = 'active';
-            item.stream = new AbortController();
-            item.http?.remove();
-        });
-        const signal = item.stream!.signal;
+        this.authorize();
+        const method = item.params.mode === 'write' ? 'PUT' : 'GET';
+        if (request.method !== method)
+            fail('INVALID_PARAMS', 'Invalid binary transfer method');
+        const length = request.headers['content-length'];
+        if (
+            item.params.mode === 'write' &&
+            length !== undefined &&
+            (!/^\d+$/.test(length) || Number(length) !== item.size)
+        )
+            fail('SIZE_MISMATCH', 'Content-Length differs from prepared size');
+        await this.bind(item);
         const disconnected = () => {
-            if (!response.writableFinished) item.stream?.abort();
+            if (!response.writableFinished)
+                this.finish(
+                    item,
+                    'failed',
+                    new FileError('INVALID_STATE', 'HTTP stream disconnected'),
+                );
         };
         response.once('close', disconnected);
-        const progress = new Transform({
-            transform(chunk: Buffer, _encoding, callback) {
-                item.offset += chunk.length;
-                if (item.offset > item.size || item.offset > FILE_LIMIT) {
-                    callback(
-                        new FileError(
-                            'SIZE_MISMATCH',
-                            'Stream exceeds prepared size',
-                        ),
-                    );
-                    return;
-                }
-                item.expires = Date.now() + TTL * 1000;
-                callback(null, chunk);
-            },
-        });
         try {
-            if (item.direction === 'write') {
-                const hash = createHash('sha256');
-                progress.on('data', (chunk: Buffer) => hash.update(chunk));
-                const fd = await fs.open(
-                    item.staging,
-                    constants.O_WRONLY |
-                        constants.O_CREAT |
-                        constants.O_EXCL |
-                        constants.O_NOFOLLOW,
-                    0o600,
-                );
-                try {
-                    await pipeline(
-                        request,
-                        progress,
-                        // The stream owns its FileHandle reference; flush before auto-close.
-                        fd.createWriteStream({ autoClose: true, flush: true }),
-                        { signal },
-                    );
-                    if (item.offset !== item.size)
-                        fail('SIZE_MISMATCH', 'Upload is incomplete');
-                } finally {
-                    await fd.close();
-                }
-                if (
-                    signal.aborted ||
-                    this.disposed ||
-                    this.prepared.get(item.handle) !== item
-                )
-                    fail('SESSION_CLOSED', 'Transfer was cancelled');
-                item.hash = hash.digest('hex');
-                item.status = 'closed';
-                item.stream = undefined;
+            if (item.params.mode === 'write') {
+                const output = new Writable({
+                    highWaterMark: 65536,
+                    write: (chunk: Buffer, _encoding, callback) => {
+                        const consume = async () => {
+                            for (
+                                let offset = 0;
+                                offset < chunk.length;
+                                offset += 65536
+                            )
+                                await this.write(
+                                    item,
+                                    chunk.subarray(offset, offset + 65536),
+                                );
+                        };
+                        void consume().then(() => callback(), callback);
+                    },
+                });
+                await pipeline(request, output, { signal: item.abort.signal });
+                await this.endWrite(item);
                 response.setHeader('Content-Type', 'application/json');
-                response.end(JSON.stringify({ size: item.offset }));
+                response.end(
+                    JSON.stringify({ size: item.loaded, sha256: item.sha256 }),
+                );
             } else {
                 response.setHeader('Content-Type', 'application/octet-stream');
                 response.setHeader('Content-Length', item.size);
-                const fd = await fs.open(
-                    item.staging,
-                    constants.O_RDONLY | constants.O_NOFOLLOW,
+                await this.read(
+                    item,
+                    (data) =>
+                        new Promise<void>((resolve, reject) => {
+                            response.write(data, (error) =>
+                                error ? reject(error) : resolve(),
+                            );
+                        }),
                 );
-                try {
-                    await pipeline(
-                        fd.createReadStream({ autoClose: true }),
-                        progress,
-                        response,
-                        { signal },
-                    );
-                } finally {
-                    await fd.close();
-                }
-                if (item.offset !== item.size)
-                    fail('SIZE_MISMATCH', 'Snapshot is incomplete');
-                // Keep the handle for explicit release, but never allow another read.
-                item.status = 'closed';
-                item.stream = undefined;
+                response.end();
             }
         } catch (error) {
-            await this.remove(item);
+            this.finish(item, 'failed', error);
             throw error;
         } finally {
             response.removeListener('close', disconnected);
         }
     }
-    private handle(handle: string, direction: Prepared['direction']) {
-        const item = this.prepared.get(handle);
-        if (!item || item.direction !== direction)
-            fail('INVALID_HANDLE', 'Unknown or expired session-bound handle');
-        item.expires = Date.now() + TTL * 1000;
-        return item;
-    }
-    private transfer(id: unknown, direction?: Prepared['direction']) {
-        const item = this.transfers.get(string(id, 'transfer_id'));
-        if (!item || (direction && item.direction !== direction))
-            fteFail(
-                'TRANSFER_NOT_FOUND',
-                'Unknown transfer in this session',
-                -32000,
+
+    async commit(operationId: string, transferId: string, sha256: string) {
+        this.authorize();
+        const item = this.operations.get(operationId);
+        if (
+            !item ||
+            item.transferId !== transferId ||
+            item.params.mode !== 'write'
+        )
+            fail('RESOURCE_NOT_FOUND', 'Unknown write transfer');
+        if (item.commitHash !== undefined) {
+            if (item.commitHash !== sha256)
+                fail('IDEMPOTENCY_CONFLICT', 'Commit digest changed');
+            return this.view(item);
+        }
+        this.alive(item);
+        if (item.state !== 'ready')
+            fail('NOT_READY', 'Write stream must finish before commit');
+        if (sha256 !== item.sha256) {
+            this.finish(
+                item,
+                'failed',
+                new FileError('HASH_MISMATCH', 'Transfer digest differs'),
             );
-        if (item.status !== 'active')
-            fteFail('TRANSFER_NOT_FOUND', 'Transfer is closed', -32000);
-        item.expires = Date.now() + TTL * 1000;
-        return item;
-    }
-    private async hash(item: Prepared) {
-        const fd = await fs.open(
-            item.staging,
-            constants.O_RDONLY | constants.O_NOFOLLOW,
-        );
+            fail('HASH_MISMATCH', 'Transfer digest differs');
+        }
+        // Synchronous admission fences cancellation before any await or publication.
+        item.commitHash = sha256;
+        item.state = 'committing';
+        item.ticket?.remove();
         try {
-            const hash = createHash('sha256');
-            const buffer = Buffer.alloc(CHUNK_LIMIT);
-            let offset = 0;
-            while (true) {
-                const { bytesRead } = await fd.read(
-                    buffer,
-                    0,
-                    buffer.length,
-                    offset,
-                );
-                if (!bytesRead) break;
-                hash.update(buffer.subarray(0, bytesRead));
-                offset += bytesRead;
-            }
-            if (offset !== item.size)
-                fail(
-                    'SIZE_MISMATCH',
-                    'Staged size does not match prepared size',
-                );
-            return hash.digest('hex');
-        } finally {
-            await fd.close();
-        }
-    }
-    async commit(uploadHandle: string, sha256: string) {
-        return this.operation(async () => {
-            const item = this.handle(uploadHandle, 'write');
-            if (item.status !== 'closed')
-                fail(
-                    'TRANSFER_INCOMPLETE',
-                    'write/close must finish before upload/commit',
-                );
-            if (!/^[a-fA-F0-9]{64}$/.test(sha256))
-                fail(
-                    'INVALID_PARAMS',
-                    'sha256 must be a hexadecimal SHA-256 digest',
-                );
-            const actual = item.hash;
-            if (actual !== sha256.toLowerCase()) {
-                await this.remove(item);
-                fteFail(
-                    'HASH_MISMATCH',
-                    'Upload SHA-256 does not match',
-                    -32004,
-                );
-            }
-            item.status = 'committing';
-            try {
-                return await this.core.commitUpload(
-                    item.rootId,
-                    item.path,
-                    item.staging,
-                    item.overwrite,
-                    item.expectedVersion,
-                    actual,
-                );
-            } finally {
-                await this.remove(item);
-            }
-        });
-    }
-    async discard(uploadHandle: string) {
-        const known = this.prepared.get(uploadHandle);
-        if (known?.status === 'committing')
-            fail('TOO_LATE', 'Upload commit has already started');
-        const active = known?.direction === 'write' ? known.stream : undefined;
-        active?.abort();
-        return this.operation(async () => {
-            // A queued commit may have won admission; never claim that it was undone.
-            if (known?.status === 'committing')
-                fail('TOO_LATE', 'Upload commit has already started');
-            // Aborting the pipeline may already have completed its own cleanup.
-            if (active?.signal.aborted && !this.prepared.has(uploadHandle))
-                return {};
-            const item = this.handle(uploadHandle, 'write');
-            await this.remove(item);
-            return {};
-        });
-    }
-    async release(downloadHandle: string) {
-        const known = this.prepared.get(downloadHandle);
-        const active = known?.direction === 'read' ? known.stream : undefined;
-        active?.abort();
-        return this.operation(async () => {
-            if (active?.signal.aborted && !this.prepared.has(downloadHandle))
-                return {};
-            const item = this.handle(downloadHandle, 'read');
-            await this.remove(item);
-            return {};
-        });
-    }
-    async fte(method: string, params: Record<string, unknown>) {
-        return this.operation(async () => {
-            if (method === 'write/init' || method === 'read/init') {
-                const uri = string(params.uri, 'uri');
-                const direction = method === 'write/init' ? 'write' : 'read';
-                const item = [...this.prepared.values()].find(
-                    (value) =>
-                        value.uri === uri && value.direction === direction,
-                );
-                if (!item)
-                    fteFail(
-                        'URI_NOT_ALLOWED',
-                        'Only prepared staff-transfer URIs from this session are allowed',
-                        -32001,
-                    );
-                if (item.status !== 'prepared')
-                    fteFail(
-                        'WRITE_CONFLICT',
-                        'Transfer already initialized',
-                        -32007,
-                    );
-                if (
-                    direction === 'write' &&
-                    params.expected_size !== undefined &&
-                    params.expected_size !== item.size
-                )
-                    fail(
-                        'SIZE_MISMATCH',
-                        'expected_size must equal prepared size',
-                    );
-                if (
-                    params.force !== undefined &&
-                    typeof params.force !== 'boolean'
-                )
-                    fail('INVALID_PARAMS', 'force must be a boolean');
-                item.fd = await fs.open(
-                    item.staging,
-                    direction === 'write'
-                        ? constants.O_WRONLY |
-                              constants.O_CREAT |
-                              constants.O_EXCL |
-                              constants.O_NOFOLLOW
-                        : constants.O_RDONLY | constants.O_NOFOLLOW,
-                    0o600,
-                );
-                item.http?.remove();
-                item.transferId = `staff-transfer-${randomUUID()}`;
-                item.status = 'active';
-                item.expires = Date.now() + TTL * 1000;
-                this.transfers.set(item.transferId, item);
-                return {
-                    transfer_id: item.transferId,
-                    ...(direction === 'read' ? { total_size: item.size } : {}),
-                    ttl: TTL,
-                };
-            }
-            if (method === 'write/chunk') {
-                const item = this.transfer(params.transfer_id, 'write');
-                const offset = integer(params.offset, 'offset', 0, FILE_LIMIT);
-                if (offset !== item.offset)
-                    fteFail(
-                        'INVALID_OFFSET',
-                        'Writes must be sequential without gaps or replay',
-                        -32002,
-                    );
-                const data =
-                    typeof params.data === 'string'
-                        ? params.data
-                        : fail('INVALID_PARAMS', 'data must be Base64');
-                if (data.length > 4 * Math.ceil(CHUNK_LIMIT / 3))
-                    fail('TOO_LARGE', 'Chunk limit is 512 KiB');
-                if (
-                    data.length % 4 !== 0 ||
-                    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-                        data,
-                    )
-                )
-                    fail('INVALID_PARAMS', 'Invalid Base64');
-                const bytes = Buffer.from(data, 'base64');
-                if (bytes.toString('base64') !== data)
-                    fail(
-                        'INVALID_PARAMS',
-                        'Base64 must use canonical encoding',
-                    );
-                if (
-                    bytes.length > CHUNK_LIMIT ||
-                    offset + bytes.length > item.size ||
-                    offset + bytes.length > FILE_LIMIT
-                )
-                    fail('TOO_LARGE', 'Chunk exceeds transfer bounds');
-                let written = 0;
-                while (written < bytes.length) {
-                    const result = await item.fd!.write(
-                        bytes,
-                        written,
-                        bytes.length - written,
-                        offset + written,
-                    );
-                    if (!result.bytesWritten)
-                        fail('IO_ERROR', 'Unable to write chunk');
-                    written += result.bytesWritten;
-                }
-                item.offset += written;
-                return { bytes_written: written };
-            }
-            if (method === 'read/chunk') {
-                const item = this.transfer(params.transfer_id, 'read');
-                const offset = integer(params.offset, 'offset', 0, item.size);
-                const length = integer(params.length, 'length', 1, CHUNK_LIMIT);
-                const bytes = Buffer.alloc(
-                    Math.min(length, item.size - offset),
-                );
-                let read = 0;
-                while (read < bytes.length) {
-                    const { bytesRead } = await item.fd!.read(
-                        bytes,
-                        read,
-                        bytes.length - read,
-                        offset + read,
-                    );
-                    if (!bytesRead)
-                        fail('IO_ERROR', 'Download snapshot was truncated');
-                    read += bytesRead;
-                }
-                return {
-                    data: bytes.toString('base64'),
-                    eof: offset + read >= item.size,
-                };
-            }
-            if (method === 'write/close') {
-                const item = this.transfer(params.transfer_id, 'write');
-                if (item.offset !== item.size)
-                    fail('SIZE_MISMATCH', 'Transfer is incomplete');
-                if (
-                    params.hash_algorithm !== undefined &&
-                    params.hash_algorithm !== 'sha256'
-                )
-                    fail('INVALID_PARAMS', 'Only sha256 is supported');
-                if (
-                    params.expected_hash !== undefined &&
-                    (typeof params.expected_hash !== 'string' ||
-                        !/^[a-fA-F0-9]{64}$/.test(params.expected_hash))
-                )
-                    fail('INVALID_PARAMS', 'Invalid expected_hash');
-                await item.fd!.sync();
-                await item.fd!.close();
-                item.fd = undefined;
-                item.hash = await this.hash(item);
-                item.status = 'closed';
-                this.transfers.delete(item.transferId!);
-                if (
-                    params.expected_hash !== undefined &&
-                    item.hash !== (params.expected_hash as string).toLowerCase()
-                ) {
-                    await this.remove(item);
-                    fteFail(
-                        'HASH_MISMATCH',
-                        'Upload SHA-256 does not match',
-                        -32004,
-                    );
-                }
-                return params.expected_hash !== undefined
-                    ? { verified: true }
-                    : {};
-            }
-            if (method === 'read/close') {
-                const item = this.transfer(params.transfer_id, 'read');
-                await item.fd!.close();
-                item.fd = undefined;
-                item.status = 'closed';
-                this.transfers.delete(item.transferId!);
-                return {};
-            }
-            if (method === 'abort') {
-                const item = this.transfer(params.transfer_id);
-                await this.remove(item);
-                return {};
-            }
-            throw new FileError(
-                'METHOD_NOT_FOUND',
-                'Unknown FTE method',
-                -32601,
+            const result = await this.core.commitUpload(
+                item.params.rootId,
+                item.params.path,
+                item.staging!,
+                item.params.overwrite ?? false,
+                item.params.expectedVersion,
+                sha256,
             );
-        });
+            item.result = { ...result, sha256 };
+            item.state = 'committed';
+        } catch (error) {
+            // A post-link/rename I/O failure can have published. Never claim rollback.
+            if (error instanceof FileError) {
+                item.state = 'failed';
+                item.published = false;
+                item.error = { code: error.code, message: error.message };
+            } else {
+                item.state = 'unknown';
+            }
+            throw error;
+        } finally {
+            item.finished = performance.now();
+            await this.cleanup(item).catch(() => {});
+        }
+        return this.view(item);
     }
+
+    release(operationId: string) {
+        const item = this.operations.get(operationId);
+        if (!item) {
+            // A cancel-before-prepare tombstone prevents a delayed create on this operation.
+            this.sweep();
+            if (this.operations.size >= MAX_RECORDS)
+                fail('LIMIT_EXCEEDED', 'Transfer record limit reached');
+            const tombstone: Prepared = {
+                params: { operationId, mode: 'read', rootId: '', path: '' },
+                fingerprint: '',
+                transferId: randomUUID(),
+                state: 'released',
+                expires: 0,
+                finished: performance.now(),
+                size: 0,
+                loaded: 0,
+                bound: false,
+                hash: createHash('sha256'),
+                io: new Mutex(),
+                abort: new AbortController(),
+            };
+            this.operations.set(operationId, tombstone);
+            return this.view(tombstone);
+        }
+        if (
+            item.state === 'committing' ||
+            item.state === 'committed' ||
+            (item.state === 'unknown' && item.commitHash !== undefined)
+        )
+            fail('TOO_LATE', 'Commit already admitted');
+        this.sweep();
+        if (!terminal(item.state)) this.finish(item, 'released');
+        return this.view(item);
+    }
+
     cleanupOnExit() {
-        for (const item of this.prepared.values()) {
-            try {
-                rmSync(item.directory, { recursive: true, force: true });
-            } catch {
-                /* process exit */
+        for (const item of this.operations.values()) {
+            if (item.directory) {
+                try {
+                    rmSync(item.directory, { recursive: true, force: true });
+                } catch {
+                    /* process exit */
+                }
             }
         }
     }
+
     async close() {
+        if (this.disposed) return;
         this.disposed = true;
-        for (const item of this.prepared.values()) item.stream?.abort();
-        liveManagers.delete(this);
         clearInterval(this.timer);
-        await this.mutex.run(async () => {
-            const errors: unknown[] = [];
-            for (const item of this.prepared.values()) {
-                try {
-                    await this.remove(item);
-                } catch (e) {
-                    errors.push(e);
-                }
-            }
-            if (errors.length) throw errors[0];
-        });
+        managers.delete(this);
+        for (const item of this.operations.values())
+            this.finish(item, 'released');
+        await Promise.all(
+            [...this.operations.values()]
+                .filter((item) => item.state !== 'committing')
+                .map((item) => this.cleanup(item)),
+        );
     }
 }

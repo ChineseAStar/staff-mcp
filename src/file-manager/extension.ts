@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
@@ -20,48 +21,19 @@ import {
     utf8,
     relativePath,
 } from './file-core.js';
-import { TransferManager, FTE_PREFIX } from './transfers.js';
+import { TransferManager } from './transfers.js';
+import {
+    APPS,
+    FILES,
+    TERMINAL,
+    parse as parseExtension,
+    operationId,
+    supports,
+} from '../extensions/protocol.js';
+import { FILE_MANAGER, readAppResource } from '../extensions/apps.js';
 import { takeHttpTransfers } from './http-transfer.js';
 
-export const FILE_MANAGER = 'cc.qqxing/file-manager';
-export const UI_URI = 'ui://staff-file-manager/v1/index.html';
 const RESOURCE_LIMIT = 256 * 1024;
-export const MCP_APPS = 'cc.qqxing/apps';
-export const APPS_CAPABILITY = {
-    version: 1,
-    apps: [
-        {
-            id: 'files',
-            title: '文件管理器',
-            resourceUri: UI_URI,
-            mimeType: 'text/html',
-            bridgeVersion: 1,
-            icon: 'folder',
-            methods: [
-                'roots',
-                'list',
-                'stat',
-                'readText',
-                'saveText',
-                'createFile',
-                'mkdir',
-                'move',
-                'delete',
-            ].map((method) => `${FILE_MANAGER}/${method}`),
-            transfers: {
-                upload: {
-                    prepare: `${FILE_MANAGER}/upload/prepare`,
-                    commit: `${FILE_MANAGER}/upload/commit`,
-                    release: `${FILE_MANAGER}/upload/discard`,
-                },
-                download: {
-                    prepare: `${FILE_MANAGER}/download/prepare`,
-                    release: `${FILE_MANAGER}/download/release`,
-                },
-            },
-        },
-    ],
-};
 const pathField = z.string();
 const rootPath = { rootId: z.string().default('main'), path: pathField };
 const expected = z.string().min(1).optional();
@@ -105,24 +77,6 @@ const params = {
             expectedVersion: expected,
         })
         .strict(),
-    'upload/prepare': z
-        .object({
-            ...rootPath,
-            size: z
-                .number()
-                .int()
-                .min(0)
-                .max(100 * 1024 * 1024),
-            overwrite: z.boolean().default(false),
-            expectedVersion: expected,
-        })
-        .strict(),
-    'upload/commit': z
-        .object({ handle: z.string().min(1), sha256: z.string() })
-        .strict(),
-    'upload/discard': z.object({ handle: z.string().min(1) }).strict(),
-    'download/prepare': z.object(rootPath).strict(),
-    'download/release': z.object({ handle: z.string().min(1) }).strict(),
 };
 function parse<T extends z.ZodTypeAny>(schema: T, data: unknown): z.infer<T> {
     const parsed = schema.safeParse(data ?? {});
@@ -188,51 +142,42 @@ export class FileManagerSession {
     readonly transfers: TransferManager;
     initialized = false;
     closed = false;
+    private readonly negotiated = new Set<string>();
     readonly subscriptions = new Set<string>();
     constructor(
         private readonly core: FileCore,
         private readonly server: McpServer,
         runtimeDirectory: string,
+        wireAvailable: boolean,
     ) {
         this.transfers = new TransferManager(
             core,
             runtimeDirectory,
             takeHttpTransfers(server),
             () => this.requireExtension(),
+            wireAvailable,
         );
         core.listeners.add(this.notify);
     }
-    requireExtension() {
-        const capability = this.server.server.getClientCapabilities()
-            ?.experimental?.[MCP_APPS] as
-            | { versions?: unknown; bridgeVersions?: unknown }
-            | undefined;
-        if (
-            this.closed ||
-            !this.initialized ||
-            !Array.isArray(capability?.versions) ||
-            !capability.versions.includes(1) ||
-            !Array.isArray(capability.bridgeVersions) ||
-            !capability.bridgeVersions.includes(1)
-        )
-            fail(
-                'EXTENSION_NOT_NEGOTIATED',
-                'File-manager version 1 and bridge version 1 must be negotiated on this initialized session',
-            );
-    }
-    dispatchLegacyWrite(dispatch: () => Promise<void>): Promise<void> {
-        return this.core.withWriteLock(dispatch);
-    }
-    async validateLegacyUri(uri: string) {
-        // Preserve file:// FTE dispatch/results, while closing lexical-sandbox bypasses.
-        // Missing targets remain the existing wrapper's responsibility (including mkdir semantics).
-        let full: string;
-        try {
-            full = fileURLToPath(uri);
-        } catch {
-            throw new FileError('URI_NOT_ALLOWED', 'Invalid file URI', -32001);
+    initialize() {
+        if (this.closed || this.initialized) return;
+        for (const extension of [APPS, FILES, TERMINAL]) {
+            if (supports(this.server, extension))
+                this.negotiated.add(extension);
         }
-        await this.core.validateToolPath(full, true);
+        this.initialized = true;
+    }
+    supports(extension: string) {
+        return (
+            !this.closed && this.initialized && this.negotiated.has(extension)
+        );
+    }
+    requireExtension(extension = FILES) {
+        if (!this.supports(extension))
+            fail(
+                'CAPABILITY_UNAVAILABLE',
+                'Extension version 1 is unavailable on this initialized session',
+            );
     }
     private notify = (rootId: string, changedPath: string) => {
         if (this.closed || !this.initialized) return;
@@ -264,12 +209,13 @@ export function registerFileManager(
     server: McpServer,
     core: FileCore,
     runtimeDirectory: string,
+    terminalAvailable: () => boolean = () => false,
 ) {
     let session: FileManagerSession | undefined;
     const protocol = server.server;
     const previousInitialized = protocol.oninitialized;
     protocol.oninitialized = () => {
-        if (session && !session.closed) session.initialized = true;
+        session?.initialize();
         previousInitialized?.();
     };
     function current() {
@@ -280,13 +226,15 @@ export function registerFileManager(
             );
         return session;
     }
-    function requireExtension() {
-        current().requireExtension();
+    function requireExtension(extension = FILES) {
+        current().requireExtension(extension);
     }
     const guarded =
         <T, R>(handler: (request: T) => Promise<R>) =>
-        async (request: T) => {
+        async (request: T, extra?: { signal?: AbortSignal }) => {
             try {
+                if (extra?.signal?.aborted)
+                    fail('STALE_CONNECTION', 'Request connection closed');
                 return await handler(request);
             } catch (e) {
                 throw rpc(e);
@@ -383,15 +331,12 @@ export function registerFileManager(
         ReadResourceRequestSchema,
         guarded(async (request) => {
             const uri = request.params.uri;
-            if (uri === UI_URI) {
-                requireExtension();
-                // Relative to the compiled module, including npm packages and Docker read-only mounts.
-                const text = await fs.readFile(
-                    new URL('./ui/index.html', import.meta.url),
-                    'utf8',
-                );
-                return { contents: [{ uri, mimeType: 'text/html', text }] };
-            }
+            const app = await readAppResource(
+                uri,
+                requireExtension,
+                terminalAvailable(),
+            );
+            if (app) return app;
             const entry = resource(uri);
             const full = await core.resolve(entry.rootId, entry.file);
             if ((await fs.lstat(full)).isDirectory()) {
@@ -451,8 +396,14 @@ export function registerFileManager(
         SubscribeRequestSchema,
         guarded(async (request) => {
             const entry = resource(request.params.uri);
+            const active = current();
             await core.resolve(entry.rootId, entry.file);
-            current().subscriptions.add(request.params.uri);
+            if (active.closed)
+                fail(
+                    'STALE_CONNECTION',
+                    'Resource subscription connection closed',
+                );
+            active.subscriptions.add(request.params.uri);
             return {};
         }),
     );
@@ -513,32 +464,6 @@ export function registerFileManager(
                     p.expectedVersion,
                 );
             }
-            case 'upload/prepare': {
-                const p = parse(params['upload/prepare'], input);
-                return current().transfers.prepareUpload(
-                    p.rootId,
-                    p.path,
-                    p.size,
-                    p.overwrite,
-                    p.expectedVersion,
-                );
-            }
-            case 'upload/commit': {
-                const p = parse(params['upload/commit'], input);
-                return current().transfers.commit(p.handle, p.sha256);
-            }
-            case 'upload/discard': {
-                const p = parse(params['upload/discard'], input);
-                return current().transfers.discard(p.handle);
-            }
-            case 'download/prepare': {
-                const p = parse(params['download/prepare'], input);
-                return current().transfers.prepareDownload(p.rootId, p.path);
-            }
-            case 'download/release': {
-                const p = parse(params['download/release'], input);
-                return current().transfers.release(p.handle);
-            }
         }
     }
     for (const method of Object.keys(params) as (keyof typeof params)[]) {
@@ -550,35 +475,160 @@ export function registerFileManager(
             guarded(async (request) => extensionCall(method, request.params)),
         );
     }
-    for (const method of [
-        'read/init',
-        'read/chunk',
-        'read/close',
-        'write/init',
-        'write/chunk',
-        'write/close',
-        'abort',
-    ]) {
+    const digest = z.string().regex(/^[a-f0-9]{64}$/);
+    const transferParams = {
+        roots: z.object({}).strict(),
+        resolve: z.object({ uri: z.string().min(1).max(8192) }).strict(),
+        prepare: z
+            .object({
+                operationId,
+                mode: z.enum(['read', 'write']),
+                rootId: z.string().min(1),
+                path: z.string().min(1),
+                size: z
+                    .number()
+                    .int()
+                    .nonnegative()
+                    .safe()
+                    .max(100 * 1024 * 1024)
+                    .optional(),
+                sha256: digest.optional(),
+                overwrite: z.boolean().optional(),
+                expectedVersion: expected,
+            })
+            .strict(),
+        status: z.object({ operationId }).strict(),
+        commit: z
+            .object({
+                operationId,
+                transferId: z.string().min(1),
+                sha256: digest,
+            })
+            .strict(),
+        cancel: z.object({ operationId }).strict(),
+        release: z.object({ operationId }).strict(),
+        renew: z.object({ operationId }).strict(),
+    };
+    async function resolveUri(uri: string) {
+        let url: URL;
+        let full: string;
+        try {
+            url = new URL(uri);
+            if (
+                url.protocol !== 'file:' ||
+                (url.hostname && url.hostname !== 'localhost') ||
+                url.search ||
+                url.hash ||
+                url.username ||
+                url.password ||
+                url.port
+            )
+                fail('INVALID_PARAMS', 'Expected a local file URI');
+            full = fileURLToPath(url);
+        } catch {
+            return fail('INVALID_PARAMS', 'Expected a local file URI');
+        }
+        // Longest matching root is deterministic for overlapping allowed directories.
+        const roots = core
+            .roots()
+            .roots.map((root) => core.root(root.rootId))
+            .sort((a, b) => b.directory.length - a.directory.length);
+        for (const root of roots) {
+            const relative = path.relative(root.directory, full);
+            if (
+                path.isAbsolute(relative) ||
+                relative === '..' ||
+                relative.startsWith(`..${path.sep}`)
+            )
+                continue;
+            const file = relative.split(path.sep).join('/');
+            // Resolve again through FileCore: no relaxation of symlink/private-area checks.
+            await core.resolve(root.rootId, file, { missing: true });
+            return { rootId: root.rootId, path: file };
+        }
+        return fail('OUTSIDE_ROOT', 'File URI is outside allowed roots');
+    }
+    for (const method of Object.keys(
+        transferParams,
+    ) as (keyof typeof transferParams)[]) {
         protocol.setRequestHandler(
             z.object({
-                method: z.literal(`${FTE_PREFIX}${method}`),
+                method: z.literal(`${FILES}/v1/${method}`),
                 params: z.unknown().optional(),
             }),
             guarded(async (request) => {
                 requireExtension();
-                return current().transfers.fte(
-                    method,
-                    parse(z.record(z.string(), z.unknown()), request.params),
-                );
+                const transfers = current().transfers;
+                switch (method) {
+                    case 'roots':
+                        parseExtension(transferParams.roots, request.params);
+                        return core.roots();
+                    case 'resolve':
+                        return resolveUri(
+                            parseExtension(
+                                transferParams.resolve,
+                                request.params,
+                            ).uri,
+                        );
+                    case 'prepare':
+                        return transfers.prepare(
+                            parseExtension(
+                                transferParams.prepare,
+                                request.params,
+                            ),
+                        );
+                    case 'status':
+                        return transfers.status(
+                            parseExtension(
+                                transferParams.status,
+                                request.params,
+                            ).operationId,
+                        );
+                    case 'commit': {
+                        const p = parseExtension(
+                            transferParams.commit,
+                            request.params,
+                        );
+                        return transfers.commit(
+                            p.operationId,
+                            p.transferId,
+                            p.sha256,
+                        );
+                    }
+                    case 'renew':
+                        return transfers.renew(
+                            parseExtension(transferParams.renew, request.params)
+                                .operationId,
+                        );
+                    case 'cancel':
+                        return transfers.release(
+                            parseExtension(
+                                transferParams.cancel,
+                                request.params,
+                            ).operationId,
+                        );
+                    case 'release':
+                        return transfers.release(
+                            parseExtension(
+                                transferParams.release,
+                                request.params,
+                            ).operationId,
+                        );
+                }
             }),
         );
     }
-    return () => {
+    return (wireAvailable: boolean) => {
         if (session && !session.closed)
             throw new Error(
                 'Previous file-manager transport is still connected',
             );
-        session = new FileManagerSession(core, server, runtimeDirectory);
+        session = new FileManagerSession(
+            core,
+            server,
+            runtimeDirectory,
+            wireAvailable,
+        );
         return session;
     };
 }

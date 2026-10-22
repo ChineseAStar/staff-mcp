@@ -1087,7 +1087,9 @@ export function App() {
             : [];
 
     const transferErrors = transfers.jobs.some((job) =>
-        ['error', 'confirm', 'ready'].includes(job.status),
+        ['error', 'confirm', 'ready', 'unknown', 'verifying'].includes(
+            job.status,
+        ),
     );
     const queueVisible = showTransfers || activeTransfers > 0 || transferErrors;
     const parentDirectory = directory.split('/').slice(0, -1).join('/');
@@ -2096,6 +2098,23 @@ export function App() {
                                         )}
                                     </div>
                                     <div className="transfer-actions">
+                                        {['unknown', 'verifying'].includes(
+                                            job.status,
+                                        ) && (
+                                            <button
+                                                disabled={
+                                                    !job.transferId ||
+                                                    job.status === 'verifying'
+                                                }
+                                                onClick={() =>
+                                                    void transfers.verify(
+                                                        job.id,
+                                                    )
+                                                }
+                                            >
+                                                核实状态（只读）
+                                            </button>
+                                        )}
                                         {job.status === 'ready' && (
                                             <>
                                                 <button

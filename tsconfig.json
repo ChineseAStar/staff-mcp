@@ -19,6 +19,7 @@
   "exclude": [
     "node_modules",
     "dist",
-    "src/file-manager/ui"
+    "src/file-manager/ui",
+    "src/terminal/ui"
   ]
 }

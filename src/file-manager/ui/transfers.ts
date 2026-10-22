@@ -14,6 +14,8 @@ type TransferStatus =
     | 'handed-off'
     | 'running'
     | 'finishing'
+    | 'unknown'
+    | 'verifying'
     | 'cancelling'
     | 'done'
     | 'cancelled'
@@ -46,6 +48,8 @@ export const transferLabels: Record<TransferStatus, string> = {
     'handed-off': '已交给浏览器',
     running: '传输中',
     finishing: '校验并提交中',
+    unknown: '提交结果待核实',
+    verifying: '正在核实提交结果',
     cancelling: '正在取消',
     done: '已完成',
     cancelled: '已取消',
@@ -150,13 +154,23 @@ export function useTransfers(
     useEffect(() => {
         if (available) return;
         for (const job of jobsRef.current) {
+            if (job.direction === 'upload' && job.status === 'finishing') {
+                change(job.id, {
+                    status: 'unknown',
+                    error: '连接已暂停或断开，提交结果未确定。请核实原操作状态，不要重新上传。',
+                });
+                continue;
+            }
             if (
                 transferActive(job) &&
                 job.status !== 'confirm' &&
                 job.status !== 'queued'
             ) {
                 change(job.id, {
-                    status: 'error',
+                    status:
+                        job.direction === 'upload' && job.transferId
+                            ? 'cancelling'
+                            : 'error',
                     cancelRequested: true,
                     error: '连接已暂停或断开。结果待核实；重试前会重新检查目标，不会自动重放写入。',
                 });
@@ -187,6 +201,7 @@ export function useTransfers(
         const run = async () => {
             let transferId: string | undefined;
             let committed = false;
+            let commitAttempted = false;
             const cancelled = () =>
                 !enabledRef.current ||
                 !!jobsRef.current.find((entry) => entry.id === job.id)
@@ -224,8 +239,6 @@ export function useTransfers(
                 if (cancelled()) throw new Error('已取消');
                 const prepared = await bridge.request<{
                     transferId: string;
-                    mode: 'http-stream' | 'fte';
-                    chunkSize: number;
                 }>('uploadStart', {
                     rootId: job.rootId,
                     path: job.path,
@@ -241,36 +254,13 @@ export function useTransfers(
                 change(job.id, { transferId });
                 if (cancelled()) throw new Error('已取消');
                 change(job.id, { status: 'running', loaded: 0 });
-                if (prepared.mode === 'http-stream') {
-                    await bridge.request('uploadStream', {
-                        transferId,
-                        file: job.file,
-                    });
-                } else {
-                    for (
-                        let offset = 0;
-                        offset < job.size;
-                        offset += prepared.chunkSize
-                    ) {
-                        if (cancelled()) throw new Error('已取消');
-                        const data = await job
-                            .file!.slice(
-                                offset,
-                                Math.min(offset + prepared.chunkSize, job.size),
-                            )
-                            .arrayBuffer();
-                        if (cancelled()) throw new Error('已取消');
-                        const bytes = data.byteLength;
-                        await bridge.request(
-                            'uploadChunk',
-                            { transferId, offset, data },
-                            [data],
-                        );
-                        change(job.id, { loaded: offset + bytes });
-                    }
-                }
+                await bridge.request('uploadStream', {
+                    transferId,
+                    file: job.file,
+                });
                 if (cancelled()) throw new Error('已取消');
                 change(job.id, { status: 'finishing' });
+                commitAttempted = true;
                 await bridge.request('uploadFinish', { transferId });
                 committed = true;
                 change(job.id, {
@@ -280,6 +270,18 @@ export function useTransfers(
                 });
                 onUploadedRef.current(job.rootId, job.path);
             } catch (error) {
+                if (
+                    commitAttempted ||
+                    (error instanceof BridgeError &&
+                        ['UNKNOWN_COMMIT', 'TOO_LATE'].includes(error.code))
+                ) {
+                    change(job.id, {
+                        status: 'unknown',
+                        error: `提交结果未确定，禁止重新上传。请核实原操作状态：${errorMessage(error)}`,
+                        overwrite: false,
+                    });
+                    return;
+                }
                 const current = jobsRef.current.find(
                     (entry) => entry.id === job.id,
                 );
@@ -297,7 +299,13 @@ export function useTransfers(
                     overwrite: false,
                 });
             } finally {
-                if (transferId && !committed) {
+                if (
+                    transferId &&
+                    !committed &&
+                    !commitAttempted &&
+                    jobsRef.current.find((entry) => entry.id === job.id)
+                        ?.status !== 'unknown'
+                ) {
                     try {
                         await (uploadCancels.current.get(transferId) ??
                             bridge.request('transferCancel', { transferId }));
@@ -318,8 +326,8 @@ export function useTransfers(
                             (entry) => entry.id === job.id,
                         );
                         change(job.id, {
-                            status: 'error',
-                            error: `${current?.error ?? '传输未完成。'} 清理结果待核实：${errorMessage(error)}`,
+                            status: 'unknown',
+                            error: `${current?.error ?? '传输未完成。'} 清理结果未确定，禁止重新上传；请核实原操作状态：${errorMessage(error)}`,
                         });
                     }
                 }
@@ -526,6 +534,69 @@ export function useTransfers(
         }
     };
 
+    const verify = async (id: string) => {
+        const job = jobsRef.current.find((entry) => entry.id === id);
+        if (
+            !job ||
+            job.direction !== 'upload' ||
+            job.status !== 'unknown' ||
+            !job.transferId
+        )
+            return;
+        change(id, { status: 'verifying' });
+        try {
+            const result = await bridge.request<{
+                state: string;
+                published?: boolean;
+                result?: {
+                    path: string;
+                    size: number;
+                    sha256: string;
+                    version: string;
+                };
+                error?: { code: string; message: string };
+            }>('transferStatus', { transferId: job.transferId });
+            if (result.state === 'committed') {
+                if (
+                    !result.result ||
+                    result.result.path !== job.path ||
+                    result.result.size !== job.size ||
+                    !/^[a-f0-9]{64}$/.test(result.result.sha256) ||
+                    !result.result.version
+                ) {
+                    throw new Error('提交结果元信息不符，不能确认成功。');
+                }
+                change(id, {
+                    status: 'done',
+                    loaded: job.size,
+                    error: undefined,
+                    cancelRequested: false,
+                });
+                onUploadedRef.current(job.rootId, job.path);
+            } else if (
+                result.published === false &&
+                ['failed', 'released'].includes(result.state)
+            ) {
+                change(id, {
+                    status: result.state === 'released' ? 'cancelled' : 'error',
+                    error: `已确认未发布，可重新上传。${result.error ? ` ${result.error.message} [${result.error.code}]` : ''}`,
+                    overwrite: false,
+                    cancelRequested: false,
+                });
+            } else {
+                change(id, {
+                    status: 'unknown',
+                    error: '原操作尚未确认提交或未发布，不能重新上传。可稍后再次核实状态。',
+                });
+            }
+        } catch (error) {
+            change(id, {
+                status: 'unknown',
+                error: `无法核实原操作；旧连接或已过期记录不能视为失败。请勿重新上传：${errorMessage(error)}`,
+            });
+        }
+    };
+
     const retry = (id: string, overwrite = false) => {
         const job = jobsRef.current.find((entry) => entry.id === id);
         if (
@@ -551,7 +622,11 @@ export function useTransfers(
     };
 
     const clearFinished = async () => {
-        const finished = jobsRef.current.filter((job) => !transferActive(job));
+        const finished = jobsRef.current.filter(
+            (job) =>
+                !transferActive(job) &&
+                !['unknown', 'verifying'].includes(job.status),
+        );
         const removed = new Set<string>();
         for (const job of finished) {
             // Do not erase a record whose save/cancel/retry began while an earlier
@@ -577,5 +652,14 @@ export function useTransfers(
         setJobs(jobsRef.current);
     };
 
-    return { jobs, upload, download, save, cancel, retry, clearFinished };
+    return {
+        jobs,
+        upload,
+        download,
+        save,
+        cancel,
+        retry,
+        verify,
+        clearFinished,
+    };
 }

@@ -13,5 +13,10 @@
     "noUnusedParameters": true,
     "types": ["react", "react-dom"]
   },
-  "include": ["src/file-manager/ui/**/*.ts", "src/file-manager/ui/**/*.tsx"]
+  "include": [
+    "src/file-manager/ui/**/*.ts",
+    "src/file-manager/ui/**/*.tsx",
+    "src/terminal/ui/**/*.ts",
+    "src/terminal/ui/**/*.tsx"
+  ]
 }

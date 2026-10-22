@@ -12,10 +12,21 @@
 
 需要 **Node.js 22.22.2 或更高版本**。
 
+**分支状态：** 本文描述未合并、未发布的 `feat/mcp-file-manager` 源码合同，不构成生产部署或全量验收声明。两端应使用匹配且经核实的本分支构建，不要用 registry 的“最新版”替代本分支协议。
+
+在本分支 checkout 中先安装依赖并构建，再使用以下示例中的绝对入口：
+
+```bash
+npm install
+npm run build
+```
+
+将 `/path/to/staff-mcp` 替换为实际构建目录。Docker 只读挂载仍要求兼容的 Node/native ABI/libc；宿主构建的 optional PTY 不保证能在任意镜像内使用。
+
 ### 1. 标准宿主机模式
 直接在物理机或虚拟环境中运行。
 ```bash
-npx -y staff-mcp@latest --working-dir /path/to/your/project
+node /path/to/staff-mcp/dist/src/index.js --working-dir /path/to/your/project
 ```
 
 ### 2. Docker 透明代理模式 (Cyber-Shell)
@@ -23,10 +34,10 @@ npx -y staff-mcp@latest --working-dir /path/to/your/project
 
 ```bash
 # 在一个纯净的 Alpine Node 容器里调试你的代码
-npx -y staff-mcp@latest --docker node:22-alpine
+node /path/to/staff-mcp/dist/src/index.js --docker node:22-alpine
 
 # 在自带逆向工程工具链的镜像里执行安全分析
-npx -y staff-mcp@latest --docker chineseastar/security:latest --profile android-reverse
+node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest --profile android-reverse
 ```
 
 ### 3. Claude Desktop 配置
@@ -36,10 +47,9 @@ npx -y staff-mcp@latest --docker chineseastar/security:latest --profile android-
 {
   "mcpServers": {
     "staff-mcp": {
-      "command": "npx",
+      "command": "node",
       "args": [
-        "-y",
-        "staff-mcp@latest",
+        "/path/to/staff-mcp/dist/src/index.js",
         "--working-dir",
         "/path/to/your/project"
       ]
@@ -49,21 +59,21 @@ npx -y staff-mcp@latest --docker chineseastar/security:latest --profile android-
 ```
 
 ### 4. Reverse MCP 模式 (内网穿透)
-身处 NAT 或防火墙深处？无需公网 IP 和端口映射，主动连回中心化的远端网关 (如 `chat-ai`)！自带断线重连与无限重试机制。
+身处 NAT 或防火墙深处？无需公网 IP 和端口映射，主动连回中心化的远端网关 (如 `chat-ai`)！断线重试使用新 epoch，不重放工具请求、文件句柄或终端输入。管理员须提供显式公开 WS/WSS 地址；chat-ai 从 `CHAT_GATEWAY_PUBLIC_URL` 读取连接指引，不将随机私有网关端口当公开地址。
 
 ```bash
-npx -y staff-mcp@latest -t reverse \
-  --ru https://chat.your-domain.com/api/mcp-reverse \
+node /path/to/staff-mcp/dist/src/index.js -t reverse \
+  --ru wss://gateway.example.com/remote \
   --rt your_secure_token_here \
   --rn my-macbook-pro
 ```
 
 ### 5. 带身份验证的 HTTP 模式
 
-为兼容已有部署，HTTP 身份验证是可选的。设置 `--ht` / `--http-token` 即可开启，两者等价，建议使用强随机 token：
+HTTP 身份验证是可选配置。设置 `--ht` / `--http-token` 即可开启，两者等价，建议使用强随机 token：
 
 ```bash
-npx -y staff-mcp@latest -t http -p 3000 \
+node /path/to/staff-mcp/dist/src/index.js -t http -p 3000 \
   --http-token your_secure_token_here --working-dir /path/to/your/project
 ```
 
@@ -73,29 +83,44 @@ token。仅发送原始 token、不带 `Bearer` 前缀的请求会被拒绝。�
 HTTP 401，携带已有 `mcp-session-id` 也不能绕过验证。保护范围包括 `/mcp` 和兼容
 路由 `/sse`、`/messages`。CORS `OPTIONS` 预检无需凭证，但无法调用 MCP。
 
-不传 `--http-token` 时，保留原有无鉴权 HTTP 行为，已有部署可以继续运行。任何能够
+不传 `--http-token` 时，HTTP listener 不要求鉴权。任何能够
 连接服务的客户端都能调用工具，因此仅应在可信网络中使用此模式。显式传入空 token
 或含空白字符的 token 时，服务拒绝启动。`--docker` 仅在提供 token 时将其透传到容器命令。
 命令行 token 可能出现在 shell 历史和进程列表中，请限制对这些信息的访问。
-Stdio 和 reverse 模式保持不变；`--reverse-token` 不用于
+Stdio 和 reverse 使用独立的鉴权路径；`--reverse-token` 不用于
 HTTP 身份验证。远程访问应通过反向代理启用 HTTPS，普通 HTTP 无法保护传输中的
 token。这里使用服务端共享 token，不提供 OAuth 流程。
 
 ---
 
-### Reverse 1.2 升级说明
+### Reverse v1 与协议边界
 
-- 使用 `mcp-reverse@1.4.0` 和 MCP SDK `1.32.1`。只有 MCP 初始化完成才报告 ready；SSE 打开不等于协议就绪。
-- 初始化失败或短暂连接后断开会继续指数退避，默认稳定连接 30 秒后才重置失败周期，不重放工具请求。
-- 可配置 `--reverse-connect-timeout`（默认 15000ms，0 禁用建连超时）、`--reverse-initialization-timeout`（15000ms）、`--reverse-read-timeout`（45000ms）和 `--reverse-stable-time`（30000ms，0 为立即重置）。Docker 模式也透传这些参数。读取活性超时与工具运行时长不同，不建议仅靠放宽超时掩盖故障。
-- `skill` / `read_skill_file` 使用结果级 `_meta: { persistent: true }`，不再占用业务 `structuredContent`。`persistent` 是 chat-ai 历史回填约定，不是 MCP 标准存储选项。
-- chat-ai 只从 `_meta` 读取工具结果元数据，不兼容 `structuredContent.persistent` 的错误写法。旧 chat-ai 仍能连接和调用工具，但不识别新标记，无法据此跨轮回填技能结果。发布或升级 staff-mcp 无需先部署 chat-ai；若需要跨轮回填，接收端需支持 `_meta.persistent`。
+自定义协议权威为 `chat-ai/docs/protocol/README.md`（匹配的 `feat/mcp-file-manager` checkout），两端各自实现，无指定扩展 SDK。官方 MCP SDK 和标准 tools/resources/prompts 保留。独立 `mcp-fte` / `mcp-reverse` 依赖及旧运行要求已移除，不提供旧 FTE 分块或 reverse SSE 回退，旧 HTTP/SSE 地址不是 WS 别名。两端需协调升级，不迁移聊天数据库。
+
+Reverse 使用 `cc.qqxing.reverse.v1` 子协议、`Authorization: Bearer <token>` 与 `X-MCP-Server-Name`。非 loopback 必须 `wss://.../remote` 并验证证书；仅本机调试允许 `ws://127.0.0.1:<port>/remote`。URL 禁止凭据、query、fragment。配对成功不等于 MCP 初始化或用户授权；只有 SDK 初始化后才报告 ready，短暂连接不重置指数退避，不重放请求。
+
+可配置参数（毫秒，Docker 也透传）：
+
+- `--reverse-connect-timeout`：15000，0 禁用 WS 建连超时。
+- `--reverse-initialization-timeout`：15000，必须正值。
+- `--reverse-read-timeout`：45000，心跳活性检测，不是工具执行时长。
+- `--reverse-stable-time`：30000，达到稳定时长才重置重试（0 为立即重置）。
+
+`skill` / `read_skill_file` 保留结果级 `_meta: { persistent: true }`；chat-ai 从 `_meta` 而不是 `structuredContent.persistent` 读取该宿主回填提示。这不是 MCP 标准存储选项，不放宽新 reverse/扩展协议的兼容要求，不修改 Chat8/schema9/format7/分享 protocol2。
 
 ## 🛠️ 核心能力
 
 ### 独立文件工作区
 
-文件管理器通过通用 `cc.qqxing/apps` 能力发布自包含 UI，独立于模型 Tools；支持版本检查写入、协商的 HTTP 二进制流及私有 FTE 分块回退；普通 MCP 客户端仍可使用标准文件 Resources，legacy FTE 保持兼容。授权边界、草稿与传输生命周期、限额及 UI 打包见[文件管理合同与构建说明（英文）](docs/file-manager.md)。
+文件管理器通过 `experimental["cc.qqxing/extensions"]` 的 apps/files v1 发现，再调用 `cc.qqxing/apps/v1/list`，独立于模型 Tools。文件 CRUD、草稿、附件快照与显式下载保存行为保留；应用和 `transfer_file` 共用 files v1，经直接 HTTP 二进制 ticket 或 reverse 二进制 channel 传输，无 FTE 回退。stdio 没有二进制数据面：普通 tools/resources/prompts 可用，但不能传文件或开终端。真实方法、授权、生命周期、限额及打包见[文件管理合同与构建说明（英文）](docs/file-manager.md)。
+
+### 人工终端（独立高危授权）
+
+`--terminal` 默认关闭，须 Linux、可加载的 optional `node-pty`、管理员指定的可执行 shell（`--terminal-shell` 默认 `/bin/bash`）和 reverse 二进制通道；HTTP/stdio 不宣告终端。native 加载失败不影响普通 MCP。chat-ai 还须当前会话 MCP 授权、独立 `allowTerminal:true`（默认 false）及安全浏览器入口；公开 HTTPS origin 策略由宿主 `MCP_TERMINAL_HTTPS_ORIGIN` 配置，与 `CHAT_GATEWAY_PUBLIC_URL` 无关。
+
+PTY 以 staff 的 OS uid 运行，root/cwd 只是起始目录，**不是 sandbox**；shell 的文件和网络副作用不受文件工具路径检查约束。终端输入输出不进入模型或聊天历史。浏览器 long-poll/下一 read ACK 传递背压，独立 30 秒 presence/远端租约不是文件应用的两小时 TTL。隐藏或失联 UI 停止输入/续租并请求清理，不自动恢复；后代回收 best effort，不撤销副作用。
+
+背压退出可能输出不完整，当前源码在远端 `status.error` 返回 `{code:"OUTPUT_INCOMPLETE",message:string}`，宿主 read 则以可选 `outputIncomplete:boolean` 与 `error:{code:string,message:string}` 接续异常 close/status 并提供 UI 警告；布尔字段属于宿主 read，不是远端 status 字段；这些字段用于检测和诊断可能的丢失，不恢复缺失字节，也不保证无损输出，即使收到 EOF 或 exit code 0。见[终端 UI 合同（英文）](docs/terminal.md)。
 
 ### 1. 无缝容器化支持 (`--docker`)
 告别污染宿主机的时代。只要加上 `--docker <image>`，`staff-mcp` 将会：
@@ -121,8 +146,8 @@ token。这里使用服务端共享 token，不提供 OAuth 流程。
 
 在不同角色中自由切换：
 ```bash
-npx -y staff-mcp@latest --profile default
-npx -y staff-mcp@latest --profile android-reverse
+node /path/to/staff-mcp/dist/src/index.js --profile default
+node /path/to/staff-mcp/dist/src/index.js --profile android-reverse
 ```
 
 
@@ -135,7 +160,7 @@ npx -y staff-mcp@latest --profile android-reverse
 - **统一命令执行**：所有命令（快速命令、构建、开发服务器）统一走 `execute_command` 入口。命令超过等待窗口（默认 10s）不会被杀死，而是转入后台并返回任务 ID 和近期输出；随后用 `manage_background_task` 跟进（`logs` 支持 `wait` 阻塞等待新输出或退出、`stop` 终止整个进程组、`list` 列出全部）。自动检测并在支持的环境中升级为 `/bin/bash`，完美支持复杂管道命令。
 - **LSP 深度集成**：支持提取符号 (Symbols)、获取诊断信息 (Diagnostics)、跳转定义 (Definition) 和查找引用 (References)，大幅提升 AI 理解 TypeScript/Python 等代码的能力。
   - TypeScript/JavaScript LSP 会在 staff-mcp 工具目录保留 TypeScript 5.9.3 作为兼容回退；工作区 TypeScript 可用时仍优先使用，TypeScript 7 暂无 tsserver API 时会自动回退。
-- **沙盒安全**：将 AI 严格限制在你指定的工作区和允许的目录内，对全局破坏“零容忍”。
+- **文件路径边界**：文件操作校验配置 roots 和受保护路径。这不是 Shell/optional PTY 的 OS 沙盒；强隔离需另行配置 OS/容器权限。
 
 ---
 
@@ -153,30 +178,20 @@ npx -y staff-mcp@latest --profile android-reverse
 | `-p, --port` | HTTP 服务的监听端口 | `3000` |
 | `-h, --host` | HTTP 服务的监听地址 | `127.0.0.1` |
 | `--ht, --http-token` | HTTP 模式可选的 Bearer token | `undefined`（不鉴权） |
-| `--ru, --reverse-url` | Reverse MCP 网关的远端 URL | `undefined` |
+| `--ru, --reverse-url` | 显式 WS/WSS 网关 `/remote` 地址 | `undefined` |
 | `--rt, --reverse-token` | Reverse MCP 的安全认证令牌 | `undefined` |
 | `--rn, --reverse-name` | Reverse MCP 的服务注册名称 | `undefined` |
-| `--proxy` | 出站请求的 HTTP(S) 代理 URL | `undefined` |
+| `--terminal` | 显式启用 Linux reverse 二进制 PTY（staff uid，cwd 非 sandbox） | `false` |
+| `--terminal-shell` | 管理员指定的绝对可执行 shell 路径 | `/bin/bash` |
+| `--proxy` | 支持的 HTTP 客户端及 reverse WS/WSS CONNECT 的 HTTP(S) 代理 | `undefined` |
 
 ### 🌐 代理支持（企业内网）
 
-staff-mcp 会自动识别标准代理环境变量，作用于**所有**出站请求（Reverse MCP 的 SSE 长连接、消息回传 POST、远程 MCP 客户端调用），且在任意受支持的 Node.js 版本上生效——无需 `NODE_USE_ENV_PROXY` 开关：
+staff-mcp 的 Undici HTTP 客户端读取 `HTTP_PROXY` / `HTTPS_PROXY`（含小写形式），`NO_PROXY` 支持精确主机/IP、域名后缀、`*`、host:port 和 IPv4/IPv6 CIDR。显式 `--proxy` 对这些客户端及 reverse 连接均优先于环境变量，且不应用 `NO_PROXY`。
 
-```bash
-export HTTPS_PROXY=http://proxy.company.com:8080
-export NO_PROXY=localhost,127.0.0.1,10.0.0.0/8,.internal.example.com
-# NO_PROXY 支持：精确主机/IP、域名后缀（.example.com 或裸写 example.com）、
-# "*" 通配、host:port 端口限定，以及 IPv4/IPv6 CIDR 网段（如 172.16.0.0/12、fd00::/8）
-npx -y staff-mcp@latest -t reverse --ru https://chat.example.com/api/mcp/reverse --rt <token> --rn myserver
-```
+Reverse v1 通过 `ws` + `HttpsProxyAgent`（`https-proxy-agent` 7.0.6）保留企业代理路由，不由 Undici dispatcher 实现 WebSocket。未显式传 `--proxy` 时复用 `selectProxyForOrigin`，将 WSS/WS 分别映射为 HTTPS/HTTP 后选择环境代理并检查目标 `NO_PROXY`；WSS 优先 `HTTPS_PROXY`，缺失时回退 `HTTP_PROXY`，支持小写形式。命中 `NO_PROXY` 或未选中代理时直连，选中的 HTTP(S) 代理使用 CONNECT；代理与 WSS 目标证书校验保持开启。代理路由不替代认证、证书信任、DNS 和目标可达性配置；公司 WAN 路径须在实际网络中独立验证，不能用本机结果替代。
 
-也可以通过参数显式指定代理（优先级高于环境变量；该模式下不应用 `NO_PROXY`）：
-
-```bash
-npx -y staff-mcp@latest --proxy http://proxy.company.com:8080 ...
-```
-
-在 `--docker` 模式下，同样的逻辑会在容器内部执行：由 Docker 注入的代理环境变量（如 `~/.docker/config.json` 的 proxies 配置）会被自动识别，也可以通过 `-D "-e HTTP_PROXY=..."` 或 `--proxy` 显式传递。若代理做 TLS 拦截，请通过 `NODE_EXTRA_CA_CERTS=/path/to/ca.pem` 追加企业根证书。
+Docker 内对支持的 HTTP 客户端与 reverse 连接应用上述代理设置，可由容器环境或 `--proxy` 提供。TLS 拦截可用 `NODE_EXTRA_CA_CERTS=/path/to/ca.pem` 增加信任，不关闭证书校验；证书文件须在容器内可见，native ABI/libc 兼容仍是部署要求。
 
 ### 硬件透传案例 (Android 移动端逆向)
 如果你希望 AI 在容器内运行时，仍能连接并控制物理机上的 Android 手机，利用基于网络端口的 ADB 透传是最稳妥的跨平台方案：
@@ -187,13 +202,13 @@ npx -y staff-mcp@latest --proxy http://proxy.company.com:8080 ...
 
 # 2. 启动 staff-mcp 并注入 ADB_SERVER_SOCKET 环境变量
 # Mac/Win 环境下：
-npx -y staff-mcp@latest --docker chineseastar/security:latest -D "-e ADB_SERVER_SOCKET=tcp:host.docker.internal:5037"
+node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest -D "-e ADB_SERVER_SOCKET=tcp:host.docker.internal:5037"
 
 # 原生 Linux 环境下（若不使用 host 网络，可指向虚拟桥接 IP）：
-npx -y staff-mcp@latest --docker chineseastar/security:latest -D "-e ADB_SERVER_SOCKET=tcp:172.17.0.1:5037"
+node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest -D "-e ADB_SERVER_SOCKET=tcp:172.17.0.1:5037"
 
 # 原生 Linux 的极简方案（直接与物理机共享网络栈）：
-npx -y staff-mcp@latest --docker chineseastar/security:latest -D "--network host"
+node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest -D "--network host"
 ```
 
 ---
