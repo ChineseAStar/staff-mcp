@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import { bridge, BridgeError, errorMessage } from './bridge';
-import { withinPath } from './tree-types';
+import { compareEntries, withinPath } from './tree-types';
 import type { Entry } from './tree-types';
 
 export interface DirectoryPage {
@@ -89,7 +89,7 @@ export function useDirectoryTree(rootId: string, available: boolean) {
                 for (const entry of result.entries)
                     entries.set(entry.path, entry);
                 scope.directories.set(path, {
-                    entries: [...entries.values()],
+                    entries: [...entries.values()].sort(compareEntries),
                     loaded: true,
                     loading: false,
                     nextCursor: result.nextCursor,

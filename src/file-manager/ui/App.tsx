@@ -1234,12 +1234,6 @@ export function App() {
                     disabled={!available}
                     onClick={refresh}
                 />
-                <IconButton
-                    name="plus"
-                    title="新建文件"
-                    disabled={!available || readOnly}
-                    onClick={() => beginCreate('create')}
-                />
                 <div className="menu-anchor">
                     <IconButton
                         name="more"
@@ -1263,28 +1257,6 @@ export function App() {
                             >
                                 <Icon name="upload" />
                                 上传文件
-                            </button>
-                            <button
-                                type="button"
-                                role="menuitem"
-                                disabled={!available || readOnly}
-                                onClick={() =>
-                                    fileMenuAction(() => beginCreate('create'))
-                                }
-                            >
-                                <Icon name="file" />
-                                新建文件
-                            </button>
-                            <button
-                                type="button"
-                                role="menuitem"
-                                disabled={!available || readOnly}
-                                onClick={() =>
-                                    fileMenuAction(() => beginCreate('mkdir'))
-                                }
-                            >
-                                <Icon name="folder" />
-                                新建文件夹
                             </button>
                             <div role="separator" />
                             <button
@@ -1567,6 +1539,11 @@ export function App() {
                             contextMenu?.rootId === rootId
                                 ? contextEntry?.path
                                 : undefined
+                        }
+                        directoryMenuOpen={
+                            contextMenu?.rootId === rootId &&
+                            contextMenu.target.kind === 'folder' &&
+                            contextMenu.target.directory === directory
                         }
                         onSelect={selectEntry}
                         onOpen={openEntry}

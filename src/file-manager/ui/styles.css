@@ -1108,6 +1108,14 @@ progress::-moz-progress-bar {
 }
 
 /* Tree metadata stays in titles rather than competing for row width. */
+.tree-actions {
+    display: flex;
+    justify-content: flex-end;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-primary);
+}
 .directory-tree [role='treeitem'] {
     outline: none;
 }

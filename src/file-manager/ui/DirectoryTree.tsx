@@ -13,6 +13,7 @@ interface Props {
     selectedPath?: string;
     activePath?: string;
     menuPath?: string;
+    directoryMenuOpen?: boolean;
     onSelect: (entry: Entry) => void;
     onOpen: (entry: Entry) => void;
     onMenu: (entry: Entry, trigger: HTMLElement, x: number, y: number) => void;
@@ -37,6 +38,7 @@ export function DirectoryTree({
     selectedPath,
     activePath,
     menuPath,
+    directoryMenuOpen,
     onSelect,
     onOpen,
     onMenu,
@@ -55,8 +57,10 @@ export function DirectoryTree({
         creationInput.current?.focus();
         creationInput.current?.scrollIntoView({ block: 'nearest' });
     }, [creation?.directory, creation?.kind]);
-    // Derived visible order only: collapsed descendants are neither rendered
-    // nor keyboard targets. The directory cache remains the sole data source.
+    // Cache entries are already sorted after merging pages, so rendering and
+    // keyboard navigation share the same order. Collapsed descendants are
+    // neither rendered nor keyboard targets.
+    // The directory cache remains the sole data source.
     const visible: Entry[] = [];
     const collect = (path: string) => {
         for (const entry of tree.directories.get(path)?.entries ?? []) {
@@ -444,6 +448,24 @@ export function DirectoryTree({
                 }
             }}
         >
+            <div className="tree-actions">
+                <button
+                    type="button"
+                    className="icon-button"
+                    title="当前目录操作"
+                    aria-label="当前目录操作"
+                    aria-haspopup="menu"
+                    aria-expanded={!!directoryMenuOpen}
+                    disabled={!available}
+                    onClick={(event) => {
+                        const trigger = event.currentTarget;
+                        const bounds = trigger.getBoundingClientRect();
+                        onBlankMenu(trigger, bounds.left, bounds.bottom);
+                    }}
+                >
+                    <Icon name="more" size={16} />
+                </button>
+            </div>
             {contents('', 1)}
         </div>
     );
