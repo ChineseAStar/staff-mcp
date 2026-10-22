@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
 const paths = {
+    attach: 'm8 12 7-7a4 4 0 0 1 6 6L10 22a6 6 0 0 1-8-8L13 3m-8 14 10-10a2 2 0 0 1 3 3L8 20',
     back: 'm14 6-6 6 6 6',
     down: 'm6 9 6 6 6-6',
     more: 'M5 12h.01M12 12h.01M19 12h.01',

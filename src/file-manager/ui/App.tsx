@@ -11,6 +11,7 @@ import { redo, undo } from '@codemirror/commands';
 import { openSearchPanel } from '@codemirror/search';
 import { bridge, BridgeError, errorMessage } from './bridge';
 import { TextEditor } from './Editor';
+import { FileContextMenu } from './FileContextMenu';
 import {
     MAX_FILE_SIZE,
     transferActive,
@@ -150,14 +151,34 @@ export function App() {
     const savingTabs = useRef(new Set<string>());
     const tabSequence = useRef(0);
     const views = useRef(new Map<string, EditorView>());
+    const [attaching, setAttaching] = useState<{
+        rootId: string;
+        path: string;
+        name: string;
+    }>();
+    const attachmentPending = useRef(false);
+    const [contextMenu, setContextMenu] = useState<{
+        rootId: string;
+        entry: Entry;
+        x: number;
+        y: number;
+        trigger: HTMLElement;
+    }>();
     const [notice, setNotice] = useState<{
         kind: 'error' | 'success' | 'info';
         text: string;
+        returnToConversation?: boolean;
     }>();
     const [dialog, setDialogState] = useState<Dialog>();
     const actionIntent = useRef(0);
-    const actionContext = useRef({ rootId, selected, available });
-    actionContext.current = { rootId, selected, available };
+    const actionContext = useRef({
+        rootId,
+        directory,
+        page,
+        reload,
+        available,
+    });
+    actionContext.current = { rootId, directory, page, reload, available };
     const setDialog = (next: Dialog | undefined) => {
         actionIntent.current++;
         setStatLoading(false);
@@ -179,17 +200,6 @@ export function App() {
         (dialog?.kind === 'create' && dialog.content.length > 0);
     const mobilePane = tabs.length ? mobileView : 'files';
     const cursor = cursors[page] ?? '';
-    const canMutateSelection =
-        available &&
-        !readOnly &&
-        !!selected &&
-        !!stat &&
-        !stat.readOnly &&
-        !statLoading &&
-        !statError;
-    const canDownloadSelection =
-        available && !!selected && selected.type === 'file';
-
     const refresh = useCallback(() => {
         setCursors(['']);
         setPage(0);
@@ -236,10 +246,22 @@ export function App() {
     }, [dirty]);
 
     useEffect(() => {
-        if (!notice || notice.kind === 'error') return;
+        if (
+            !notice ||
+            notice.kind === 'error' ||
+            notice.returnToConversation ||
+            attaching
+        )
+            return;
         const timer = setTimeout(() => setNotice(undefined), 2500);
         return () => clearTimeout(timer);
-    }, [notice]);
+    }, [notice, attaching]);
+
+    useEffect(() => {
+        setContextMenu(undefined);
+        actionIntent.current++;
+        setStatLoading(false);
+    }, [rootId, directory, page, reload, available, mobilePane]);
 
     useEffect(() => {
         if (!available || !rootId) return;
@@ -305,6 +327,8 @@ export function App() {
     }, [mobilePane, activeTabId]);
 
     const navigate = (path: string, nextRoot = rootId) => {
+        actionIntent.current++;
+        setContextMenu(undefined);
         setMobileView('files');
         setRootId(nextRoot);
         setDirectory(path);
@@ -445,6 +469,8 @@ export function App() {
     };
 
     const openEntry = (entry: Entry) => {
+        actionIntent.current++;
+        setContextMenu(undefined);
         if (entry.type === 'directory') navigate(entry.path);
         else void openPath(rootId, entry.path, entry);
     };
@@ -546,29 +572,43 @@ export function App() {
         } else removeTab(tab.id);
     };
 
-    const beginAction = async (kind: 'rename' | 'move' | 'delete') => {
-        if (!selected || !stat || !canMutateSelection || statLoading) return;
-        // Content versions are needed for mutations, not every row selection.
-        const target = selected;
+    const beginAction = async (
+        kind: 'rename' | 'move' | 'delete',
+        targetRoot: string,
+        target: Entry,
+    ) => {
+        if (
+            !available ||
+            target.type === 'symlink' ||
+            !roots.some((item) => item.rootId === targetRoot && !item.readOnly)
+        )
+            return;
+        // The target is explicit: selecting a row is not an action dependency.
+        const context = actionContext.current;
         const intent = ++actionIntent.current;
         const currentIntent = () =>
             actionIntent.current === intent &&
-            actionContext.current.rootId === rootId &&
-            actionContext.current.selected === target &&
+            actionContext.current.rootId === targetRoot &&
+            actionContext.current.directory === context.directory &&
+            actionContext.current.page === context.page &&
+            actionContext.current.reload === context.reload &&
             actionContext.current.available;
         setStatLoading(true);
         try {
             const current = await bridge.request<
                 FileStat & { version: string }
             >('stat', {
-                rootId,
+                rootId: targetRoot,
                 path: target.path,
                 includeVersion: true,
             });
             if (!currentIntent()) return;
+            if (current.readOnly || current.type === 'symlink') {
+                throw new Error('此项目为只读或符号链接，不能执行此操作。');
+            }
             setDialog({
                 kind,
-                rootId,
+                rootId: targetRoot,
                 target: { ...current, path: target.path, name: target.name },
             });
             setDialogError('');
@@ -577,6 +617,91 @@ export function App() {
                 setNotice({ kind: 'error', text: errorMessage(error) });
         } finally {
             if (currentIntent()) setStatLoading(false);
+        }
+    };
+
+    const showContextMenu = (
+        entry: Entry,
+        trigger: HTMLElement,
+        x: number,
+        y: number,
+    ) => {
+        if (!available || loading) return;
+        actionIntent.current++;
+        setStatLoading(false);
+        setMenu(null);
+        setSelected(entry);
+        setContextMenu({ rootId, entry, trigger, x, y });
+    };
+
+    const attachFile = async (
+        targetRoot: string,
+        path: string,
+        name: string,
+        size: number,
+    ) => {
+        if (!available || attachmentPending.current) return;
+        if (
+            tabsRef.current.some(
+                (tab) =>
+                    tab.rootId === targetRoot &&
+                    tab.path === path &&
+                    isDirty(tab),
+            )
+        ) {
+            setNotice({
+                kind: 'error',
+                text: `${name} 有未保存的编辑，请先保存后再添加到对话。不会自动保存或附加旧的服务器内容。`,
+            });
+            return;
+        }
+        if (size > 256 * 1024) {
+            setNotice({
+                kind: 'error',
+                text: `${name} 超过附件 256 KiB 限制，不能添加到对话。`,
+            });
+            return;
+        }
+        attachmentPending.current = true;
+        setAttaching({ rootId: targetRoot, path, name });
+        setNotice({ kind: 'info', text: `正在添加 ${name}…` });
+        try {
+            const result = await bridge.request<{
+                attached: true;
+                name: string;
+            }>('attachResource', {
+                uri: `staff-file://${targetRoot}/${path.split('/').map(encodeURIComponent).join('/')}`,
+                title: name,
+            });
+            if (result.attached !== true)
+                throw new Error('宿主未确认添加附件。');
+            // The receipt belongs to this captured path, never the newly selected row/tab.
+            setNotice({
+                kind: 'success',
+                text: `已将 ${name} 添加到输入框，发送后模型才能看到。`,
+                returnToConversation: true,
+            });
+        } catch (error) {
+            const message =
+                error instanceof BridgeError && error.code === 'TOO_LARGE'
+                    ? '附件上限为 256 KiB，文件未添加；下载不能绕过附件限制。'
+                    : errorMessage(error);
+            setNotice({ kind: 'error', text: `${name}：${message}` });
+        } finally {
+            attachmentPending.current = false;
+            setAttaching(undefined);
+        }
+    };
+
+    const showConversation = async () => {
+        try {
+            await bridge.request('showConversation', {});
+        } catch (error) {
+            setNotice({
+                kind: 'error',
+                text: errorMessage(error),
+                returnToConversation: true,
+            });
         }
     };
 
@@ -972,70 +1097,6 @@ export function App() {
                             <div role="separator" />
                             <button
                                 role="menuitem"
-                                disabled={!canMutateSelection}
-                                onClick={() =>
-                                    fileMenuAction(() => beginAction('rename'))
-                                }
-                            >
-                                <Icon name="edit" />
-                                重命名
-                            </button>
-                            <button
-                                role="menuitem"
-                                disabled={!canMutateSelection}
-                                onClick={() =>
-                                    fileMenuAction(() => beginAction('move'))
-                                }
-                            >
-                                <Icon name="move" />
-                                移动
-                            </button>
-                            <button
-                                role="menuitem"
-                                disabled={!canDownloadSelection}
-                                onClick={() =>
-                                    fileMenuAction(
-                                        () =>
-                                            selected &&
-                                            download(
-                                                rootId,
-                                                selected.path,
-                                                selected.size,
-                                            ),
-                                    )
-                                }
-                            >
-                                <Icon name="download" />
-                                下载
-                            </button>
-                            <button
-                                role="menuitem"
-                                disabled={!selected}
-                                onClick={() =>
-                                    fileMenuAction(
-                                        () =>
-                                            selected &&
-                                            void copy(selected.path),
-                                    )
-                                }
-                            >
-                                <Icon name="copy" />
-                                复制相对路径
-                            </button>
-                            <button
-                                role="menuitem"
-                                className="danger-text"
-                                disabled={!canMutateSelection}
-                                onClick={() =>
-                                    fileMenuAction(() => beginAction('delete'))
-                                }
-                            >
-                                <Icon name="trash" />
-                                删除…
-                            </button>
-                            <div role="separator" />
-                            <button
-                                role="menuitem"
                                 onClick={() =>
                                     fileMenuAction(() =>
                                         setShowTransfers((value) => !value),
@@ -1079,12 +1140,161 @@ export function App() {
                     role={notice.kind === 'error' ? 'alert' : 'status'}
                 >
                     <span>{notice.text}</span>
+                    {notice.returnToConversation && (
+                        <button
+                            type="button"
+                            disabled={!available}
+                            onClick={() => void showConversation()}
+                        >
+                            返回输入框
+                        </button>
+                    )}
                     <IconButton
                         name="close"
                         title="关闭提示"
                         onClick={() => setNotice(undefined)}
                     />
                 </div>
+            )}
+
+            {contextMenu && (
+                <FileContextMenu
+                    label={`${contextMenu.entry.name} 的操作`}
+                    x={contextMenu.x}
+                    y={contextMenu.y}
+                    trigger={contextMenu.trigger}
+                    onClose={() => setContextMenu(undefined)}
+                >
+                    <button
+                        role="menuitem"
+                        disabled={
+                            !available || contextMenu.entry.type === 'symlink'
+                        }
+                        onClick={() => {
+                            const target = contextMenu;
+                            setContextMenu(undefined);
+                            if (target.entry.type === 'directory')
+                                navigate(target.entry.path, target.rootId);
+                            else
+                                void openPath(
+                                    target.rootId,
+                                    target.entry.path,
+                                    target.entry,
+                                );
+                        }}
+                    >
+                        <Icon
+                            name={
+                                contextMenu.entry.type === 'directory'
+                                    ? 'folder'
+                                    : 'file'
+                            }
+                        />
+                        打开
+                    </button>
+                    {contextMenu.entry.type === 'file' && (
+                        <>
+                            <button
+                                role="menuitem"
+                                disabled={
+                                    !available ||
+                                    !!attaching ||
+                                    contextMenu.entry.size > 256 * 1024
+                                }
+                                title="添加已保存的文件内容，上限 256 KiB；有未保存编辑时请先保存"
+                                onClick={() => {
+                                    const target = contextMenu;
+                                    setContextMenu(undefined);
+                                    void attachFile(
+                                        target.rootId,
+                                        target.entry.path,
+                                        target.entry.name,
+                                        target.entry.size,
+                                    );
+                                }}
+                            >
+                                <Icon name="attach" />
+                                {attaching
+                                    ? '正在添加…'
+                                    : contextMenu.entry.size > 256 * 1024
+                                      ? '添加到对话（超过 256 KiB）'
+                                      : '添加到对话'}
+                            </button>
+                            <button
+                                role="menuitem"
+                                disabled={!available}
+                                onClick={() => {
+                                    const target = contextMenu;
+                                    setContextMenu(undefined);
+                                    download(
+                                        target.rootId,
+                                        target.entry.path,
+                                        target.entry.size,
+                                    );
+                                }}
+                            >
+                                <Icon name="download" />
+                                下载
+                            </button>
+                        </>
+                    )}
+                    <div role="separator" />
+                    {(['rename', 'move'] as const).map((kind) => (
+                        <button
+                            key={kind}
+                            role="menuitem"
+                            disabled={
+                                !available ||
+                                readOnly ||
+                                contextMenu.entry.type === 'symlink'
+                            }
+                            onClick={() => {
+                                const target = contextMenu;
+                                setContextMenu(undefined);
+                                void beginAction(
+                                    kind,
+                                    target.rootId,
+                                    target.entry,
+                                );
+                            }}
+                        >
+                            <Icon name={kind === 'rename' ? 'edit' : 'move'} />
+                            {kind === 'rename' ? '重命名' : '移动'}
+                        </button>
+                    ))}
+                    <button
+                        role="menuitem"
+                        onClick={() => {
+                            const path = contextMenu.entry.path;
+                            setContextMenu(undefined);
+                            void copy(path);
+                        }}
+                    >
+                        <Icon name="copy" />
+                        复制相对路径
+                    </button>
+                    <button
+                        role="menuitem"
+                        className="danger-text"
+                        disabled={
+                            !available ||
+                            readOnly ||
+                            contextMenu.entry.type === 'symlink'
+                        }
+                        onClick={() => {
+                            const target = contextMenu;
+                            setContextMenu(undefined);
+                            void beginAction(
+                                'delete',
+                                target.rootId,
+                                target.entry,
+                            );
+                        }}
+                    >
+                        <Icon name="trash" />
+                        删除…
+                    </button>
+                </FileContextMenu>
             )}
 
             <div className="workspace">
@@ -1137,6 +1347,40 @@ export function App() {
                                     key={entry.path}
                                     role="listitem"
                                     className={`file-row ${selected?.path === entry.path ? 'selected' : ''}`}
+                                    onContextMenu={(event) => {
+                                        event.preventDefault();
+                                        const trigger =
+                                            event.currentTarget.querySelector<HTMLElement>(
+                                                '.entry-select',
+                                            )!;
+                                        showContextMenu(
+                                            entry,
+                                            trigger,
+                                            event.clientX,
+                                            event.clientY,
+                                        );
+                                    }}
+                                    onKeyDown={(event) => {
+                                        if (
+                                            event.key !== 'ContextMenu' &&
+                                            !(
+                                                event.shiftKey &&
+                                                event.key === 'F10'
+                                            )
+                                        )
+                                            return;
+                                        event.preventDefault();
+                                        const trigger =
+                                            event.target as HTMLElement;
+                                        const bounds =
+                                            trigger.getBoundingClientRect();
+                                        showContextMenu(
+                                            entry,
+                                            trigger,
+                                            bounds.left,
+                                            bounds.bottom,
+                                        );
+                                    }}
                                 >
                                     <button
                                         className="entry-open"
@@ -1167,17 +1411,24 @@ export function App() {
                                         className="entry-select icon-button"
                                         title={`选择 ${entry.name} 的操作`}
                                         aria-label={`选择 ${entry.name} 的操作`}
-                                        aria-pressed={
-                                            selected?.path === entry.path
+                                        aria-haspopup="menu"
+                                        aria-expanded={
+                                            contextMenu?.entry.path ===
+                                                entry.path &&
+                                            contextMenu.rootId === rootId
                                         }
                                         disabled={!available || loading}
-                                        onClick={() =>
-                                            setSelected(
-                                                selected?.path === entry.path
-                                                    ? undefined
-                                                    : entry,
-                                            )
-                                        }
+                                        onClick={(event) => {
+                                            const trigger = event.currentTarget;
+                                            const bounds =
+                                                trigger.getBoundingClientRect();
+                                            showContextMenu(
+                                                entry,
+                                                trigger,
+                                                bounds.left,
+                                                bounds.bottom,
+                                            );
+                                        }}
                                     >
                                         <Icon name="more" size={16} />
                                     </button>
@@ -1214,44 +1465,24 @@ export function App() {
                     )}
                     {selected && (
                         <div
-                            className="selection-toolbar"
-                            role="toolbar"
-                            aria-label={`${selected.name} 的操作`}
+                            className="selection-summary"
+                            aria-label="所选项信息"
                         >
                             <span
                                 className="selection-name"
-                                title={selected.name}
+                                title={selected.path}
                             >
                                 {selected.name}
                             </span>
-                            {statLoading && (
-                                <span className="muted" role="status">
-                                    …
-                                </span>
-                            )}
-                            <IconButton
-                                name="edit"
-                                title="重命名所选项目"
-                                disabled={!canMutateSelection}
-                                onClick={() => beginAction('rename')}
-                            />
-                            <IconButton
-                                name="move"
-                                title="移动所选项目"
-                                disabled={!canMutateSelection}
-                                onClick={() => beginAction('move')}
-                            />
-                            <IconButton
-                                name="trash"
-                                title="删除所选项目"
-                                disabled={!canMutateSelection}
-                                onClick={() => beginAction('delete')}
-                            />
-                            <IconButton
-                                name="close"
-                                title="取消选择"
-                                onClick={() => setSelected(undefined)}
-                            />
+                            <span className="muted">
+                                {statLoading
+                                    ? '读取中…'
+                                    : selected.type === 'symlink'
+                                      ? '符号链接'
+                                      : stat
+                                        ? `${stat.type === 'directory' ? '文件夹' : formatSize(stat.size)} · ${formatDate(stat.mtime)}`
+                                        : ''}
+                            </span>
                         </div>
                     )}
                     {statError && selected && (
@@ -1432,6 +1663,42 @@ export function App() {
                                     </button>
                                 </>
                             )}
+                            <button
+                                type="button"
+                                className="attach-button"
+                                disabled={
+                                    !available ||
+                                    !!attaching ||
+                                    activeTab.busy ||
+                                    isDirty(activeTab) ||
+                                    activeTab.size > 256 * 1024
+                                }
+                                title={
+                                    isDirty(activeTab)
+                                        ? '请先保存编辑，再添加到对话；不会自动保存'
+                                        : activeTab.size > 256 * 1024
+                                          ? '附件上限为 256 KiB'
+                                          : '添加服务器最新快照，不会自动发送'
+                                }
+                                onClick={() =>
+                                    void attachFile(
+                                        activeTab.rootId,
+                                        activeTab.path,
+                                        activeTab.name,
+                                        activeTab.size,
+                                    )
+                                }
+                            >
+                                <Icon name="attach" size={14} />
+                                {attaching?.rootId === activeTab.rootId &&
+                                attaching.path === activeTab.path
+                                    ? '添加中…'
+                                    : isDirty(activeTab)
+                                      ? '先保存再添加'
+                                      : activeTab.size > 256 * 1024
+                                        ? '超过 256 KiB'
+                                        : '添加到对话'}
+                            </button>
                             <div className="menu-anchor">
                                 <IconButton
                                     name="more"

@@ -45,6 +45,16 @@ The app is served by standard `resources/read` at the declared UI URI. It is not
 
 The direct file-manager namespace is `cc.qqxing/file-manager/`. Its ordinary methods are `roots`, `list`, `stat`, `readText`, `saveText`, `createFile`, `mkdir`, `move`, and `delete`. Transfer preparation, finalization, and release are separate methods controlled by the host. The bridge is a generic app host, not an arbitrary tool executor, fetch proxy, shell, or filesystem API. The app translates file actions into its declared full method names; chat-ai does not interpret root/path/editing business parameters. The `mcp-app-ready` / `mcp-app-connect` handshake binds a private MessagePort. Separate app IDs on one MCP are independent launchable workspaces; transport extensions are not UI applications.
 
+## File actions and adding to a conversation
+
+Each file row opens the same contextual menu through desktop right-click, its visible “⋯” button, or the keyboard context-menu key / Shift+F10. The menu supports keyboard navigation and Escape, stays within the iframe viewport, and closes on navigation, scrolling outside the menu, resize, or lifecycle changes. Actions bind to the row that opened the menu, not a previous selection. The bottom area shows selection metadata rather than duplicating action buttons. Touch users use “⋯”; no long press or right-click dependency is required.
+
+Open, download, rename, move, copy path, and delete keep their existing business checks. Mutations still fetch a version for the intended target and use the same confirmation flow; deletion is not performed by opening the menu. Directories do not expose file-attachment/download actions, and symlink restrictions remain unchanged.
+
+Regular files can be added to the host conversation from the row menu or editor. The app constructs the canonical `staff-file://` Resource URI by encoding each literal path component once, then invokes the generic bridge `attachResource { uri, title }`. The host reads the actual Resource through the bound MCP and returns `{ attached: true, name }`; the iframe does not supply the attachment body. The existing 256 KiB Resource limit applies, independently of the larger editor/transfer limits. This does not automatically send a message or invoke a model.
+
+If any open tab for that file has unsaved changes, adding is blocked with an explicit save-first message. It never implicitly saves or silently attaches an older server copy. After a successful add, “Return to input” invokes the generic local `showConversation` bridge method, closing the workspace view but preserving iframe tabs and drafts. Later external file edits do not update the already-added attachment snapshot.
+
 ## Roots, paths, and concurrent edits
 
 Roots come from the existing sandbox: `main` is the workspace and `allowed-N` identifies additional allowed directories. Public paths are root-relative literal names, not host absolute paths or URL-encoded paths. Traversal, symlink traversal, protected roots, and private staging access are checked by the file core. Percent signs in RPC paths are literal filename characters; only the resource URI boundary decodes each component once. Root IDs are session/configuration context, not portable filesystem permissions.

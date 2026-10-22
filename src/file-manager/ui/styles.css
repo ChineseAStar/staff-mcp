@@ -467,9 +467,11 @@ input[type='checkbox'] {
 .empty-state .text-button {
     color: var(--color-primary);
 }
-.selection-toolbar {
+.selection-summary {
     display: flex;
-    gap: 2px;
+    gap: 4px 8px;
+    flex-wrap: wrap;
+    font-size: 11px;
     align-items: center;
     min-height: 39px;
     padding: 4px 7px 4px 13px;
@@ -1143,4 +1145,26 @@ progress::-moz-progress-bar {
     .file-tab .tab-close {
         min-width: 28px;
     }
+}
+
+.file-context-menu {
+    width: 224px;
+    position: fixed;
+    z-index: 50;
+    top: 0;
+    left: 0;
+    right: auto;
+    max-height: calc(100dvh - 16px);
+}
+.selection-summary > .muted {
+    overflow-wrap: anywhere;
+}
+.attach-button {
+    flex: none;
+    font-size: 11px;
+    padding-inline: 7px;
+}
+.notice > button:not(.icon-button) {
+    flex: none;
+    font-size: 12px;
 }
