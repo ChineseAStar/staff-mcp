@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent } from 'react';
+import type { KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
+import {
+    editingTarget,
+    hasDirectoryPayload,
+    hasFilePayload,
+    namePastedFiles,
+    transferFiles,
+} from './tree-input';
 import { formatDate, formatSize, Icon } from './ui';
 import type { IconName } from './ui';
 import { parentPath, withinPath } from './tree-types';
@@ -12,8 +19,11 @@ interface Props {
     directory: string;
     selectedPath?: string;
     activePath?: string;
-    menuPath?: string;
-    directoryMenuOpen?: boolean;
+    interactionEpoch: number;
+    uploadAllowed: boolean;
+    onUpload: (files: File[], directory: string) => void;
+    onPasteFiles: (files: File[]) => void;
+    onDirectoryDrop: () => void;
     onSelect: (entry: Entry) => void;
     onOpen: (entry: Entry) => void;
     onMenu: (entry: Entry, trigger: HTMLElement, x: number, y: number) => void;
@@ -37,8 +47,11 @@ export function DirectoryTree({
     directory,
     selectedPath,
     activePath,
-    menuPath,
-    directoryMenuOpen,
+    interactionEpoch,
+    uploadAllowed,
+    onUpload,
+    onPasteFiles,
+    onDirectoryDrop,
     onSelect,
     onOpen,
     onMenu,
@@ -50,6 +63,131 @@ export function DirectoryTree({
     entryIcon,
 }: Props) {
     const [focusedPath, setFocusedPath] = useState<string>();
+    const [dropTarget, setDropTarget] = useState<{
+        directory: string;
+        row?: string;
+    }>();
+    const press = useRef<
+        | {
+              pointerId: number;
+              pointerType: string;
+              x: number;
+              y: number;
+              timer?: ReturnType<typeof setTimeout>;
+              fired: boolean;
+          }
+        | undefined
+    >(undefined);
+    const suppressedClick = useRef<
+        | {
+              pointerId: number;
+              pointerType: string;
+              x: number;
+              y: number;
+          }
+        | undefined
+    >(undefined);
+    const clickExpiry = useRef<ReturnType<typeof setTimeout> | undefined>(
+        undefined,
+    );
+    const clearClick = () => {
+        clearTimeout(clickExpiry.current);
+        suppressedClick.current = undefined;
+    };
+    const suppressPressClick = () => {
+        if (!press.current) return;
+        const { pointerId, pointerType, x, y } = press.current;
+        clearClick();
+        suppressedClick.current = { pointerId, pointerType, x, y };
+    };
+    const cancelPress = () => {
+        clearTimeout(press.current?.timer);
+        press.current = undefined;
+    };
+    useEffect(() => {
+        const pointerDown = () => {
+            cancelPress();
+            // A new physical gesture must never lose its click to an old hold.
+            clearClick();
+        };
+        const pointerMove = (event: PointerEvent) => {
+            const pending = press.current ?? suppressedClick.current;
+            if (
+                pending?.pointerId === event.pointerId &&
+                Math.hypot(
+                    event.clientX - pending.x,
+                    event.clientY - pending.y,
+                ) > 10
+            ) {
+                cancelPress();
+                clearClick();
+            }
+        };
+        const pointerUp = (event: PointerEvent) => {
+            if (press.current?.pointerId === event.pointerId) cancelPress();
+            if (suppressedClick.current?.pointerId === event.pointerId) {
+                // Covers delayed compatibility clicks, but not later gestures.
+                clickExpiry.current = setTimeout(clearClick, 750);
+            }
+        };
+        const pointerCancel = () => {
+            cancelPress();
+            clearClick();
+        };
+        const click = (event: MouseEvent) => {
+            const held = suppressedClick.current;
+            if (!held || event.detail === 0) return;
+            const pointer = event as PointerEvent;
+            const samePointer =
+                pointer.pointerId === held.pointerId &&
+                pointer.pointerType === held.pointerType;
+            // Older engines expose a MouseEvent for the touch compatibility
+            // click. Match its release position instead of swallowing any click.
+            const compatibilityClick =
+                !pointer.pointerType &&
+                Math.hypot(event.clientX - held.x, event.clientY - held.y) <=
+                    10;
+            if (!samePointer && !compatibilityClick) return;
+            clearClick();
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        };
+        const scroll = () => {
+            cancelPress();
+            clearClick();
+        };
+        const clearDrop = () => setDropTarget(undefined);
+        document.addEventListener('pointerdown', pointerDown, true);
+        document.addEventListener('pointermove', pointerMove, true);
+        document.addEventListener('pointerup', pointerUp, true);
+        document.addEventListener('pointercancel', pointerCancel, true);
+        document.addEventListener('click', click, true);
+        document.addEventListener('keydown', pointerCancel, true);
+        document.addEventListener('scroll', scroll, true);
+        document.addEventListener('drop', clearDrop);
+        document.addEventListener('dragend', clearDrop);
+        window.addEventListener('blur', pointerCancel);
+        return () => {
+            cancelPress();
+            clearClick();
+            document.removeEventListener('pointerdown', pointerDown, true);
+            document.removeEventListener('pointermove', pointerMove, true);
+            document.removeEventListener('pointerup', pointerUp, true);
+            document.removeEventListener('pointercancel', pointerCancel, true);
+            document.removeEventListener('click', click, true);
+            document.removeEventListener('keydown', pointerCancel, true);
+            document.removeEventListener('scroll', scroll, true);
+            document.removeEventListener('drop', clearDrop);
+            document.removeEventListener('dragend', clearDrop);
+            window.removeEventListener('blur', pointerCancel);
+        };
+    }, []);
+    useEffect(() => {
+        // Opening a row menu changes the selection/action epoch too. Cancel
+        // only a pending hold; its completed gesture still owns one click.
+        cancelPress();
+        setDropTarget(undefined);
+    }, [interactionEpoch, available, tree.directories]);
     const nodes = useRef(new Map<string, HTMLDivElement>());
     const creationInput = useRef<HTMLInputElement>(null);
     useEffect(() => {
@@ -155,6 +293,50 @@ export function DirectoryTree({
                     onOpen(entry);
                 }
         }
+    };
+    const startPress = (event: ReactPointerEvent<HTMLDivElement>) => {
+        if (
+            !available ||
+            !event.isPrimary ||
+            event.button !== 0 ||
+            !['touch', 'pen'].includes(event.pointerType) ||
+            editingTarget(event.target)
+        )
+            return;
+        const target = event.target as HTMLElement;
+        if (target.closest('form, .tree-status button')) return;
+        const row = target.closest<HTMLElement>('.file-row[data-entry-path]');
+        const entry = row
+            ? visible.find((item) => item.path === row.dataset.entryPath)
+            : undefined;
+        const trigger = entry
+            ? nodes.current.get(entry.path)!
+            : event.currentTarget;
+        const pending = {
+            pointerId: event.pointerId,
+            pointerType: event.pointerType,
+            x: event.clientX,
+            y: event.clientY,
+            fired: false,
+            timer: undefined as ReturnType<typeof setTimeout> | undefined,
+        };
+        press.current = pending;
+        pending.timer = setTimeout(() => {
+            if (press.current !== pending || !trigger.isConnected) return;
+            pending.fired = true;
+            suppressPressClick();
+            if (entry) onMenu(entry, trigger, pending.x, pending.y);
+            else onBlankMenu(trigger, pending.x, pending.y);
+        }, 500);
+    };
+    const dragTarget = (target: EventTarget) => {
+        const row = (target as HTMLElement).closest<HTMLElement>(
+            '.file-row[data-upload-directory]',
+        );
+        return {
+            directory: row?.dataset.uploadDirectory ?? directory,
+            row: row?.dataset.entryPath,
+        };
     };
     const contents = (path: string, level: number) => {
         const page = tree.directories.get(path);
@@ -304,15 +486,27 @@ export function DirectoryTree({
                             onKeyDown={(event) => keyboard(event, entry)}
                         >
                             <div
-                                className={`file-row ${selectedPath === entry.path ? 'selected' : ''} ${isDirectory && directory === entry.path ? 'target-directory' : ''} ${activePath === entry.path ? 'current-file' : ''}`}
+                                className={`file-row ${selectedPath === entry.path ? 'selected' : ''} ${isDirectory && directory === entry.path ? 'target-directory' : ''} ${activePath === entry.path ? 'current-file' : ''} ${dropTarget?.row === entry.path ? 'drop-target' : ''}`}
+                                data-entry-path={entry.path}
+                                data-upload-directory={
+                                    isDirectory
+                                        ? entry.path
+                                        : parentPath(entry.path)
+                                }
                                 style={{ paddingLeft: (level - 1) * 16 }}
                                 onContextMenu={(event) => {
                                     event.preventDefault();
                                     event.stopPropagation();
-                                    const trigger =
-                                        event.currentTarget.querySelector<HTMLElement>(
-                                            '.entry-select',
-                                        )!;
+                                    if (
+                                        press.current?.fired ||
+                                        suppressedClick.current
+                                    )
+                                        return;
+                                    suppressPressClick();
+                                    cancelPress();
+                                    const trigger = nodes.current.get(
+                                        entry.path,
+                                    )!;
                                     onMenu(
                                         entry,
                                         trigger,
@@ -359,27 +553,6 @@ export function DirectoryTree({
                                         {entry.name}
                                     </span>
                                 </button>
-                                <button
-                                    className="entry-select icon-button"
-                                    title={`${entry.name} 的操作`}
-                                    aria-label={`${entry.name} 的操作`}
-                                    aria-haspopup="menu"
-                                    aria-expanded={menuPath === entry.path}
-                                    disabled={!available}
-                                    onClick={(event) => {
-                                        const trigger = event.currentTarget;
-                                        const bounds =
-                                            trigger.getBoundingClientRect();
-                                        onMenu(
-                                            entry,
-                                            trigger,
-                                            bounds.left,
-                                            bounds.bottom,
-                                        );
-                                    }}
-                                >
-                                    <Icon name="more" size={16} />
-                                </button>
                             </div>
                             {expanded && (
                                 <div role="group">
@@ -423,13 +596,67 @@ export function DirectoryTree({
     };
     return (
         <div
-            className="file-list directory-tree"
+            className={`file-list directory-tree ${dropTarget && !dropTarget.row ? 'drop-target' : ''}`}
             role="tree"
             aria-label="文件目录树"
             tabIndex={0}
-            onContextMenu={(event) => {
-                if ((event.target as HTMLElement).closest('input')) return;
+            onPointerDown={startPress}
+            onPaste={(event) => {
+                if (
+                    editingTarget(event.target) ||
+                    !(event.nativeEvent instanceof ClipboardEvent)
+                )
+                    return;
+                if (hasDirectoryPayload(event.clipboardData)) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onDirectoryDrop();
+                    return;
+                }
+                const files = transferFiles(event.clipboardData);
+                if (!files.length) return;
                 event.preventDefault();
+                event.stopPropagation();
+                onPasteFiles(namePastedFiles(files));
+            }}
+            onDragOver={(event) => {
+                if (!hasFilePayload(event.dataTransfer)) return;
+                event.preventDefault();
+                event.stopPropagation();
+                event.dataTransfer.dropEffect = uploadAllowed ? 'copy' : 'none';
+                const target = dragTarget(event.target);
+                if (uploadAllowed)
+                    setDropTarget((current) =>
+                        current?.directory === target.directory &&
+                        current?.row === target.row
+                            ? current
+                            : target,
+                    );
+            }}
+            onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node))
+                    setDropTarget(undefined);
+            }}
+            onDrop={(event) => {
+                if (!hasFilePayload(event.dataTransfer)) return;
+                event.preventDefault();
+                event.stopPropagation();
+                // Resolve the physical drop row directly, never via selection or
+                // a state update that could redirect the captured destination.
+                const target = dragTarget(event.target);
+                setDropTarget(undefined);
+                if (hasDirectoryPayload(event.dataTransfer)) {
+                    onDirectoryDrop();
+                    return;
+                }
+                onUpload(transferFiles(event.dataTransfer), target.directory);
+            }}
+            onContextMenu={(event) => {
+                if (editingTarget(event.target)) return;
+                event.preventDefault();
+                if (press.current?.fired || suppressedClick.current) return;
+                suppressPressClick();
+                cancelPress();
                 onBlankMenu(event.currentTarget, event.clientX, event.clientY);
             }}
             onKeyDown={(event) => {
@@ -448,24 +675,6 @@ export function DirectoryTree({
                 }
             }}
         >
-            <div className="tree-actions">
-                <button
-                    type="button"
-                    className="icon-button"
-                    title="当前目录操作"
-                    aria-label="当前目录操作"
-                    aria-haspopup="menu"
-                    aria-expanded={!!directoryMenuOpen}
-                    disabled={!available}
-                    onClick={(event) => {
-                        const trigger = event.currentTarget;
-                        const bounds = trigger.getBoundingClientRect();
-                        onBlankMenu(trigger, bounds.left, bounds.bottom);
-                    }}
-                >
-                    <Icon name="more" size={16} />
-                </button>
-            </div>
             {contents('', 1)}
         </div>
     );

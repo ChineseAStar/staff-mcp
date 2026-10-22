@@ -443,11 +443,6 @@ input[type='checkbox'] {
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
 }
-.entry-select {
-    width: 28px;
-    margin-right: 3px;
-    color: var(--text-muted);
-}
 .empty-state {
     display: flex;
     flex-direction: column;
@@ -872,22 +867,6 @@ progress::-moz-progress-bar {
     min-height: 27px;
     color: var(--color-primary);
 }
-.drop-overlay {
-    position: absolute;
-    inset: 6px;
-    z-index: 50;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 14px;
-    background: var(--bg-primary);
-    border: 2px dashed var(--color-primary);
-    border-radius: 12px;
-    color: var(--color-primary);
-    pointer-events: none;
-    opacity: 0.96;
-}
 .modal-backdrop {
     position: absolute;
     inset: 0;
@@ -1108,13 +1087,14 @@ progress::-moz-progress-bar {
 }
 
 /* Tree metadata stays in titles rather than competing for row width. */
-.tree-actions {
-    display: flex;
-    justify-content: flex-end;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    background: var(--bg-primary);
+.directory-tree:focus-visible {
+    outline: 2px solid var(--interactive-focus);
+    outline-offset: -2px;
+}
+.directory-tree.drop-target,
+.file-row.drop-target {
+    box-shadow: inset 0 0 0 2px var(--color-primary);
+    background: var(--color-primary-light);
 }
 .directory-tree [role='treeitem'] {
     outline: none;
@@ -1122,6 +1102,10 @@ progress::-moz-progress-bar {
 .directory-tree [role='treeitem']:focus-visible > .file-row {
     outline: 2px solid var(--interactive-focus);
     outline-offset: -2px;
+}
+.directory-tree .file-row {
+    -webkit-touch-callout: none;
+    user-select: none;
 }
 .directory-tree .entry-open {
     gap: 6px;

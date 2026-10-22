@@ -5,7 +5,6 @@ import {
     useState,
     useSyncExternalStore,
 } from 'react';
-import type { DragEvent } from 'react';
 import type { EditorView } from '@codemirror/view';
 import { redo, undo } from '@codemirror/commands';
 import { openSearchPanel } from '@codemirror/search';
@@ -13,6 +12,7 @@ import { bridge, BridgeError, errorMessage } from './bridge';
 import { TextEditor } from './Editor';
 import { FileContextMenu } from './FileContextMenu';
 import { DirectoryTree } from './DirectoryTree';
+import { hasFilePayload } from './tree-input';
 import { useDirectoryTree } from './useDirectoryTree';
 import { parentPath, withinPath } from './tree-types';
 import type { Entry } from './tree-types';
@@ -199,9 +199,15 @@ export function App() {
     const [dialogBusy, setDialogBusy] = useState(false);
     const [dialogError, setDialogError] = useState('');
     const [showTransfers, setShowTransfers] = useState(false);
-    const [menu, setMenu] = useState<'files' | 'editor' | null>(null);
-    const [dragging, setDragging] = useState(false);
-    const dragDepth = useRef(0);
+    const [menu, setMenu] = useState<'editor' | null>(null);
+    const uploadTarget = useRef<
+        | {
+              rootId: string;
+              directory: string;
+              epoch: number;
+          }
+        | undefined
+    >(undefined);
     const uploadInput = useRef<HTMLInputElement>(null);
 
     const root = roots.find((item) => item.rootId === rootId);
@@ -1020,36 +1026,37 @@ export function App() {
         }
     };
 
-    const chooseFiles = (files: File[]) => {
-        if (!available || readOnly || !rootId) {
+    const chooseFiles = (
+        files: File[],
+        targetRoot: string,
+        targetDirectory: string,
+    ) => {
+        if (!files.length) return;
+        if (!canWrite(targetRoot)) {
             setNotice({
                 kind: 'error',
-                text: readOnly
-                    ? '当前根目录只读，不能上传。'
+                text: available
+                    ? '此根目录只读或不可用，不能上传。'
                     : '连接不可用，不能上传。',
             });
             return;
         }
-        if (!files.length) return;
         setShowTransfers(true);
-        transfers.upload(files, rootId, directory);
+        transfers.upload(files, targetRoot, targetDirectory);
     };
 
-    const drop = (event: DragEvent) => {
-        event.preventDefault();
-        dragDepth.current = 0;
-        setDragging(false);
-        const hasDirectory = Array.from(event.dataTransfer.items).some(
-            (item) => item.webkitGetAsEntry?.()?.isDirectory,
-        );
-        if (hasDirectory) {
-            setNotice({
-                kind: 'error',
-                text: '不支持文件夹拖放。请展开文件夹后选择文件，可一次上传多个。',
-            });
-            return;
-        }
-        chooseFiles(Array.from(event.dataTransfer.files));
+    const beginUpload = (targetRoot: string, targetDirectory: string) => {
+        if (!canWrite(targetRoot) || !uploadInput.current) return;
+        // Selection/directory changes do not invalidate this captured target.
+        // Root/connection lifetime changes do: never reuse an old authorization.
+        uploadTarget.current = {
+            rootId: targetRoot,
+            directory: targetDirectory,
+            epoch: actionContext.current.epoch,
+        };
+        setContextMenu(undefined);
+        uploadInput.current.value = '';
+        uploadInput.current.click();
     };
 
     const download = (targetRoot: string, path: string, size: number) => {
@@ -1103,27 +1110,27 @@ export function App() {
 
     return (
         <div
-            className={`file-app ${dragging ? 'is-dragging' : ''}`}
+            className="file-app"
             data-mobile-view={mobilePane}
             data-has-tabs={tabs.length > 0}
-            onDragEnter={(event) => {
-                if (!event.dataTransfer.types.includes('Files')) return;
+            onDragOverCapture={(event) => {
+                if (
+                    !hasFilePayload(event.dataTransfer) ||
+                    (event.target as Element).closest('.directory-tree')
+                )
+                    return;
                 event.preventDefault();
-                dragDepth.current += 1;
-                setDragging(true);
+                event.dataTransfer.dropEffect = 'none';
             }}
-            onDragOver={(event) => {
-                if (!event.dataTransfer.types.includes('Files')) return;
-                event.preventDefault();
-                event.dataTransfer.dropEffect =
-                    available && !readOnly ? 'copy' : 'none';
+            onDropCapture={(event) => {
+                // Block external-file browser navigation outside the tree, but
+                // leave CodeMirror's ordinary text dragging untouched.
+                if (
+                    hasFilePayload(event.dataTransfer) &&
+                    !(event.target as Element).closest('.directory-tree')
+                )
+                    event.preventDefault();
             }}
-            onDragLeave={(event) => {
-                event.preventDefault();
-                dragDepth.current = Math.max(0, dragDepth.current - 1);
-                if (!dragDepth.current) setDragging(false);
-            }}
-            onDrop={drop}
         >
             <header className="topbar">
                 <IconButton
@@ -1234,46 +1241,6 @@ export function App() {
                     disabled={!available}
                     onClick={refresh}
                 />
-                <div className="menu-anchor">
-                    <IconButton
-                        name="more"
-                        title="文件操作"
-                        aria-haspopup="menu"
-                        aria-expanded={menu === 'files'}
-                        onClick={() =>
-                            setMenu(menu === 'files' ? null : 'files')
-                        }
-                    />
-                    {menu === 'files' && (
-                        <Menu label="文件操作" onClose={() => setMenu(null)}>
-                            <button
-                                role="menuitem"
-                                disabled={!available || readOnly}
-                                onClick={() =>
-                                    fileMenuAction(() =>
-                                        uploadInput.current?.click(),
-                                    )
-                                }
-                            >
-                                <Icon name="upload" />
-                                上传文件
-                            </button>
-                            <div role="separator" />
-                            <button
-                                role="menuitem"
-                                onClick={() =>
-                                    fileMenuAction(() =>
-                                        setShowTransfers((value) => !value),
-                                    )
-                                }
-                            >
-                                <Icon name="upload" />
-                                传输记录
-                                {activeTransfers ? ` · ${activeTransfers}` : ''}
-                            </button>
-                        </Menu>
-                    )}
-                </div>
                 <input
                     ref={uploadInput}
                     type="file"
@@ -1281,8 +1248,19 @@ export function App() {
                     hidden
                     aria-label="选择上传文件"
                     onChange={(event) => {
-                        chooseFiles(Array.from(event.target.files ?? []));
+                        const target = uploadTarget.current;
+                        uploadTarget.current = undefined;
+                        const files = Array.from(event.target.files ?? []);
                         event.target.value = '';
+                        if (!target || !files.length) return;
+                        if (target.epoch !== actionContext.current.epoch) {
+                            setNotice({
+                                kind: 'error',
+                                text: '连接或根目录已变化，请重新选择上传文件。',
+                            });
+                            return;
+                        }
+                        chooseFiles(files, target.rootId, target.directory);
                     }}
                 />
             </header>
@@ -1324,42 +1302,69 @@ export function App() {
                     trigger={contextMenu.trigger}
                     onClose={() => setContextMenu(undefined)}
                 >
-                    {contextDirectory !== undefined &&
-                        canWrite(contextMenu.rootId) && (
-                            <>
-                                <button
-                                    type="button"
-                                    role="menuitem"
-                                    onClick={() =>
-                                        beginCreate(
-                                            'create',
-                                            contextMenu.rootId,
-                                            contextDirectory,
-                                            contextMenu.trigger,
-                                        )
-                                    }
-                                >
-                                    <Icon name="file" />
-                                    新建文件
-                                </button>
-                                <button
-                                    type="button"
-                                    role="menuitem"
-                                    onClick={() =>
-                                        beginCreate(
-                                            'mkdir',
-                                            contextMenu.rootId,
-                                            contextDirectory,
-                                            contextMenu.trigger,
-                                        )
-                                    }
-                                >
-                                    <Icon name="folder" />
-                                    新建文件夹
-                                </button>
-                                {contextEntry && <div role="separator" />}
-                            </>
-                        )}
+                    {contextDirectory !== undefined && (
+                        <>
+                            <button
+                                type="button"
+                                role="menuitem"
+                                disabled={!canWrite(contextMenu.rootId)}
+                                onClick={() =>
+                                    beginCreate(
+                                        'create',
+                                        contextMenu.rootId,
+                                        contextDirectory,
+                                        contextMenu.trigger,
+                                    )
+                                }
+                            >
+                                <Icon name="file" />
+                                新建文件
+                            </button>
+                            <button
+                                type="button"
+                                role="menuitem"
+                                disabled={!canWrite(contextMenu.rootId)}
+                                onClick={() =>
+                                    beginCreate(
+                                        'mkdir',
+                                        contextMenu.rootId,
+                                        contextDirectory,
+                                        contextMenu.trigger,
+                                    )
+                                }
+                            >
+                                <Icon name="folder" />
+                                新建文件夹
+                            </button>
+                            <button
+                                type="button"
+                                role="menuitem"
+                                disabled={!canWrite(contextMenu.rootId)}
+                                onClick={() =>
+                                    beginUpload(
+                                        contextMenu.rootId,
+                                        contextDirectory,
+                                    )
+                                }
+                            >
+                                <Icon name="upload" />
+                                上传文件
+                            </button>
+                            <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => {
+                                    setContextMenu(undefined);
+                                    setShowTransfers(true);
+                                }}
+                            >
+                                <Icon name="upload" />
+                                传输记录
+                                {activeTransfers ? ` · ${activeTransfers}` : ''}
+                            </button>
+                            {contextEntry && <div role="separator" />}
+                        </>
+                    )}
                     {contextEntry && (
                         <>
                             <button
@@ -1498,11 +1503,6 @@ export function App() {
                             </button>
                         </>
                     )}
-                    {!contextEntry && !canWrite(contextMenu.rootId) && (
-                        <button role="menuitem" disabled>
-                            此目录不可创建
-                        </button>
-                    )}
                 </FileContextMenu>
             )}
 
@@ -1535,15 +1535,27 @@ export function App() {
                                 ? activeTab.path
                                 : undefined)
                         }
-                        menuPath={
-                            contextMenu?.rootId === rootId
-                                ? contextEntry?.path
-                                : undefined
+                        interactionEpoch={actionIntent.current}
+                        uploadAllowed={canWrite(rootId)}
+                        onUpload={(files, path) =>
+                            chooseFiles(files, rootId, path)
                         }
-                        directoryMenuOpen={
-                            contextMenu?.rootId === rootId &&
-                            contextMenu.target.kind === 'folder' &&
-                            contextMenu.target.directory === directory
+                        onPasteFiles={(files) =>
+                            chooseFiles(
+                                files,
+                                rootId,
+                                selected
+                                    ? selected.type === 'directory'
+                                        ? selected.path
+                                        : parentPath(selected.path)
+                                    : directory,
+                            )
+                        }
+                        onDirectoryDrop={() =>
+                            setNotice({
+                                kind: 'error',
+                                text: '不支持上传文件夹。请展开文件夹后选择文件，可一次上传多个。',
+                            })
                         }
                         onSelect={selectEntry}
                         onOpen={openEntry}
@@ -2162,18 +2174,6 @@ export function App() {
                         </div>
                     )}
                 </section>
-            )}
-            {dragging && (
-                <div className="drop-overlay">
-                    <Icon name="upload" size={30} />
-                    <strong>
-                        {!available
-                            ? '连接不可用'
-                            : readOnly
-                              ? '此位置只读'
-                              : '松开以上传文件'}
-                    </strong>
-                </div>
             )}
             {dialog && (
                 <Modal
