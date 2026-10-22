@@ -22,7 +22,7 @@ import {
     transferLabels,
     useTransfers,
 } from './transfers';
-import { formatDate, formatSize, Icon, IconButton, Menu, Modal } from './ui';
+import { formatSize, Icon, IconButton, Menu, Modal } from './ui';
 import type { IconName } from './ui';
 
 interface Root {
@@ -127,9 +127,7 @@ export function App() {
     const [rootId, setRootId] = useState('');
     const [directory, setDirectory] = useState('');
     const [selected, setSelected] = useState<Entry>();
-    const [stat, setStat] = useState<FileStat>();
     const [statLoading, setStatLoading] = useState(false);
-    const [statError, setStatError] = useState('');
     const [tabs, setTabs] = useState<FileTab[]>([]);
     const tabsRef = useRef(tabs);
     tabsRef.current = tabs;
@@ -199,6 +197,7 @@ export function App() {
     treeRef.current = tree;
     const refresh = () => {
         actionIntent.current++;
+        setStatLoading(false);
         setContextMenu(undefined);
         tree.refreshDirectory(rootId, directory);
     };
@@ -273,31 +272,6 @@ export function App() {
         setStatLoading(false);
     }, [rootId, available, mobilePane]);
 
-    useEffect(() => {
-        setStat(undefined);
-        setStatError('');
-        if (!selected || !available) {
-            setStatLoading(false);
-            return;
-        }
-        let ignore = false;
-        setStatLoading(true);
-        void bridge
-            .request<FileStat>('stat', { rootId, path: selected.path })
-            .then((result) => {
-                if (!ignore) setStat(result);
-            })
-            .catch((error: unknown) => {
-                if (!ignore) setStatError(errorMessage(error));
-            })
-            .finally(() => {
-                if (!ignore) setStatLoading(false);
-            });
-        return () => {
-            ignore = true;
-        };
-    }, [selected, rootId, available]);
-
     // Visibility changes must not recreate editors or discard selection/undo history.
     useEffect(() => {
         if (mobilePane === 'editor') {
@@ -318,6 +292,7 @@ export function App() {
     // Navigation chooses a mutation/upload destination; the tree root is fixed.
     const navigate = (path: string, nextRoot = rootId) => {
         actionIntent.current++;
+        setStatLoading(false);
         setContextMenu(undefined);
         setMobileView('files');
         pendingTabReveal.current = undefined;
@@ -329,6 +304,7 @@ export function App() {
 
     const revealTab = (tab: FileTab) => {
         actionIntent.current++;
+        setStatLoading(false);
         setContextMenu(undefined);
         setActiveTabId(tab.id);
         setMobileView('editor');
@@ -487,6 +463,7 @@ export function App() {
 
     const openEntry = (entry: Entry) => {
         actionIntent.current++;
+        setStatLoading(false);
         setContextMenu(undefined);
         if (entry.type === 'directory') {
             selectEntry(entry);
@@ -1063,7 +1040,11 @@ export function App() {
                         ))}
                     </select>
                 )}
-                <nav className="breadcrumbs" aria-label="当前位置">
+                <nav
+                    className="breadcrumbs"
+                    aria-label="当前位置"
+                    title={`当前目录：/${directory}；新建和上传到此目录`}
+                >
                     <button
                         title="返回根目录"
                         disabled={!available}
@@ -1100,6 +1081,28 @@ export function App() {
                         <Icon name="lock" size={13} />
                     </span>
                 )}
+                {(opening || statLoading) && (
+                    <span className="file-operation-status" role="status">
+                        {opening ? '正在打开…' : '读取中…'}
+                    </span>
+                )}
+                {tabs.length > 0 && mobilePane === 'files' && (
+                    <button
+                        className="icon-button show-editor"
+                        onClick={() => setMobileView('editor')}
+                        title="返回已打开文件"
+                        aria-label="返回已打开文件"
+                    >
+                        <Icon name="code" size={14} />
+                        {dirty && <span className="dirty-dot" />}
+                    </button>
+                )}
+                <IconButton
+                    name="refresh"
+                    title="刷新当前目录"
+                    disabled={!available}
+                    onClick={refresh}
+                />
                 <IconButton
                     name="plus"
                     title="新建文件"
@@ -1139,18 +1142,6 @@ export function App() {
                             >
                                 <Icon name="folder" />
                                 新建文件夹
-                            </button>
-                            <button
-                                role="menuitem"
-                                disabled={!available}
-                                onClick={() =>
-                                    fileMenuAction(() => {
-                                        refresh();
-                                    })
-                                }
-                            >
-                                <Icon name="refresh" />
-                                刷新当前目标目录
                             </button>
                             <div role="separator" />
                             <button
@@ -1361,36 +1352,6 @@ export function App() {
                     className="directory-panel"
                     aria-label="文件列表"
                 >
-                    <div className="list-heading">
-                        <span>{selected ? selected.name : '名称'}</span>
-                        {opening && <span role="status">正在打开…</span>}
-                        {tabs.length > 0 && (
-                            <button
-                                className="text-button show-editor"
-                                onClick={() => setMobileView('editor')}
-                                title="返回已打开文件"
-                                aria-label="返回已打开文件"
-                            >
-                                <Icon name="code" size={14} />
-                                {tabs.length}
-                                {dirty && <span className="dirty-dot" />}
-                            </button>
-                        )}
-                    </div>
-                    <div
-                        className="target-directory-path"
-                        title={`${rootId}:/${directory}`}
-                    >
-                        新建 / 上传目标：/{directory || ''}
-                        <button
-                            className="text-button"
-                            disabled={!available}
-                            onClick={refresh}
-                            title="刷新当前目标目录"
-                        >
-                            刷新此目录
-                        </button>
-                    </div>
                     {rootsError && (
                         <div className="list-error" role="alert">
                             <p>{rootsError}</p>
@@ -1424,33 +1385,6 @@ export function App() {
                         onMenu={showContextMenu}
                         entryIcon={entryIcon}
                     />
-                    {selected && (
-                        <div
-                            className="selection-summary"
-                            aria-label="所选项信息"
-                        >
-                            <span
-                                className="selection-name"
-                                title={selected.path}
-                            >
-                                {selected.name}
-                            </span>
-                            <span className="muted">
-                                {statLoading
-                                    ? '读取中…'
-                                    : selected.type === 'symlink'
-                                      ? '符号链接'
-                                      : stat
-                                        ? `${stat.type === 'directory' ? '文件夹' : formatSize(stat.size)} · ${formatDate(stat.mtime)}`
-                                        : ''}
-                            </span>
-                        </div>
-                    )}
-                    {statError && selected && (
-                        <div className="inline-error" role="alert">
-                            {statError}
-                        </div>
-                    )}
                 </section>
 
                 <section
@@ -1477,7 +1411,7 @@ export function App() {
                                         tabIndex={
                                             activeTabId === tab.id ? 0 : -1
                                         }
-                                        title={`${tab.path}${isDirty(tab) ? '（未保存）' : ''}`}
+                                        title={`${tab.rootId}:/${tab.path}${isDirty(tab) ? '（未保存）' : ''}`}
                                         onClick={() => {
                                             revealTab(tab);
                                         }}
@@ -1556,12 +1490,6 @@ export function App() {
                             role="toolbar"
                             aria-label="编辑操作"
                         >
-                            <span
-                                className="editor-file-path"
-                                title={`${activeTab.rootId}:/${activeTab.path}`}
-                            >
-                                {activeTab.path}
-                            </span>
                             {activeTab.readOnly && (
                                 <span className="readonly-label">只读</span>
                             )}

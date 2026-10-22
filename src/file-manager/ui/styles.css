@@ -234,6 +234,22 @@ input[type='checkbox'] {
     flex: none;
     z-index: 5;
 }
+.file-operation-status {
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+.show-editor {
+    position: relative;
+}
+.show-editor .dirty-dot {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+}
 .wide-up {
     display: none;
 }
@@ -368,22 +384,6 @@ input[type='checkbox'] {
     min-width: 0;
     min-height: 0;
 }
-.list-heading {
-    min-height: 33px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0 12px 0 14px;
-    color: var(--text-muted);
-    font-size: 11px;
-    flex: none;
-}
-.list-heading > span:first-child {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
 .file-list {
     flex: 1;
     overflow: auto;
@@ -466,26 +466,6 @@ input[type='checkbox'] {
 }
 .empty-state .text-button {
     color: var(--color-primary);
-}
-.selection-summary {
-    display: flex;
-    gap: 4px 8px;
-    flex-wrap: wrap;
-    font-size: 11px;
-    align-items: center;
-    min-height: 39px;
-    padding: 4px 7px 4px 13px;
-    background: var(--color-surface);
-    border-top: 1px solid var(--color-border-light);
-    flex: none;
-}
-.selection-name {
-    flex: 1;
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-size: 12px;
 }
 .list-error {
     flex: 1;
@@ -581,6 +561,7 @@ input[type='checkbox'] {
 .editor-toolbar {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 3px;
     min-height: 39px;
     padding: 4px 7px 4px 12px;
@@ -588,15 +569,6 @@ input[type='checkbox'] {
     background: var(--bg-primary);
     flex: none;
     z-index: 4;
-}
-.editor-file-path {
-    flex: 1;
-    min-width: 15px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-tertiary);
-    font-size: 11px;
 }
 .readonly-label {
     font-size: 10px;
@@ -1098,9 +1070,6 @@ progress::-moz-progress-bar {
         min-height: 35px;
         padding-block: 2px;
     }
-    .list-heading {
-        min-height: 27px;
-    }
     .modal-backdrop {
         padding: 6px;
     }
@@ -1138,9 +1107,6 @@ progress::-moz-progress-bar {
     right: auto;
     max-height: calc(100dvh - 16px);
 }
-.selection-summary > .muted {
-    overflow-wrap: anywhere;
-}
 .attach-button {
     flex: none;
     font-size: 11px;
@@ -1151,8 +1117,7 @@ progress::-moz-progress-bar {
     font-size: 12px;
 }
 
-/* Tree rows keep names usable in the narrow pane; metadata lives in titles
-   and the selected-entry summary rather than competing for row width. */
+/* Tree metadata stays in titles rather than competing for row width. */
 .directory-tree [role='treeitem'] {
     outline: none;
 }
@@ -1179,19 +1144,6 @@ progress::-moz-progress-bar {
 }
 .file-row.current-file {
     color: var(--color-primary);
-}
-.target-directory-path {
-    flex: none;
-    padding: 4px 12px 8px;
-    font-size: 11px;
-    color: var(--text-secondary);
-    overflow-wrap: anywhere;
-    border-bottom: 1px solid var(--color-border-light);
-}
-.target-directory-path button {
-    display: block;
-    margin-top: 4px;
-    padding: 0;
 }
 .tree-status {
     color: var(--text-muted);

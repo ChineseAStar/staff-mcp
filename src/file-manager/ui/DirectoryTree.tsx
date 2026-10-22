@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { formatDate, Icon } from './ui';
+import { formatDate, formatSize, Icon } from './ui';
 import type { IconName } from './ui';
 import { parentPath, withinPath } from './tree-types';
 import type { Entry } from './tree-types';
@@ -186,7 +186,7 @@ export function DirectoryTree({
                                             ? `${expanded ? '收起' : '展开'} ${entry.name}`
                                             : `打开 ${entry.name}`
                                     }
-                                    title={`${entry.path}\n${formatDate(entry.mtime)}`}
+                                    title={`${entry.path}\n${entry.type === 'directory' ? '文件夹' : entry.type === 'symlink' ? '符号链接' : formatSize(entry.size)} · ${formatDate(entry.mtime)}`}
                                     onClick={() => {
                                         nodes.current.get(entry.path)?.focus();
                                         if (isDirectory) toggle(entry);
