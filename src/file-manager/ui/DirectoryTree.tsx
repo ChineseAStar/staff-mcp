@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { formatDate, formatSize, Icon } from './ui';
 import type { IconName } from './ui';
@@ -16,6 +16,16 @@ interface Props {
     onSelect: (entry: Entry) => void;
     onOpen: (entry: Entry) => void;
     onMenu: (entry: Entry, trigger: HTMLElement, x: number, y: number) => void;
+    onBlankMenu: (trigger: HTMLElement, x: number, y: number) => void;
+    folderCreation?: {
+        directory: string;
+        name: string;
+        busy: boolean;
+        error?: string;
+    };
+    onFolderName: (name: string) => void;
+    onFolderSubmit: () => void;
+    onFolderCancel: () => void;
     entryIcon: (entry: Entry) => IconName;
 }
 
@@ -29,10 +39,21 @@ export function DirectoryTree({
     onSelect,
     onOpen,
     onMenu,
+    onBlankMenu,
+    folderCreation,
+    onFolderName,
+    onFolderSubmit,
+    onFolderCancel,
     entryIcon,
 }: Props) {
     const [focusedPath, setFocusedPath] = useState<string>();
     const nodes = useRef(new Map<string, HTMLDivElement>());
+    const folderInput = useRef<HTMLInputElement>(null);
+    useEffect(() => {
+        if (!folderCreation) return;
+        folderInput.current?.focus();
+        folderInput.current?.scrollIntoView({ block: 'nearest' });
+    }, [folderCreation?.directory]);
     // Derived visible order only: collapsed descendants are neither rendered
     // nor keyboard targets. The directory cache remains the sole data source.
     const visible: Entry[] = [];
@@ -132,8 +153,107 @@ export function DirectoryTree({
     };
     const contents = (path: string, level: number) => {
         const page = tree.directories.get(path);
+        // An explicitly chosen destination can be beyond a cached first page.
+        // Render only its known ancestor chain, without forging server entries
+        // or fetching further pages/descendants to locate the naming input.
+        const target = folderCreation?.directory;
+        const suffix =
+            target !== undefined &&
+            target !== path &&
+            (!path || withinPath(target, path))
+                ? target.slice(path ? path.length + 1 : 0).split('/')[0]
+                : undefined;
+        const missingChild = suffix
+            ? path
+                ? `${path}/${suffix}`
+                : suffix
+            : undefined;
+        const showMissingChild =
+            missingChild !== undefined &&
+            !page?.entries.some((entry) => entry.path === missingChild);
         return (
             <>
+                {folderCreation?.directory === path && (
+                    <div
+                        className="tree-name-row"
+                        style={{ paddingLeft: (level - 1) * 16 + 10 }}
+                    >
+                        <form
+                            aria-label="新建文件夹"
+                            onSubmit={(event) => event.preventDefault()}
+                            onKeyDown={(event) => {
+                                event.stopPropagation();
+                                if (event.key === 'Escape') {
+                                    event.preventDefault();
+                                    if (!folderCreation.busy) onFolderCancel();
+                                }
+                            }}
+                        >
+                            <Icon name="folder" size={17} />
+                            <input
+                                aria-label="文件夹名"
+                                autoComplete="off"
+                                autoFocus
+                                ref={folderInput}
+                                placeholder="文件夹名"
+                                onKeyDown={(event) => {
+                                    if (event.key !== 'Enter') return;
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    if (
+                                        !event.nativeEvent.isComposing &&
+                                        event.keyCode !== 229
+                                    )
+                                        onFolderSubmit();
+                                }}
+                                value={folderCreation.name}
+                                disabled={folderCreation.busy || !available}
+                                onChange={(event) =>
+                                    onFolderName(event.target.value)
+                                }
+                            />
+                            <button
+                                type="button"
+                                onClick={onFolderSubmit}
+                                disabled={folderCreation.busy || !available}
+                            >
+                                {folderCreation.busy ? '创建中…' : '创建'}
+                            </button>
+                            <button
+                                type="button"
+                                disabled={folderCreation.busy}
+                                onClick={onFolderCancel}
+                            >
+                                取消
+                            </button>
+                        </form>
+                        {folderCreation.error && (
+                            <div className="inline-error" role="alert">
+                                {folderCreation.error}
+                            </div>
+                        )}
+                    </div>
+                )}
+                {showMissingChild && (
+                    <div
+                        role="treeitem"
+                        aria-label={`${suffix}（新建位置）`}
+                        aria-level={level}
+                        aria-expanded="true"
+                    >
+                        <div
+                            className="tree-destination"
+                            style={{ paddingLeft: (level - 1) * 16 + 10 }}
+                            title={missingChild}
+                        >
+                            <Icon name="folder" size={17} />
+                            {suffix}
+                        </div>
+                        <div role="group">
+                            {contents(missingChild!, level + 1)}
+                        </div>
+                    </div>
+                )}
                 {(page?.entries ?? []).map((entry) => {
                     const isDirectory = entry.type === 'directory';
                     const expanded =
@@ -282,6 +402,27 @@ export function DirectoryTree({
             className="file-list directory-tree"
             role="tree"
             aria-label="文件目录树"
+            tabIndex={0}
+            onContextMenu={(event) => {
+                if ((event.target as HTMLElement).closest('input')) return;
+                event.preventDefault();
+                onBlankMenu(event.currentTarget, event.clientX, event.clientY);
+            }}
+            onKeyDown={(event) => {
+                if (event.target !== event.currentTarget) return;
+                if (
+                    event.key === 'ContextMenu' ||
+                    (event.shiftKey && event.key === 'F10')
+                ) {
+                    event.preventDefault();
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    onBlankMenu(
+                        event.currentTarget,
+                        bounds.left + 12,
+                        bounds.top + 12,
+                    );
+                }
+            }}
         >
             {contents('', 1)}
         </div>

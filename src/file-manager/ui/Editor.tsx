@@ -69,6 +69,7 @@ export function TextEditor(props: Props) {
     const view = useRef<EditorView | null>(null);
     const editable = useRef(new Compartment());
     const wrapping = useRef(new Compartment());
+    const nameConfiguration = useRef(new Compartment());
     const current = useRef(props);
     current.current = props;
 
@@ -133,14 +134,16 @@ export function TextEditor(props: Props) {
                     wrapping.current.of(
                         compact.matches ? EditorView.lineWrapping : [],
                     ),
-                    language(initial.name),
                     EditorState.lineSeparator.of(lineBreak),
                     EditorState.phrases.of(chinesePhrases),
-                    EditorView.contentAttributes.of({
-                        'aria-label': `编辑 ${initial.name}`,
-                        'aria-multiline': 'true',
-                        spellcheck: 'false',
-                    }),
+                    nameConfiguration.current.of([
+                        language(initial.name),
+                        EditorView.contentAttributes.of({
+                            'aria-label': `编辑 ${initial.name}`,
+                            'aria-multiline': 'true',
+                            spellcheck: 'false',
+                        }),
+                    ]),
                     editable.current.of([
                         EditorState.readOnly.of(initial.readOnly),
                         EditorView.editable.of(!initial.readOnly),
@@ -240,6 +243,19 @@ export function TextEditor(props: Props) {
             ]),
         });
     }, [props.readOnly, props.revision]);
+
+    useEffect(() => {
+        view.current?.dispatch({
+            effects: nameConfiguration.current.reconfigure([
+                language(props.name),
+                EditorView.contentAttributes.of({
+                    'aria-label': `编辑 ${props.name}`,
+                    'aria-multiline': 'true',
+                    spellcheck: 'false',
+                }),
+            ]),
+        });
+    }, [props.name, props.revision]);
 
     useEffect(() => {
         if (props.active) view.current?.requestMeasure();
