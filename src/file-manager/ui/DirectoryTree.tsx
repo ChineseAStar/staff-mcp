@@ -17,15 +17,16 @@ interface Props {
     onOpen: (entry: Entry) => void;
     onMenu: (entry: Entry, trigger: HTMLElement, x: number, y: number) => void;
     onBlankMenu: (trigger: HTMLElement, x: number, y: number) => void;
-    folderCreation?: {
+    creation?: {
+        kind: 'create' | 'mkdir';
         directory: string;
         name: string;
         busy: boolean;
         error?: string;
     };
-    onFolderName: (name: string) => void;
-    onFolderSubmit: () => void;
-    onFolderCancel: () => void;
+    onCreationName: (name: string) => void;
+    onCreationSubmit: () => void;
+    onCreationCancel: () => void;
     entryIcon: (entry: Entry) => IconName;
 }
 
@@ -40,20 +41,20 @@ export function DirectoryTree({
     onOpen,
     onMenu,
     onBlankMenu,
-    folderCreation,
-    onFolderName,
-    onFolderSubmit,
-    onFolderCancel,
+    creation,
+    onCreationName,
+    onCreationSubmit,
+    onCreationCancel,
     entryIcon,
 }: Props) {
     const [focusedPath, setFocusedPath] = useState<string>();
     const nodes = useRef(new Map<string, HTMLDivElement>());
-    const folderInput = useRef<HTMLInputElement>(null);
+    const creationInput = useRef<HTMLInputElement>(null);
     useEffect(() => {
-        if (!folderCreation) return;
-        folderInput.current?.focus();
-        folderInput.current?.scrollIntoView({ block: 'nearest' });
-    }, [folderCreation?.directory]);
+        if (!creation) return;
+        creationInput.current?.focus();
+        creationInput.current?.scrollIntoView({ block: 'nearest' });
+    }, [creation?.directory, creation?.kind]);
     // Derived visible order only: collapsed descendants are neither rendered
     // nor keyboard targets. The directory cache remains the sole data source.
     const visible: Entry[] = [];
@@ -156,7 +157,7 @@ export function DirectoryTree({
         // An explicitly chosen destination can be beyond a cached first page.
         // Render only its known ancestor chain, without forging server entries
         // or fetching further pages/descendants to locate the naming input.
-        const target = folderCreation?.directory;
+        const target = creation?.directory;
         const suffix =
             target !== undefined &&
             target !== path &&
@@ -173,29 +174,48 @@ export function DirectoryTree({
             !page?.entries.some((entry) => entry.path === missingChild);
         return (
             <>
-                {folderCreation?.directory === path && (
+                {creation?.directory === path && (
                     <div
                         className="tree-name-row"
                         style={{ paddingLeft: (level - 1) * 16 + 10 }}
                     >
                         <form
-                            aria-label="新建文件夹"
+                            aria-label={
+                                creation.kind === 'create'
+                                    ? '新建文件'
+                                    : '新建文件夹'
+                            }
                             onSubmit={(event) => event.preventDefault()}
                             onKeyDown={(event) => {
                                 event.stopPropagation();
                                 if (event.key === 'Escape') {
                                     event.preventDefault();
-                                    if (!folderCreation.busy) onFolderCancel();
+                                    if (!creation.busy) onCreationCancel();
                                 }
                             }}
                         >
-                            <Icon name="folder" size={17} />
+                            <Icon
+                                name={
+                                    creation.kind === 'create'
+                                        ? 'file'
+                                        : 'folder'
+                                }
+                                size={17}
+                            />
                             <input
-                                aria-label="文件夹名"
+                                aria-label={
+                                    creation.kind === 'create'
+                                        ? '文件名'
+                                        : '文件夹名'
+                                }
                                 autoComplete="off"
                                 autoFocus
-                                ref={folderInput}
-                                placeholder="文件夹名"
+                                ref={creationInput}
+                                placeholder={
+                                    creation.kind === 'create'
+                                        ? '文件名'
+                                        : '文件夹名'
+                                }
                                 onKeyDown={(event) => {
                                     if (event.key !== 'Enter') return;
                                     event.preventDefault();
@@ -204,32 +224,32 @@ export function DirectoryTree({
                                         !event.nativeEvent.isComposing &&
                                         event.keyCode !== 229
                                     )
-                                        onFolderSubmit();
+                                        onCreationSubmit();
                                 }}
-                                value={folderCreation.name}
-                                disabled={folderCreation.busy || !available}
+                                value={creation.name}
+                                disabled={creation.busy || !available}
                                 onChange={(event) =>
-                                    onFolderName(event.target.value)
+                                    onCreationName(event.target.value)
                                 }
                             />
                             <button
                                 type="button"
-                                onClick={onFolderSubmit}
-                                disabled={folderCreation.busy || !available}
+                                onClick={onCreationSubmit}
+                                disabled={creation.busy || !available}
                             >
-                                {folderCreation.busy ? '创建中…' : '创建'}
+                                {creation.busy ? '创建中…' : '创建'}
                             </button>
                             <button
                                 type="button"
-                                disabled={folderCreation.busy}
-                                onClick={onFolderCancel}
+                                disabled={creation.busy}
+                                onClick={onCreationCancel}
                             >
                                 取消
                             </button>
                         </form>
-                        {folderCreation.error && (
+                        {creation.error && (
                             <div className="inline-error" role="alert">
-                                {folderCreation.error}
+                                {creation.error}
                             </div>
                         )}
                     </div>

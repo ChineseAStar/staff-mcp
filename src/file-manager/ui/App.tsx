@@ -44,7 +44,8 @@ interface TextResult {
     size: number;
 }
 
-interface TabContents {
+interface FileTab {
+    path: string;
     id: string;
     rootId: string;
     name: string;
@@ -62,18 +63,8 @@ interface TabContents {
     image?: string;
 }
 
-type FileTab = TabContents &
-    (
-        | { state: 'saved'; path: string }
-        | {
-              state: 'draft';
-              directory: string;
-              fileName: string;
-              naming: boolean;
-          }
-    );
-
-interface FolderCreation {
+interface Creation {
+    kind: 'create' | 'mkdir';
     rootId: string;
     directory: string;
     name: string;
@@ -114,18 +105,11 @@ function fileName(path: string) {
 }
 
 function isDirty(tab: FileTab) {
-    return (
-        tab.kind === 'text' &&
-        (tab.text !== tab.savedText ||
-            (tab.state === 'draft' && tab.fileName.length > 0))
-    );
+    return tab.kind === 'text' && tab.text !== tab.savedText;
 }
 
 function affected(tab: FileTab, rootId: string, path: string) {
-    return (
-        tab.rootId === rootId &&
-        withinPath(tab.state === 'draft' ? tab.directory : tab.path, path)
-    );
+    return tab.rootId === rootId && withinPath(tab.path, path);
 }
 
 function entryIcon(entry: Pick<Entry, 'type' | 'name'>): IconName {
@@ -153,7 +137,7 @@ export function App() {
     tabsRef.current = tabs;
     const [activeTabId, setActiveTabId] = useState('');
     const pendingTabReveal = useRef<
-        { rootId: string; path: string; includeDirectory?: boolean } | undefined
+        { rootId: string; path: string } | undefined
     >(undefined);
     const [mobileView, setMobileView] = useState<'files' | 'editor'>('files');
     const [opening, setOpening] = useState(false);
@@ -178,15 +162,15 @@ export function App() {
         kind: 'error' | 'success' | 'info';
         text: string;
     }>();
-    const [folderCreation, setFolderCreationState] = useState<FolderCreation>();
-    const folderCreationRef = useRef(folderCreation);
-    const setFolderCreation = (next: FolderCreation | undefined) => {
-        folderCreationRef.current = next;
-        setFolderCreationState(next);
+    const [creation, setCreationState] = useState<Creation>();
+    const creationRef = useRef(creation);
+    const setCreation = (next: Creation | undefined) => {
+        creationRef.current = next;
+        setCreationState(next);
     };
-    const cancelFolderCreation = (restoreFocus = false) => {
-        const trigger = folderCreationRef.current?.trigger;
-        setFolderCreation(undefined);
+    const cancelCreation = (restoreFocus = false) => {
+        const trigger = creationRef.current?.trigger;
+        setCreation(undefined);
         if (restoreFocus) {
             const target = trigger?.isConnected
                 ? trigger
@@ -232,7 +216,7 @@ export function App() {
     const treeRef = useRef(tree);
     treeRef.current = tree;
     const refresh = () => {
-        cancelFolderCreation();
+        cancelCreation();
         actionIntent.current++;
         setStatLoading(false);
         setContextMenu(undefined);
@@ -299,18 +283,17 @@ export function App() {
 
     useEffect(() => {
         setContextMenu(undefined);
-        if (mobilePane === 'editor') cancelFolderCreation();
+        if (mobilePane === 'editor') cancelCreation();
         actionIntent.current++;
         setStatLoading(false);
     }, [rootId, available, mobilePane]);
 
     useEffect(() => {
-        cancelFolderCreation();
+        cancelCreation();
     }, [rootId, available]);
 
     useEffect(() => {
-        if (folderCreation && !canWrite(folderCreation.rootId))
-            cancelFolderCreation();
+        if (creation && !canWrite(creation.rootId)) cancelCreation();
     }, [roots]);
 
     // Visibility changes must not recreate editors or discard selection/undo history.
@@ -321,7 +304,7 @@ export function App() {
     }, [mobilePane, activeTabId]);
 
     const selectEntry = (entry: Entry) => {
-        cancelFolderCreation();
+        cancelCreation();
         actionIntent.current++;
         setStatLoading(false);
         setContextMenu(undefined);
@@ -333,7 +316,7 @@ export function App() {
 
     // Navigation chooses a mutation/upload destination; the tree root is fixed.
     const navigate = (path: string, nextRoot = rootId) => {
-        cancelFolderCreation();
+        cancelCreation();
         actionIntent.current++;
         setStatLoading(false);
         setContextMenu(undefined);
@@ -346,35 +329,28 @@ export function App() {
     };
 
     const revealTab = (tab: FileTab) => {
-        cancelFolderCreation();
+        cancelCreation();
         actionIntent.current++;
         setStatLoading(false);
         setContextMenu(undefined);
         setActiveTabId(tab.id);
         setMobileView('editor');
-        const parent =
-            tab.state === 'draft' ? tab.directory : parentPath(tab.path);
-        const revealPath = tab.state === 'draft' ? tab.directory : tab.path;
+        const parent = parentPath(tab.path);
         setDirectory(parent);
         if (tab.rootId !== rootId) {
             pendingTabReveal.current = {
                 rootId: tab.rootId,
-                path: revealPath,
-                includeDirectory: tab.state === 'draft',
+                path: tab.path,
             };
             setRootId(tab.rootId);
-        } else tree.reveal(revealPath, tab.state === 'draft');
-        setSelected(
-            tab.state === 'saved'
-                ? {
-                      name: tab.name,
-                      path: tab.path,
-                      type: 'file',
-                      size: tab.size,
-                      mtime: '',
-                  }
-                : undefined,
-        );
+        } else tree.reveal(tab.path);
+        setSelected({
+            name: tab.name,
+            path: tab.path,
+            type: 'file',
+            size: tab.size,
+            mtime: '',
+        });
     };
 
     // A tab explicitly activated across roots may reveal ancestors after the
@@ -382,29 +358,16 @@ export function App() {
     useEffect(() => {
         const pending = pendingTabReveal.current;
         if (pending?.rootId === rootId) {
-            tree.reveal(pending.path, pending.includeDirectory);
+            tree.reveal(pending.path);
             pendingTabReveal.current = undefined;
         }
     }, [rootId]);
 
-    const updateTab = useCallback((id: string, patch: Partial<TabContents>) => {
+    const updateTab = useCallback((id: string, patch: Partial<FileTab>) => {
         setTabs((current) =>
             current.map((tab) => (tab.id === id ? { ...tab, ...patch } : tab)),
         );
     }, []);
-
-    const updateDraft = (
-        id: string,
-        patch: { fileName?: string; naming?: boolean },
-    ) => {
-        setTabs((current) =>
-            current.map((tab) =>
-                tab.id === id && tab.state === 'draft'
-                    ? { ...tab, ...patch }
-                    : tab,
-            ),
-        );
-    };
 
     const onView = useCallback((id: string, view: EditorView | null) => {
         if (view) views.current.set(id, view);
@@ -427,10 +390,7 @@ export function App() {
         entry?: Entry,
     ) => {
         const existing = tabsRef.current.find(
-            (tab) =>
-                tab.state === 'saved' &&
-                tab.rootId === targetRoot &&
-                tab.path === path,
+            (tab) => tab.rootId === targetRoot && tab.path === path,
         );
         if (existing) {
             revealTab(existing);
@@ -451,7 +411,6 @@ export function App() {
             const image = /\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i.test(path);
             const tab: FileTab = {
                 id: `tab-${++tabSequence.current}`,
-                state: 'saved',
                 rootId: targetRoot,
                 path,
                 name: fileName(path),
@@ -552,7 +511,7 @@ export function App() {
             savingTabs.current.has(id) ||
             tab.readOnly ||
             !canWrite(tab.rootId) ||
-            (tab.state === 'saved' && !isDirty(tab))
+            !isDirty(tab)
         )
             return;
         if (
@@ -567,10 +526,6 @@ export function App() {
             });
             return;
         }
-        if (tab.state === 'draft' && !tab.naming) {
-            updateDraft(id, { naming: true });
-            return;
-        }
         if (tab.conflict) {
             setNotice({
                 kind: 'error',
@@ -578,65 +533,38 @@ export function App() {
             });
             return;
         }
-        const text = tab.text;
-        const name = tab.state === 'draft' ? tab.fileName : tab.name;
-        if (
-            tab.state === 'draft' &&
-            (!name.trim() ||
-                /[\/\\]/.test(name) ||
-                name === '.' ||
-                name === '..')
-        ) {
-            updateTab(id, {
-                error: '请输入文件名，不含目录分隔符。保存位置在创建时已固定。',
-            });
-            document.getElementById(`${id}-filename`)?.focus();
-            return;
-        }
+        const { text, name, path } = tab;
         if (new TextEncoder().encode(text).byteLength > 2 * 1024 * 1024) {
             updateTab(id, { error: '文本编辑上限为 2 MiB，正文已保留。' });
             return;
         }
-        const path =
-            tab.state === 'draft' ? joinPath(tab.directory, name) : tab.path;
         savingTabs.current.add(id);
         updateTab(id, { busy: true, error: undefined });
         try {
             const result = await bridge.request<{
                 version: string;
                 size?: number;
-            }>(tab.state === 'draft' ? 'createFile' : 'saveText', {
+            }>('saveText', {
                 rootId: tab.rootId,
                 path,
                 text,
-                ...(tab.state === 'saved'
-                    ? { expectedVersion: tab.version }
-                    : {}),
+                expectedVersion: tab.version,
             });
             // Keep the stable editor identity and current text/undo. The server
             // saved this request's snapshot, not edits made while it was in flight.
             setTabs((current) =>
                 current.map((item): FileTab => {
                     if (item.id !== id) return item;
-                    const contents: TabContents = {
-                        id: item.id,
-                        rootId: item.rootId,
-                        name,
-                        kind: item.kind,
-                        text: item.text,
+                    return {
+                        ...item,
                         savedText: text,
                         version: result.version,
-                        encoding: item.encoding,
                         size:
                             result.size ??
                             new TextEncoder().encode(text).byteLength,
-                        readOnly: item.readOnly,
-                        revision: item.revision,
-                        busy: item.busy,
                         conflict: false,
                         error: undefined,
                     };
-                    return { ...contents, state: 'saved', path };
                 }),
             );
             setNotice({ kind: 'success', text: `已保存 ${name}` });
@@ -645,7 +573,6 @@ export function App() {
             updateTab(id, {
                 error: errorMessage(error),
                 conflict:
-                    tab.state === 'saved' &&
                     error instanceof BridgeError &&
                     error.code === 'VERSION_CONFLICT',
             });
@@ -766,7 +693,7 @@ export function App() {
         y: number,
     ) => {
         if (!available) return;
-        cancelFolderCreation();
+        cancelCreation();
         actionIntent.current++;
         setStatLoading(false);
         setMenu(null);
@@ -784,7 +711,6 @@ export function App() {
         if (
             tabsRef.current.some(
                 (tab) =>
-                    tab.state === 'saved' &&
                     tab.rootId === targetRoot &&
                     tab.path === path &&
                     isDirty(tab),
@@ -835,94 +761,75 @@ export function App() {
         trigger?: HTMLElement,
     ) => {
         if (!canWrite(targetRoot)) return;
-        cancelFolderCreation();
+        cancelCreation();
         actionIntent.current++;
         setStatLoading(false);
         setContextMenu(undefined);
         setMenu(null);
-        if (kind === 'mkdir') {
-            setMobileView('files');
-            tree.reveal(parent, true);
-            setFolderCreation({
-                rootId: targetRoot,
-                directory: parent,
-                name: '',
-                busy: false,
-                trigger,
-                epoch: actionContext.current.epoch,
-            });
-            return;
-        }
-        const tab: FileTab = {
-            id: `tab-${++tabSequence.current}`,
-            state: 'draft',
+        setMobileView('files');
+        tree.reveal(parent, true);
+        setCreation({
+            kind,
             rootId: targetRoot,
             directory: parent,
-            fileName: '',
-            naming: false,
-            name: `未命名文件 ${tabSequence.current}`,
-            kind: 'text',
-            text: '',
-            savedText: '',
-            version: '',
-            encoding: 'utf-8',
-            size: 0,
-            readOnly: false,
-            revision: 0,
-        };
-        setTabs((current) => [...current, tab]);
-        setActiveTabId(tab.id);
-        setMobileView('editor');
+            name: '',
+            busy: false,
+            trigger,
+            epoch: actionContext.current.epoch,
+        });
     };
 
-    const submitFolder = async () => {
-        const folder = folderCreationRef.current;
+    const submitCreation = async () => {
+        const creation = creationRef.current;
         if (
-            !folder ||
-            folder.busy ||
-            !canWrite(folder.rootId) ||
-            folder.epoch !== actionContext.current.epoch
+            !creation ||
+            creation.busy ||
+            !canWrite(creation.rootId) ||
+            creation.epoch !== actionContext.current.epoch
         )
             return;
-        const name = folder.name;
+        const name = creation.name;
         if (
             !name.trim() ||
             /[\/\\]/.test(name) ||
             name === '.' ||
             name === '..'
         ) {
-            setFolderCreation({
-                ...folder,
-                error: '请输入文件夹名，不含目录分隔符。',
+            setCreation({
+                ...creation,
+                error: `请输入${creation.kind === 'create' ? '文件名' : '文件夹名'}，不含目录分隔符。`,
             });
             return;
         }
-        const pending = { ...folder, busy: true, error: undefined };
-        setFolderCreation(pending);
+        // Update the ref synchronously so Enter and clicks cannot submit twice.
+        const pending = { ...creation, busy: true, error: undefined };
+        setCreation(pending);
         try {
-            await bridge.request('mkdir', {
-                rootId: folder.rootId,
-                path: joinPath(folder.directory, name),
-            });
-            treeRef.current.refreshDirectory(folder.rootId, folder.directory);
-            if (
-                folderCreationRef.current !== pending ||
-                folder.epoch !== actionContext.current.epoch
-            )
-                return;
-            cancelFolderCreation(true);
-            setNotice({ kind: 'success', text: `已创建 ${name}` });
+            await bridge.request(
+                creation.kind === 'create' ? 'createFile' : 'mkdir',
+                {
+                    rootId: creation.rootId,
+                    path: joinPath(creation.directory, name),
+                    ...(creation.kind === 'create' ? { text: '' } : {}),
+                },
+            );
+            if (creation.epoch !== actionContext.current.epoch) return;
+            treeRef.current.refreshDirectory(
+                creation.rootId,
+                creation.directory,
+            );
+            if (creationRef.current !== pending) return;
+            cancelCreation(true);
         } catch (error) {
             if (
-                folderCreationRef.current === pending &&
-                folder.epoch === actionContext.current.epoch
+                creationRef.current === pending &&
+                creation.epoch === actionContext.current.epoch
             )
-                setFolderCreation({ ...folder, error: errorMessage(error) });
+                setCreation({ ...creation, error: errorMessage(error) });
         }
     };
 
     const beginReread = (tab: FileTab) => {
-        if (tab.state === 'draft') return;
         setDialog({ kind: 'reread', tabId: tab.id });
         setDialogError('');
     };
@@ -980,7 +887,6 @@ export function App() {
                 if (
                     tabsRef.current.some(
                         (tab) =>
-                            tab.state === 'saved' &&
                             tab.rootId === dialog.rootId &&
                             (tab.path === to ||
                                 tab.path.startsWith(`${to}/`)) &&
@@ -1004,11 +910,6 @@ export function App() {
                     current.map((tab) => {
                         if (!affected(tab, dialog.rootId, dialog.target.path))
                             return tab;
-                        if (tab.state === 'draft')
-                            return {
-                                ...tab,
-                                directory: `${to}${tab.directory.slice(dialog.target.path.length)}`,
-                            };
                         const path = `${to}${tab.path.slice(dialog.target.path.length)}`;
                         return {
                             ...tab,
@@ -1051,7 +952,7 @@ export function App() {
                 const dirtyAffected = tabsRef.current.filter(
                     (tab) =>
                         affected(tab, dialog.rootId, dialog.target.path) &&
-                        (isDirty(tab) || tab.state === 'draft'),
+                        isDirty(tab),
                 );
                 if (dirtyAffected.length && !fields.has('discard'))
                     throw new Error('请先确认丢弃受影响的未保存草稿。');
@@ -1094,8 +995,7 @@ export function App() {
                 const tab = tabsRef.current.find(
                     (item) => item.id === dialog.tabId,
                 );
-                if (!tab || tab.state === 'draft')
-                    throw new Error('文件尚未保存或标签已关闭。');
+                if (!tab) throw new Error('文件标签已关闭。');
                 const result = await bridge.request<TextResult>('readText', {
                     rootId: tab.rootId,
                     path: tab.path,
@@ -1175,7 +1075,7 @@ export function App() {
             ? tabs.filter(
                   (tab) =>
                       affected(tab, dialog.rootId, dialog.target.path) &&
-                      (isDirty(tab) || tab.state === 'draft'),
+                      isDirty(tab),
               )
             : [];
 
@@ -1365,6 +1265,7 @@ export function App() {
                                 上传文件
                             </button>
                             <button
+                                type="button"
                                 role="menuitem"
                                 disabled={!available || readOnly}
                                 onClick={() =>
@@ -1375,6 +1276,7 @@ export function App() {
                                 新建文件
                             </button>
                             <button
+                                type="button"
                                 role="menuitem"
                                 disabled={!available || readOnly}
                                 onClick={() =>
@@ -1454,6 +1356,7 @@ export function App() {
                         canWrite(contextMenu.rootId) && (
                             <>
                                 <button
+                                    type="button"
                                     role="menuitem"
                                     onClick={() =>
                                         beginCreate(
@@ -1468,6 +1371,7 @@ export function App() {
                                     新建文件
                                 </button>
                                 <button
+                                    type="button"
                                     role="menuitem"
                                     onClick={() =>
                                         beginCreate(
@@ -1649,15 +1553,13 @@ export function App() {
                         available={available}
                         directory={directory}
                         activePath={
-                            activeTab?.rootId === rootId &&
-                            activeTab.state === 'saved'
+                            activeTab?.rootId === rootId
                                 ? activeTab.path
                                 : undefined
                         }
                         selectedPath={
                             selected?.path ??
-                            (activeTab?.rootId === rootId &&
-                            activeTab.state === 'saved'
+                            (activeTab?.rootId === rootId
                                 ? activeTab.path
                                 : undefined)
                         }
@@ -1684,18 +1586,16 @@ export function App() {
                                 y,
                             )
                         }
-                        folderCreation={
-                            folderCreation?.rootId === rootId
-                                ? folderCreation
-                                : undefined
+                        creation={
+                            creation?.rootId === rootId ? creation : undefined
                         }
-                        onFolderName={(name) => {
-                            const folder = folderCreationRef.current;
-                            if (folder && !folder.busy)
-                                setFolderCreation({ ...folder, name });
+                        onCreationName={(name) => {
+                            const creation = creationRef.current;
+                            if (creation && !creation.busy)
+                                setCreation({ ...creation, name });
                         }}
-                        onFolderSubmit={() => void submitFolder()}
-                        onFolderCancel={() => cancelFolderCreation(true)}
+                        onCreationSubmit={() => void submitCreation()}
+                        onCreationCancel={() => cancelCreation(true)}
                         entryIcon={entryIcon}
                     />
                 </section>
@@ -1724,7 +1624,7 @@ export function App() {
                                         tabIndex={
                                             activeTabId === tab.id ? 0 : -1
                                         }
-                                        title={`${tab.rootId}:/${tab.state === 'draft' ? tab.directory + '（新文件，尚未保存）' : tab.path}${isDirty(tab) ? '（未保存）' : ''}`}
+                                        title={`${tab.rootId}:/${tab.path}${isDirty(tab) ? '（未保存）' : ''}`}
                                         onClick={() => {
                                             revealTab(tab);
                                         }}
@@ -1830,8 +1730,7 @@ export function App() {
                                             !canWrite(activeTab.rootId) ||
                                             activeTab.busy ||
                                             activeTab.conflict ||
-                                            (activeTab.state === 'saved' &&
-                                                !isDirty(activeTab))
+                                            !isDirty(activeTab)
                                         }
                                         onClick={() =>
                                             void saveTab(activeTab.id)
@@ -1849,12 +1748,10 @@ export function App() {
                                     !available ||
                                     !!attaching ||
                                     activeTab.busy ||
-                                    activeTab.state === 'draft' ||
                                     isDirty(activeTab) ||
                                     activeTab.size > 256 * 1024
                                 }
                                 title={
-                                    activeTab.state === 'draft' ||
                                     isDirty(activeTab)
                                         ? '请先保存编辑，再添加到对话；不会自动保存'
                                         : activeTab.size > 256 * 1024
@@ -1862,7 +1759,6 @@ export function App() {
                                           : '添加服务器最新快照，不会自动发送'
                                 }
                                 onClick={() =>
-                                    activeTab.state === 'saved' &&
                                     void attachFile(
                                         activeTab.rootId,
                                         activeTab.path,
@@ -1873,11 +1769,9 @@ export function App() {
                             >
                                 <Icon name="attach" size={14} />
                                 {attaching?.rootId === activeTab.rootId &&
-                                activeTab.state === 'saved' &&
                                 attaching.path === activeTab.path
                                     ? '添加中…'
-                                    : activeTab.state === 'draft' ||
-                                        isDirty(activeTab)
+                                    : isDirty(activeTab)
                                       ? '先保存再添加'
                                       : activeTab.size > 256 * 1024
                                         ? '超过 256 KiB'
@@ -1937,8 +1831,6 @@ export function App() {
                                                     role="menuitem"
                                                     disabled={
                                                         !available ||
-                                                        activeTab.state ===
-                                                            'draft' ||
                                                         activeTab.busy
                                                     }
                                                     onClick={() =>
@@ -1956,25 +1848,14 @@ export function App() {
                                         )}
                                         <button
                                             role="menuitem"
-                                            disabled={
-                                                !available ||
-                                                activeTab.state === 'draft'
-                                            }
-                                            title={
-                                                activeTab.state === 'draft'
-                                                    ? '请先保存新文件'
-                                                    : undefined
-                                            }
+                                            disabled={!available}
                                             onClick={() =>
-                                                fileMenuAction(
-                                                    () =>
-                                                        activeTab.state ===
-                                                            'saved' &&
-                                                        download(
-                                                            activeTab.rootId,
-                                                            activeTab.path,
-                                                            activeTab.size,
-                                                        ),
+                                                fileMenuAction(() =>
+                                                    download(
+                                                        activeTab.rootId,
+                                                        activeTab.path,
+                                                        activeTab.size,
+                                                    ),
                                                 )
                                             }
                                         >
@@ -2021,71 +1902,6 @@ export function App() {
                                     </div>
                                 )
                             )}
-                            {tab.state === 'draft' && tab.naming && (
-                                <form
-                                    className="inline-name-bar"
-                                    aria-label="保存新文件"
-                                    onSubmit={(event) => event.preventDefault()}
-                                    onKeyDown={(event) => {
-                                        if (event.key === 'Escape') {
-                                            event.preventDefault();
-                                            event.stopPropagation();
-                                            if (!tab.busy) {
-                                                updateDraft(tab.id, {
-                                                    naming: false,
-                                                });
-                                                views.current
-                                                    .get(tab.id)
-                                                    ?.focus();
-                                            }
-                                        }
-                                    }}
-                                >
-                                    <span
-                                        title={`${tab.rootId}:/${tab.directory}`}
-                                    >
-                                        保存到 {tab.rootId}:/
-                                        {tab.directory || ''}
-                                    </span>
-                                    <input
-                                        id={`${tab.id}-filename`}
-                                        aria-label="文件名"
-                                        autoFocus
-                                        autoComplete="off"
-                                        placeholder="文件名，例如 notes.md"
-                                        onKeyDown={(event) => {
-                                            if (event.key !== 'Enter') return;
-                                            event.preventDefault();
-                                            event.stopPropagation();
-                                            if (
-                                                !event.nativeEvent
-                                                    .isComposing &&
-                                                event.keyCode !== 229
-                                            )
-                                                void saveTab(tab.id);
-                                        }}
-                                        value={tab.fileName}
-                                        disabled={
-                                            tab.busy || !canWrite(tab.rootId)
-                                        }
-                                        onChange={(event) =>
-                                            updateDraft(tab.id, {
-                                                fileName: event.target.value,
-                                            })
-                                        }
-                                    />
-                                    <button
-                                        type="button"
-                                        className="primary"
-                                        onClick={() => void saveTab(tab.id)}
-                                        disabled={
-                                            tab.busy || !canWrite(tab.rootId)
-                                        }
-                                    >
-                                        {tab.busy ? '保存中…' : '保存'}
-                                    </button>
-                                </form>
-                            )}
                             {tab.kind === 'text' ? (
                                 <TextEditor
                                     id={tab.id}
@@ -2103,15 +1919,7 @@ export function App() {
                                         updateTab(tab.id, { text })
                                     }
                                     onSave={() => void saveTab(tab.id)}
-                                    onView={(id, view) => {
-                                        onView(id, view);
-                                        if (
-                                            view &&
-                                            tab.state === 'draft' &&
-                                            activeTabId === id
-                                        )
-                                            view.focus();
-                                    }}
+                                    onView={onView}
                                 />
                             ) : tab.kind === 'image' && tab.image ? (
                                 <div className="image-preview">
@@ -2147,7 +1955,6 @@ export function App() {
                                     <button
                                         disabled={!available}
                                         onClick={() =>
-                                            tab.state === 'saved' &&
                                             download(
                                                 tab.rootId,
                                                 tab.path,
