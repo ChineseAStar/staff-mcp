@@ -8,7 +8,7 @@ import { registerMcpClientTools } from "./tools/mcp-client-tools.js";
 import { getMcpInstructions } from "./tools/system-tools.js";
 import * as path from "node:path";
 import { FileCore, CHUNK_LIMIT } from "./file-manager/file-core.js";
-import { FILE_MANAGER, FILE_MANAGER_CAPABILITY, registerFileManager } from "./file-manager/extension.js";
+import { MCP_APPS, APPS_CAPABILITY, registerFileManager } from "./file-manager/extension.js";
 import { wrapFileManagerTransport } from "./file-manager/transport.js";
 import { installFteTransportLifecycle } from "./transports/fte-lifecycle.js";
 
@@ -59,7 +59,7 @@ export function createServerFactory(
         capabilities: {
           resources: { subscribe: true },
           experimental: {
-            [FILE_MANAGER]: FILE_MANAGER_CAPABILITY,
+            [MCP_APPS]: APPS_CAPABILITY,
             "cc.qqxing/file-transfer": {
               supported_schemes: ["file", "staff-transfer"],
               max_chunk_size: CHUNK_LIMIT,

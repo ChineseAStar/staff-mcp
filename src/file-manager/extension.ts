@@ -21,11 +21,13 @@ import {
     relativePath,
 } from './file-core.js';
 import { TransferManager, FTE_PREFIX } from './transfers.js';
+import { takeHttpTransfers } from './http-transfer.js';
 
 export const FILE_MANAGER = 'cc.qqxing/file-manager';
 export const UI_URI = 'ui://staff-file-manager/v1/index.html';
 const RESOURCE_LIMIT = 256 * 1024;
-export const FILE_MANAGER_CAPABILITY = {
+export const MCP_APPS = 'cc.qqxing/apps';
+export const APPS_CAPABILITY = {
     version: 1,
     apps: [
         {
@@ -34,6 +36,29 @@ export const FILE_MANAGER_CAPABILITY = {
             resourceUri: UI_URI,
             mimeType: 'text/html',
             bridgeVersion: 1,
+            icon: 'folder',
+            methods: [
+                'roots',
+                'list',
+                'stat',
+                'readText',
+                'saveText',
+                'createFile',
+                'mkdir',
+                'move',
+                'delete',
+            ].map((method) => `${FILE_MANAGER}/${method}`),
+            transfers: {
+                upload: {
+                    prepare: `${FILE_MANAGER}/upload/prepare`,
+                    commit: `${FILE_MANAGER}/upload/commit`,
+                    release: `${FILE_MANAGER}/upload/discard`,
+                },
+                download: {
+                    prepare: `${FILE_MANAGER}/download/prepare`,
+                    release: `${FILE_MANAGER}/download/release`,
+                },
+            },
         },
     ],
 };
@@ -50,7 +75,9 @@ const params = {
             limit: z.number().int().min(1).max(500).default(100),
         })
         .strict(),
-    stat: z.object(rootPath).strict(),
+    stat: z
+        .object({ ...rootPath, includeVersion: z.boolean().default(false) })
+        .strict(),
     readText: z.object(rootPath).strict(),
     saveText: z
         .object({
@@ -91,13 +118,11 @@ const params = {
         })
         .strict(),
     'upload/commit': z
-        .object({ uploadHandle: z.string().min(1), sha256: z.string() })
+        .object({ handle: z.string().min(1), sha256: z.string() })
         .strict(),
-    'upload/discard': z.object({ uploadHandle: z.string().min(1) }).strict(),
+    'upload/discard': z.object({ handle: z.string().min(1) }).strict(),
     'download/prepare': z.object(rootPath).strict(),
-    'download/release': z
-        .object({ downloadHandle: z.string().min(1) })
-        .strict(),
+    'download/release': z.object({ handle: z.string().min(1) }).strict(),
 };
 function parse<T extends z.ZodTypeAny>(schema: T, data: unknown): z.infer<T> {
     const parsed = schema.safeParse(data ?? {});
@@ -169,12 +194,17 @@ export class FileManagerSession {
         private readonly server: McpServer,
         runtimeDirectory: string,
     ) {
-        this.transfers = new TransferManager(core, runtimeDirectory);
+        this.transfers = new TransferManager(
+            core,
+            runtimeDirectory,
+            takeHttpTransfers(server),
+            () => this.requireExtension(),
+        );
         core.listeners.add(this.notify);
     }
     requireExtension() {
         const capability = this.server.server.getClientCapabilities()
-            ?.experimental?.[FILE_MANAGER] as
+            ?.experimental?.[MCP_APPS] as
             | { versions?: unknown; bridgeVersions?: unknown }
             | undefined;
         if (
@@ -447,7 +477,7 @@ export function registerFileManager(
             }
             case 'stat': {
                 const p = parse(params.stat, input);
-                return core.stat(p.rootId, p.path);
+                return core.stat(p.rootId, p.path, p.includeVersion);
             }
             case 'readText': {
                 const p = parse(params.readText, input);
@@ -495,11 +525,11 @@ export function registerFileManager(
             }
             case 'upload/commit': {
                 const p = parse(params['upload/commit'], input);
-                return current().transfers.commit(p.uploadHandle, p.sha256);
+                return current().transfers.commit(p.handle, p.sha256);
             }
             case 'upload/discard': {
                 const p = parse(params['upload/discard'], input);
-                return current().transfers.discard(p.uploadHandle);
+                return current().transfers.discard(p.handle);
             }
             case 'download/prepare': {
                 const p = parse(params['download/prepare'], input);
@@ -507,7 +537,7 @@ export function registerFileManager(
             }
             case 'download/release': {
                 const p = parse(params['download/release'], input);
-                return current().transfers.release(p.downloadHandle);
+                return current().transfers.release(p.handle);
             }
         }
     }

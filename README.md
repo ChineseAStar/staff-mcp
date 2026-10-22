@@ -105,7 +105,7 @@ Optional CLI controls (milliseconds, also forwarded in Docker mode):
 
 ### Independent file workspace
 
-The negotiated file-manager extension provides a self-contained editor UI, version-checked writes, and private chunked transfers, independently of model Tools. Standard file Resources remain available to ordinary MCP clients; legacy FTE is retained. See [File manager contract and UI build](docs/file-manager.md) for host authorization, draft/transfer lifecycle, limits, and packaging.
+The file manager is a self-contained app advertised through the generic `cc.qqxing/apps` capability, independently of model Tools. It provides version-checked writes and negotiated binary HTTP streaming, with private FTE chunks as a fallback. Standard file Resources remain available to ordinary MCP clients; legacy FTE is retained. See [File manager contract and UI build](docs/file-manager.md) for host authorization, draft/transfer lifecycle, limits, and packaging.
 
 ### 1. Seamless Containerization (`--docker`)
 Never pollute your host machine again. By simply appending `--docker <image>`, `staff-mcp`:

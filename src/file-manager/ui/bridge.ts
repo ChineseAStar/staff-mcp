@@ -116,10 +116,23 @@ const mutations = new Set([
     'delete',
     'uploadStart',
     'uploadChunk',
+    'uploadStream',
     'uploadFinish',
 ]);
 
-// This channel is exclusively the iframe bridge, not a general MCP client.
+const fileMethods = new Set([
+    'roots',
+    'list',
+    'stat',
+    'readText',
+    'saveText',
+    'createFile',
+    'mkdir',
+    'move',
+    'delete',
+]);
+
+// File semantics belong to this app, not to the generic host bridge.
 class FileManagerBridge {
     private port?: MessagePort;
     private sequence = 0;
@@ -151,7 +164,7 @@ class FileManagerBridge {
 
     private ready() {
         if (!this.port && window.parent !== window) {
-            window.parent.postMessage({ type: 'file-manager-ready' }, '*');
+            window.parent.postMessage({ type: 'mcp-app-ready' }, '*');
         }
     }
 
@@ -161,7 +174,7 @@ class FileManagerBridge {
             this.port ||
             event.source !== window.parent ||
             window.parent === window ||
-            data?.type !== 'file-manager-connect' ||
+            data?.type !== 'mcp-app-connect' ||
             data.version !== 1 ||
             typeof data.nonce !== 'string' ||
             !data.nonce ||
@@ -273,16 +286,21 @@ class FileManagerBridge {
         }
         const id = `file-ui-${++this.sequence}`;
         return new Promise<T>((resolve, reject) => {
-            const timer = setTimeout(() => {
-                this.pending.delete(id);
-                reject(
-                    new Error(
-                        mutations.has(method)
-                            ? '请求超时，写入结果待核实。不要直接重放，请刷新或重新读取目标。'
-                            : '请求超时，请检查宿主连接后重试。',
-                    ),
-                );
-            }, 90_000);
+            const timer = setTimeout(
+                () => {
+                    this.pending.delete(id);
+                    reject(
+                        new Error(
+                            mutations.has(method)
+                                ? '请求超时，写入结果待核实。不要直接重放，请刷新或重新读取目标。'
+                                : '请求超时，请检查宿主连接后重试。',
+                        ),
+                    );
+                },
+                ['uploadStream', 'download'].includes(method)
+                    ? 15 * 60_000
+                    : 90_000,
+            );
             this.pending.set(id, {
                 resolve: (value) => resolve(value as T),
                 reject,
@@ -291,7 +309,17 @@ class FileManagerBridge {
             });
             try {
                 this.port!.postMessage(
-                    { version: 1, id, method, params },
+                    {
+                        version: 1,
+                        id,
+                        method: fileMethods.has(method) ? 'rpc' : method,
+                        params: fileMethods.has(method)
+                            ? {
+                                  method: `cc.qqxing/file-manager/${method}`,
+                                  params,
+                              }
+                            : params,
+                    },
                     transfer,
                 );
             } catch (error) {

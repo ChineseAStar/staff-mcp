@@ -153,6 +153,7 @@ export async function secureDirectory(directory: string): Promise<void> {
 }
 export class FileCore {
     readonly mutex = new Mutex();
+    private readonly publications = new Set<string>();
     readonly listeners = new Set<
         (rootId: string, changedPath: string) => void
     >();
@@ -270,6 +271,10 @@ export class FileCore {
                     'ROOT_PROTECTED',
                     'Cannot remove or move a configured root or its ancestor',
                 );
+        }
+        for (const temporary of this.publications) {
+            if (inside(full, temporary))
+                fail('BUSY', 'An in-flight file publication uses this path');
         }
     }
     /** Standard tools retain their path and result contracts, but share the extension's lock. */
@@ -398,32 +403,16 @@ export class FileCore {
             )
             .digest('hex');
     }
-    async stat(rootId: string, file: string) {
+    async stat(rootId: string, file: string, includeVersion = false) {
         const full = await this.resolve(rootId, file);
         const st = await fs.lstat(full);
         const readOnly = this.root(rootId).readOnly;
-        let isText = false;
-        if (st.isFile() && st.size <= TEXT_LIMIT) {
-            try {
-                utf8(await this.readBytes(rootId, file, TEXT_LIMIT));
-                isText = true;
-            } catch (e) {
-                if (
-                    !(
-                        e instanceof FileError &&
-                        ['BINARY_FILE', 'TOO_LARGE'].includes(e.code)
-                    )
-                )
-                    throw e;
-            }
-        }
         return {
             path: file,
             type: st.isDirectory() ? 'directory' : 'file',
             size: st.size,
             mtime: st.mtime.toISOString(),
-            version: await this.version(full),
-            isText,
+            ...(includeVersion ? { version: await this.version(full) } : {}),
             readOnly,
             mimeType: mimeType(file),
             operations: {
@@ -621,7 +610,7 @@ export class FileCore {
                 fail('VERSION_CONFLICT', 'File changed; reload before saving');
         } else if (expectedVersion !== undefined)
             fail('VERSION_CONFLICT', 'Expected file no longer exists');
-        return { full, exists: !!st };
+        return { full, exists: !!st, mode: st?.mode };
     }
     private async atomic(
         rootId: string,
@@ -629,18 +618,26 @@ export class FileCore {
         bytesOrSource: Buffer | string,
         overwrite: boolean,
         expectedVersion?: string,
+        sourceVersion?: string,
     ) {
-        const destination = await this.checkDestination(
-            rootId,
-            file,
-            overwrite,
-            expectedVersion,
-        );
-        const temporary = path.join(
-            path.dirname(destination.full),
-            `.staff-write-${randomUUID()}`,
-        );
+        if (!relativePath(file))
+            fail('ROOT_PROTECTED', 'Cannot replace a root');
+        // Lease the temporary's ancestry before releasing the shared write lock.
+        // Controlled move/delete must not relocate it while the large copy is unlocked.
+        const { full, temporary } = await this.mutex.run(async () => {
+            const full = await this.resolve(rootId, file, {
+                write: true,
+                missing: true,
+            });
+            const temporary = path.join(
+                path.dirname(full),
+                `.staff-write-${randomUUID()}`,
+            );
+            this.publications.add(temporary);
+            return { full, temporary };
+        });
         try {
+            // Potentially large copy/hash is private staging, not shared publication work.
             if (typeof bytesOrSource === 'string')
                 await fs.copyFile(
                     bytesOrSource,
@@ -663,28 +660,42 @@ export class FileCore {
                     await handle.close();
                 }
             }
-            const version = await this.version(temporary);
-            // Finish staging/hash work before the last destination check and atomic publish.
-            await this.checkDestination(
-                rootId,
-                file,
-                overwrite,
-                expectedVersion,
-            );
-            if (destination.exists)
-                await fs.rename(temporary, destination.full);
-            else {
-                await fs.link(temporary, destination.full);
-                await fs.unlink(temporary);
-            }
-            this.changed(rootId, file);
-            return {
-                path: file,
-                version,
-                size: (await fs.lstat(destination.full)).size,
-            };
+            const version =
+                typeof bytesOrSource === 'string'
+                    ? (sourceVersion ?? (await this.version(temporary)))
+                    : createHash('sha256').update(bytesOrSource).digest('hex');
+            return await this.mutex.run(async () => {
+                const destination = await this.checkDestination(
+                    rootId,
+                    file,
+                    overwrite,
+                    expectedVersion,
+                );
+                if (destination.full !== full)
+                    fail('VERSION_CONFLICT', 'Destination changed');
+                // Atomic replacement must retain executable and other permission bits.
+                if (destination.mode !== undefined)
+                    await fs.chmod(temporary, destination.mode & 0o7777);
+                if (destination.exists) await fs.rename(temporary, full);
+                else {
+                    await fs.link(temporary, full);
+                    await fs.unlink(temporary);
+                }
+                this.changed(rootId, file);
+                return {
+                    path: file,
+                    version,
+                    size: (await fs.lstat(full)).size,
+                };
+            });
         } finally {
-            await fs.unlink(temporary).catch(() => {});
+            await this.mutex.run(async () => {
+                try {
+                    await fs.unlink(temporary).catch(() => {});
+                } finally {
+                    this.publications.delete(temporary);
+                }
+            });
         }
     }
     async saveText(
@@ -696,15 +707,13 @@ export class FileCore {
         const bytes = Buffer.from(text, 'utf8');
         if (bytes.length > TEXT_LIMIT)
             fail('TOO_LARGE', 'Text editing limit is 2 MiB');
-        return this.mutex.run(() =>
-            this.atomic(rootId, file, bytes, true, expectedVersion),
-        );
+        return this.atomic(rootId, file, bytes, true, expectedVersion);
     }
     async createFile(rootId: string, file: string, text = '') {
         const bytes = Buffer.from(text, 'utf8');
         if (bytes.length > TEXT_LIMIT)
             fail('TOO_LARGE', 'Text editing limit is 2 MiB');
-        return this.mutex.run(() => this.atomic(rootId, file, bytes, false));
+        return this.atomic(rootId, file, bytes, false);
     }
     async commitUpload(
         rootId: string,
@@ -712,9 +721,15 @@ export class FileCore {
         source: string,
         overwrite: boolean,
         expectedVersion?: string,
+        sourceVersion?: string,
     ) {
-        return this.mutex.run(() =>
-            this.atomic(rootId, file, source, overwrite, expectedVersion),
+        return this.atomic(
+            rootId,
+            file,
+            source,
+            overwrite,
+            expectedVersion,
+            sourceVersion,
         );
     }
     async mkdir(rootId: string, file: string) {
@@ -806,19 +821,19 @@ export class FileCore {
         });
     }
     async snapshot(rootId: string, file: string, destination: string) {
-        return this.mutex.run(async () => {
-            const source = await this.resolve(rootId, file);
-            const sourceStat = await fs.lstat(source);
-            if (!sourceStat.isFile())
+        const source = await this.resolve(rootId, file);
+        const input = await fs.open(
+            source,
+            constants.O_RDONLY | constants.O_NOFOLLOW,
+        );
+        let output: fs.FileHandle | undefined;
+        try {
+            const before = await input.stat();
+            if (!before.isFile())
                 fail('NOT_FILE', 'Only files can be downloaded');
-            if (sourceStat.size > FILE_LIMIT)
+            if (before.size > FILE_LIMIT)
                 fail('TOO_LARGE', 'Download limit is 100 MiB');
-            const version = await this.version(source);
-            const input = await fs.open(
-                source,
-                constants.O_RDONLY | constants.O_NOFOLLOW,
-            );
-            const output = await fs.open(
+            output = await fs.open(
                 destination,
                 constants.O_WRONLY |
                     constants.O_CREAT |
@@ -826,43 +841,53 @@ export class FileCore {
                     constants.O_NOFOLLOW,
                 0o600,
             );
-            try {
-                const st = await input.stat();
-                if (!st.isFile())
-                    fail('NOT_FILE', 'Only files can be downloaded');
-                if (st.size > FILE_LIMIT)
+            const hash = createHash('sha256');
+            const buffer = Buffer.alloc(CHUNK_LIMIT);
+            let size = 0;
+            while (true) {
+                const { bytesRead } = await input.read(
+                    buffer,
+                    0,
+                    Math.min(buffer.length, FILE_LIMIT + 1 - size),
+                    size,
+                );
+                if (!bytesRead) break;
+                size += bytesRead;
+                if (size > FILE_LIMIT)
                     fail('TOO_LARGE', 'Download limit is 100 MiB');
-                const hash = createHash('sha256');
-                const buffer = Buffer.alloc(CHUNK_LIMIT);
-                let size = 0;
-                while (true) {
-                    const { bytesRead } = await input.read(
-                        buffer,
-                        0,
-                        Math.min(buffer.length, FILE_LIMIT + 1 - size),
-                        size,
-                    );
-                    if (!bytesRead) break;
-                    size += bytesRead;
-                    if (size > FILE_LIMIT)
-                        fail('TOO_LARGE', 'Download limit is 100 MiB');
-                    const chunk = buffer.subarray(0, bytesRead);
-                    hash.update(chunk);
-                    await output.writeFile(chunk);
-                }
-                if (
-                    hash.digest('hex') !== version ||
-                    (await this.version(source)) !== version
-                )
+                const chunk = buffer.subarray(0, bytesRead);
+                hash.update(chunk);
+                await output.writeFile(chunk);
+            }
+            const unchanged = (after: Awaited<ReturnType<typeof input.stat>>) =>
+                before.dev === after.dev &&
+                before.ino === after.ino &&
+                before.size === after.size &&
+                before.mtimeMs === after.mtimeMs &&
+                before.ctimeMs === after.ctimeMs;
+            // A single-pass hash covers the exact snapshot bytes. Metadata and identity checks
+            // detect replacement/in-place changes, without hashing the source two more times.
+            if (size !== before.size || !unchanged(await input.stat()))
+                fail(
+                    'VERSION_CONFLICT',
+                    'Source changed while creating download snapshot',
+                );
+            await this.mutex.run(async () => {
+                const current = await this.resolve(rootId, file);
+                if (current !== source || !unchanged(await fs.lstat(current)))
                     fail(
                         'VERSION_CONFLICT',
                         'Source changed while creating download snapshot',
                     );
-                return { name: path.basename(file), size, version };
-            } finally {
-                await input.close();
-                await output.close();
-            }
-        });
+            });
+            return {
+                name: path.basename(file),
+                size,
+                version: hash.digest('hex'),
+            };
+        } finally {
+            await input.close();
+            await output?.close();
+        }
     }
 }

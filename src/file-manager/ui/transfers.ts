@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { bridge, BridgeError, errorMessage } from './bridge';
 import type { TransferProgress } from './bridge';
 
-const CHUNK_SIZE = 512 * 1024;
 export const MAX_FILE_SIZE = 100 * 1024 * 1024;
 
 type TransferStatus =
@@ -69,6 +68,7 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
     const jobsRef = useRef(jobs);
     const enabledRef = useRef(available);
     const runningUpload = useRef(false);
+    const uploadCancels = useRef(new Map<string, Promise<unknown>>());
     const sequence = useRef(0);
     const onUploadedRef = useRef(onUploaded);
     const earlyProgress = useRef(new Map<string, TransferProgress>());
@@ -114,8 +114,13 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
                 change(job.id, {
                     loaded: progress.loaded,
                     size: progress.total,
-                    status: progressStatus(progress),
-                    error: progress.error,
+                    // Upload runner owns terminal state until cleanup has settled.
+                    ...(job.direction === 'download'
+                        ? {
+                              status: progressStatus(progress),
+                              error: progress.error,
+                          }
+                        : {}),
                 });
             }
         });
@@ -175,6 +180,7 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
                         }>('stat', {
                             rootId: job.rootId,
                             path: job.path,
+                            includeVersion: true,
                         });
                         if (cancelled()) throw new Error('已取消');
                         if (existing.type !== 'file')
@@ -195,39 +201,51 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
                     }
                 }
                 if (cancelled()) throw new Error('已取消');
-                const prepared = await bridge.request<{ transferId: string }>(
-                    'uploadStart',
-                    {
-                        rootId: job.rootId,
-                        path: job.path,
-                        size: job.size,
-                        ...(job.overwrite
-                            ? {
-                                  overwrite: true,
-                                  expectedVersion: job.expectedVersion,
-                              }
-                            : {}),
-                    },
-                );
+                const prepared = await bridge.request<{
+                    transferId: string;
+                    mode: 'http-stream' | 'fte';
+                    chunkSize: number;
+                }>('uploadStart', {
+                    rootId: job.rootId,
+                    path: job.path,
+                    size: job.size,
+                    ...(job.overwrite
+                        ? {
+                              overwrite: true,
+                              expectedVersion: job.expectedVersion,
+                          }
+                        : {}),
+                });
                 transferId = prepared.transferId;
                 change(job.id, { transferId, status: 'running', loaded: 0 });
                 if (cancelled()) throw new Error('已取消');
-                for (let offset = 0; offset < job.size; offset += CHUNK_SIZE) {
-                    if (cancelled()) throw new Error('已取消');
-                    const data = await job
-                        .file!.slice(
-                            offset,
-                            Math.min(offset + CHUNK_SIZE, job.size),
-                        )
-                        .arrayBuffer();
-                    if (cancelled()) throw new Error('已取消');
-                    const bytes = data.byteLength;
-                    await bridge.request(
-                        'uploadChunk',
-                        { transferId, offset, data },
-                        [data],
-                    );
-                    change(job.id, { loaded: offset + bytes });
+                if (prepared.mode === 'http-stream') {
+                    await bridge.request('uploadStream', {
+                        transferId,
+                        file: job.file,
+                    });
+                } else {
+                    for (
+                        let offset = 0;
+                        offset < job.size;
+                        offset += prepared.chunkSize
+                    ) {
+                        if (cancelled()) throw new Error('已取消');
+                        const data = await job
+                            .file!.slice(
+                                offset,
+                                Math.min(offset + prepared.chunkSize, job.size),
+                            )
+                            .arrayBuffer();
+                        if (cancelled()) throw new Error('已取消');
+                        const bytes = data.byteLength;
+                        await bridge.request(
+                            'uploadChunk',
+                            { transferId, offset, data },
+                            [data],
+                        );
+                        change(job.id, { loaded: offset + bytes });
+                    }
                 }
                 if (cancelled()) throw new Error('已取消');
                 change(job.id, { status: 'finishing' });
@@ -244,10 +262,11 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
                     (entry) => entry.id === job.id,
                 );
                 change(job.id, {
-                    status:
-                        current?.cancelRequested && enabledRef.current
-                            ? 'cancelled'
-                            : 'error',
+                    status: transferId
+                        ? 'cancelling'
+                        : current?.cancelRequested && enabledRef.current
+                          ? 'cancelled'
+                          : 'error',
                     error:
                         current?.cancelRequested && enabledRef.current
                             ? undefined
@@ -258,7 +277,20 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
             } finally {
                 if (transferId && !committed) {
                     try {
-                        await bridge.request('transferCancel', { transferId });
+                        await (uploadCancels.current.get(transferId) ??
+                            bridge.request('transferCancel', { transferId }));
+                        if (
+                            jobsRef.current.find((entry) => entry.id === job.id)
+                                ?.cancelRequested &&
+                            enabledRef.current
+                        ) {
+                            change(job.id, {
+                                status: 'cancelled',
+                                error: undefined,
+                            });
+                        } else {
+                            change(job.id, { status: 'error' });
+                        }
                     } catch (error) {
                         const current = jobsRef.current.find(
                             (entry) => entry.id === job.id,
@@ -269,6 +301,7 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
                         });
                     }
                 }
+                if (transferId) uploadCancels.current.delete(transferId);
                 runningUpload.current = false;
                 // Trigger the next queued file only after cleanup, keeping one
                 // upload slot free for downloads within the host's two-slot cap.
@@ -379,7 +412,18 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
                 });
             }
         }
-        // Upload cleanup is serialized with its in-flight chunk in run().
+        if (
+            job.direction === 'upload' &&
+            job.transferId &&
+            !uploadCancels.current.has(job.transferId)
+        ) {
+            const cancellation = bridge.request('transferCancel', {
+                transferId: job.transferId,
+            });
+            uploadCancels.current.set(job.transferId, cancellation);
+            // The upload runner owns the final state and awaits this same cleanup.
+            void cancellation.catch(() => {});
+        }
     };
 
     const retry = (id: string, overwrite = false) => {

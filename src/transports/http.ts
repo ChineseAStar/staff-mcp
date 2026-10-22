@@ -1,3 +1,4 @@
+import { HttpTransferRouter, enableHttpTransfers } from '../file-manager/http-transfer.js';
 import express from "express";
 import cors from "cors";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -18,6 +19,13 @@ export async function startHttpServer(serverFactory: () => McpServer, port: numb
   
   // CORS preflight is public and never reaches MCP session handling.
   app.use(cors());
+
+  // Ticket authentication is scoped to the prepared FileSession, not the MCP bearer.
+  // Raw bytes must never pass through JSON parsing (even with application/json content type).
+  const transfers = new HttpTransferRouter();
+  app.all('/mcp/transfers/:opaqueId', (req, res) => {
+    void transfers.handle(req, res);
+  });
 
   // When configured, authenticate before parsing bodies or accessing sessions.
   if (authToken !== undefined) {
@@ -84,6 +92,7 @@ export async function startHttpServer(serverFactory: () => McpServer, port: numb
       sessions.delete(newSessionId);
     };
 
+    enableHttpTransfers(server, transfers);
     await server.connect(t);
     sessions.set(newSessionId, t);
     

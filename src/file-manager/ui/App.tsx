@@ -35,7 +35,7 @@ interface Entry {
 }
 
 interface FileStat extends Omit<Entry, 'name'> {
-    version: string;
+    version?: string;
     isText: boolean;
     readOnly: boolean;
 }
@@ -76,7 +76,7 @@ type Dialog =
     | {
           kind: 'rename' | 'move' | 'delete';
           rootId: string;
-          target: FileStat & { name: string };
+          target: FileStat & { name: string; version: string };
       }
     | { kind: 'close' | 'reread'; tabId: string }
     | { kind: 'copy'; text: string };
@@ -154,7 +154,15 @@ export function App() {
         kind: 'error' | 'success' | 'info';
         text: string;
     }>();
-    const [dialog, setDialog] = useState<Dialog>();
+    const [dialog, setDialogState] = useState<Dialog>();
+    const actionIntent = useRef(0);
+    const actionContext = useRef({ rootId, selected, available });
+    actionContext.current = { rootId, selected, available };
+    const setDialog = (next: Dialog | undefined) => {
+        actionIntent.current++;
+        setStatLoading(false);
+        setDialogState(next);
+    };
     const [dialogBusy, setDialogBusy] = useState(false);
     const [dialogError, setDialogError] = useState('');
     const [showTransfers, setShowTransfers] = useState(false);
@@ -327,7 +335,11 @@ export function App() {
         }
     };
 
-    const openPath = async (targetRoot: string, path: string) => {
+    const openPath = async (
+        targetRoot: string,
+        path: string,
+        entry?: Entry,
+    ) => {
         const existing = tabsRef.current.find(
             (tab) => tab.rootId === targetRoot && tab.path === path,
         );
@@ -341,19 +353,14 @@ export function App() {
         openingPaths.current.add(key);
         setOpening(true);
         try {
-            const info = await bridge.request<FileStat>('stat', {
-                rootId: targetRoot,
-                path,
-            });
-            if (info.type === 'directory') {
+            if (entry?.type === 'directory') {
                 navigate(path, targetRoot);
                 return;
             }
-            if (info.type === 'symlink') {
-                throw new Error(
-                    '符号链接仅供识别；为保护根目录边界，不允许跟随链接。',
-                );
+            if (entry?.type === 'symlink') {
+                throw new Error('符号链接仅供识别；不允许跟随链接。');
             }
+            const image = /\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i.test(path);
             const tab: FileTab = {
                 id: `tab-${++tabSequence.current}`,
                 rootId: targetRoot,
@@ -362,16 +369,14 @@ export function App() {
                 kind: 'binary',
                 text: '',
                 savedText: '',
-                version: info.version,
+                version: '',
                 encoding: '',
-                size: info.size,
-                readOnly:
-                    info.readOnly ||
-                    !!roots.find((item) => item.rootId === targetRoot)
-                        ?.readOnly,
+                size: entry?.size ?? 0,
+                readOnly: !!roots.find((item) => item.rootId === targetRoot)
+                    ?.readOnly,
                 revision: 0,
             };
-            if (info.isText) {
+            if (!image && (entry?.size ?? 0) <= 2 * 1024 * 1024) {
                 try {
                     const result = await bridge.request<TextResult>(
                         'readText',
@@ -398,7 +403,7 @@ export function App() {
                         tab.error = errorMessage(error);
                     } else throw error;
                 }
-            } else if (/\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i.test(path)) {
+            } else if (image) {
                 tab.kind = 'image';
                 try {
                     const result = await bridge.request<{
@@ -437,9 +442,8 @@ export function App() {
     };
 
     const openEntry = (entry: Entry) => {
-        setSelected(entry);
         if (entry.type === 'directory') navigate(entry.path);
-        else void openPath(rootId, entry.path);
+        else void openPath(rootId, entry.path, entry);
     };
 
     const saveTab = async (id: string) => {
@@ -539,14 +543,38 @@ export function App() {
         } else removeTab(tab.id);
     };
 
-    const beginAction = (kind: 'rename' | 'move' | 'delete') => {
-        if (!selected || !stat || !canMutateSelection) return;
-        setDialog({
-            kind,
-            rootId,
-            target: { ...stat, path: selected.path, name: selected.name },
-        });
-        setDialogError('');
+    const beginAction = async (kind: 'rename' | 'move' | 'delete') => {
+        if (!selected || !stat || !canMutateSelection || statLoading) return;
+        // Content versions are needed for mutations, not every row selection.
+        const target = selected;
+        const intent = ++actionIntent.current;
+        const currentIntent = () =>
+            actionIntent.current === intent &&
+            actionContext.current.rootId === rootId &&
+            actionContext.current.selected === target &&
+            actionContext.current.available;
+        setStatLoading(true);
+        try {
+            const current = await bridge.request<
+                FileStat & { version: string }
+            >('stat', {
+                rootId,
+                path: target.path,
+                includeVersion: true,
+            });
+            if (!currentIntent()) return;
+            setDialog({
+                kind,
+                rootId,
+                target: { ...current, path: target.path, name: target.name },
+            });
+            setDialogError('');
+        } catch (error) {
+            if (currentIntent())
+                setNotice({ kind: 'error', text: errorMessage(error) });
+        } finally {
+            if (currentIntent()) setStatLoading(false);
+        }
     };
 
     const beginCreate = (kind: 'create' | 'mkdir') => {

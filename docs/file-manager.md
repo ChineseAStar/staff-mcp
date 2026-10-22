@@ -13,14 +13,20 @@ The current server advertises:
 ```json
 {
   "experimental": {
-    "cc.qqxing/file-manager": {
+    "cc.qqxing/apps": {
       "version": 1,
       "apps": [{
         "id": "files",
         "title": "文件管理器",
         "resourceUri": "ui://staff-file-manager/v1/index.html",
         "mimeType": "text/html",
-        "bridgeVersion": 1
+        "bridgeVersion": 1,
+        "icon": "folder",
+        "methods": ["cc.qqxing/file-manager/roots", "cc.qqxing/file-manager/list", "cc.qqxing/file-manager/stat", "cc.qqxing/file-manager/readText", "cc.qqxing/file-manager/saveText", "cc.qqxing/file-manager/createFile", "cc.qqxing/file-manager/mkdir", "cc.qqxing/file-manager/move", "cc.qqxing/file-manager/delete"],
+        "transfers": {
+          "upload": {"prepare": "cc.qqxing/file-manager/upload/prepare", "commit": "cc.qqxing/file-manager/upload/commit", "release": "cc.qqxing/file-manager/upload/discard"},
+          "download": {"prepare": "cc.qqxing/file-manager/download/prepare", "release": "cc.qqxing/file-manager/download/release"}
+        }
       }]
     },
     "cc.qqxing/file-transfer": {
@@ -31,19 +37,21 @@ The current server advertises:
 }
 ```
 
-For extension methods and the UI Resource, the initialized client must advertise `experimental["cc.qqxing/file-manager"]` with `versions: [1]` and `bridgeVersions: [1]`. Negotiation is checked on the actual SDK session, not inferred from a client name. Unknown versions and unnegotiated calls are rejected. Older clients can continue using ordinary tools, standard file Resources, and legacy FTE; they do not gain access to the file app implicitly.
+For extension methods and the UI Resource, the initialized client must advertise `experimental["cc.qqxing/apps"]` with `versions: [1]` and `bridgeVersions: [1]`. Negotiation is checked on the actual SDK session, not inferred from a client name. Unknown versions and unnegotiated calls are rejected. Older clients can continue using ordinary tools, standard file Resources, and legacy FTE; they do not gain access to the file app implicitly.
 
 ## App and bridge boundary
 
 The app is served by standard `resources/read` at the declared UI URI. It is not a hosted web URL and is not included in ordinary file resource listings. The current chat-ai host reads that HTML through its SDK, runs it in an opaque-origin `sandbox="allow-scripts"` iframe, blocks network access with CSP, and uses a source-checked MessageChannel handshake. Theme and enabled/connected lifecycle messages come from the host.
 
-The direct file-manager namespace is `cc.qqxing/file-manager/`. Its ordinary methods are `roots`, `list`, `stat`, `readText`, `saveText`, `createFile`, `mkdir`, `move`, and `delete`. Transfer preparation, finalization, and release are separate methods controlled by the host. The bridge is not an arbitrary tool executor, fetch proxy, shell, or filesystem API.
+The direct file-manager namespace is `cc.qqxing/file-manager/`. Its ordinary methods are `roots`, `list`, `stat`, `readText`, `saveText`, `createFile`, `mkdir`, `move`, and `delete`. Transfer preparation, finalization, and release are separate methods controlled by the host. The bridge is a generic app host, not an arbitrary tool executor, fetch proxy, shell, or filesystem API. The app translates file actions into its declared full method names; chat-ai does not interpret root/path/editing business parameters. The `mcp-app-ready` / `mcp-app-connect` handshake binds a private MessagePort. Separate app IDs on one MCP are independent launchable workspaces; transport extensions are not UI applications.
 
 ## Roots, paths, and concurrent edits
 
 Roots come from the existing sandbox: `main` is the workspace and `allowed-N` identifies additional allowed directories. Public paths are root-relative literal names, not host absolute paths or URL-encoded paths. Traversal, symlink traversal, protected roots, and private staging access are checked by the file core. Percent signs in RPC paths are literal filename characters; only the resource URI boundary decodes each component once. Root IDs are session/configuration context, not portable filesystem permissions.
 
 Text reads and edits are capped at **2 MiB**. `saveText` requires the version returned by the read; overwriting an existing upload target likewise requires `expectedVersion`. Shared file-core operations serialize supported writes, recheck versions before publication, and use atomic publication rather than editing a target incrementally. `VERSION_CONFLICT` preserves the editor draft; the UI does not silently force an overwrite. These checks are not a promise to sandbox arbitrary external processes with access to the same filesystem.
+
+`stat` returns metadata without reading/hashing file content by default. Call `stat` with `includeVersion: true` only when a mutation needs a content version; `readText` returns the version along with text. File selection/opening must not hash a large binary merely to display its name. Atomic replacements preserve the target permission bits, including executable bits. Upload copy and download snapshot/hash happen outside the shared write mutex; bounded final source/destination checks remain coordinated. External writers are detected through the documented version/identity checks, not locked out by this service.
 
 Private staging is under the workspace's `.staff/file-manager/`; supported file tools and extension browsing exclude/protect that area. Do not treat staging files or transfer handles as user attachments or ordinary Resources.
 
@@ -65,16 +73,24 @@ The host keeps the iframe mounted across chat routes so in-memory tabs and unsav
 
 Cleanup is deliberately narrower than file access: an owner can cancel/close their existing app's temporary transfers even after the grant is revoked, without gaining a new read, write, or commit permission. chat-ai expires idle app bindings after two hours and idle transfers after five minutes.
 
-## Private FTE and legacy compatibility
+## Prepared transfers, binary HTTP and FTE compatibility
 
-File-app transfers use opaque prepared handles, not browser-selected `file://` paths:
+File-app transfers use opaque prepared handles, not browser-selected `file://` paths. Every prepare returns a common `handle`, `uri`, `size`, `name`; lifecycle calls receive `{ handle }`, and upload commit additionally receives `sha256`.
+
+When using the HTTP listener, prepare also returns a private `{ http: { path, token } }`. The path is `/mcp/transfers/<opaque id>` on the same listener. It is authenticated by a random per-transfer Bearer token, not a credential in the URL. Only a correctly negotiated live session can create a ticket. The ticket is single-use and bound to direction, size, lifetime and session; stream data never selects a filesystem path.
+
+A host can PUT the upload as a continuous raw byte stream, then separately commit it. GET reads the prepared snapshot as a binary stream, followed by release. Node stream backpressure bounds buffering, actual bytes are counted, and cancellation/session disposal abort the pipeline and remove private staging. The data endpoint is routed before JSON parsing. Long network I/O does not hold the global filesystem write mutex.
+
+This HTTP data plane is available only where a host can reach the HTTP listener. stdio/reverse continue to negotiate the private FTE fallback; this change does not add a binary channel to mcp-reverse. Hosts must not advertise a reverse transfer as HTTP streaming merely because their browser-facing response is a stream.
+
+FTE fallback retains this sequence:
 
 1. Upload: `upload/prepare` → private FTE `write/init`, ordered `write/chunk`, `write/close` → SHA-256 verification → `upload/commit`. Cancel/failure discards staging; prepare does not publish the destination.
 2. Download: `download/prepare` creates a version-checked snapshot → private FTE read → `download/release`.
 
-Private URIs use `staff-transfer://` and private transfer IDs have a `staff-transfer-` prefix. Both are scoped to one initialized transport session and are invalid after reconnect. The server caps files at **100 MiB**, chunks at **512 KiB**, and prepared transfers at **two per session**, with a five-minute idle TTL and cleanup. Offsets and states are checked; private completed/aborted transfers cannot be replayed. Retry means starting a new transfer, not replaying an uncertain commit.
+Private URIs use `staff-transfer://` and private transfer IDs have a `staff-transfer-` prefix. Both are scoped to one initialized transport session and are invalid after reconnect. The server caps files at **100 MiB**, chunks at **512 KiB**, and prepared transfers at **two per session**, with a five-minute idle TTL and cleanup. A crash/forced process kill can leave staging directories; cleanup is not a cross-restart recovery or disk-quota service. Offsets and states are checked; private completed/aborted transfers cannot be replayed. Retry means starting a new transfer, not replaying an uncertain commit.
 
-The chat-ai host additionally binds transfers to the owning user/app and checks current grants per operation, limits concurrent transfers to two per user, uses bounded raw HTTP upload chunks and a streaming HTTP download, and never opens a local path to implement a remote transfer. Its current browser download collects stream chunks into a Blob; server streaming is not a claim of zero browser buffering. Image preview is limited to 2 MiB. Cancellation admitted before the final commit prevents publication; once commit has started the host returns `TOO_LATE` rather than claiming an already-issued write was undone.
+The chat-ai host additionally binds transfers to the owning user/app and checks current grants per operation, limits concurrent transfers to two per user, uses bounded raw HTTP upload chunks and a streaming HTTP download, and never opens a local path to implement a remote transfer. The direct-HTTP host path no longer base64-encodes each block into a separate RPC. This remains a relay through the host, not browser-to-server direct transfer. Its current browser download collects stream chunks into a Blob; server streaming is not a claim of zero browser buffering. Image preview is limited to 2 MiB. Cancellation admitted before the final commit prevents publication; once commit has started the host returns `TOO_LATE` rather than claiming an already-issued write was undone.
 
 The transport wrapper routes only private handles to the new SDK handlers. Existing `file://` transfers remain with `mcp-fte` and retain their method/result contract; the file core additionally validates their path boundary. Legacy write requests share the file-core write mutex one request at a time, without holding it across a paused transfer. This boundary relies on the pinned `mcp-fte@1.0.2` synchronous dispatch implementation and must be reviewed when upgrading that dependency. Neither this extension nor its UI replaces the legacy cross-MCP FTE feature.
 

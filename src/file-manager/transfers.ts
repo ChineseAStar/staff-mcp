@@ -1,5 +1,9 @@
 import * as fs from 'node:fs/promises';
 import { constants, rmSync } from 'node:fs';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import type { HttpTicket, HttpTransferRouter } from './http-transfer.js';
 import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -37,7 +41,9 @@ interface Prepared {
     transferId?: string;
     fd?: FileHandle;
     offset: number;
-    status: 'prepared' | 'active' | 'closed';
+    status: 'prepared' | 'active' | 'closed' | 'committing';
+    http?: HttpTicket;
+    stream?: AbortController;
     hash?: string;
 }
 function fteFail(code: string, message: string, rpcCode: number): never {
@@ -73,6 +79,8 @@ export class TransferManager {
     constructor(
         private readonly core: FileCore,
         private readonly runtimeDirectory: string,
+        private readonly http?: HttpTransferRouter,
+        private readonly authorizeHttp?: () => void,
     ) {
         liveManagers.add(this);
         this.timer = setInterval(() => {
@@ -83,6 +91,8 @@ export class TransferManager {
     private async remove(item: Prepared) {
         // Invalidate first; a failed cleanup must not leave an accessible stale handle.
         this.prepared.delete(item.handle);
+        item.http?.remove();
+        item.stream?.abort();
         if (item.transferId) this.transfers.delete(item.transferId);
         const fd = item.fd;
         item.fd = undefined;
@@ -166,8 +176,10 @@ export class TransferManager {
                 expectedVersion,
             );
             this.prepared.set(item.handle, item);
+            this.ticket(item);
             return {
-                uploadHandle: item.handle,
+                handle: item.handle,
+                ...this.httpResult(item),
                 uri: item.uri,
                 name: item.name,
                 size,
@@ -177,7 +189,7 @@ export class TransferManager {
     }
     async prepareDownload(rootId: string, file: string) {
         return this.operation(async () => {
-            // Validate before allocating staging; snapshot checks again inside the shared I/O mutex.
+            // Validate before allocating staging; snapshot rechecks source identity before returning.
             await this.core.resolve(rootId, file);
             const item = await this.make(rootId, file, 0, 'read');
             try {
@@ -188,8 +200,11 @@ export class TransferManager {
                 );
                 Object.assign(item, snapshot);
                 this.prepared.set(item.handle, item);
+                this.ticket(item);
                 return {
-                    downloadHandle: item.handle,
+                    handle: item.handle,
+                    ...this.httpResult(item),
+                    sha256: snapshot.version,
                     uri: item.uri,
                     ...snapshot,
                 };
@@ -198,6 +213,134 @@ export class TransferManager {
                 throw e;
             }
         });
+    }
+    private httpResult(item: Prepared) {
+        return item.http
+            ? { http: { path: item.http.path, token: item.http.token } }
+            : {};
+    }
+    private ticket(item: Prepared) {
+        if (this.http)
+            item.http = this.http.register((request, response) =>
+                this.stream(item, request, response),
+            );
+    }
+    private async stream(
+        item: Prepared,
+        request: IncomingMessage,
+        response: ServerResponse,
+    ) {
+        // Admission is serialized, network I/O is not. Discard/expiry/close can abort it immediately.
+        await this.operation(async () => {
+            this.authorizeHttp?.();
+            if (
+                this.prepared.get(item.handle) !== item ||
+                item.status !== 'prepared'
+            )
+                fail('INVALID_HANDLE', 'Transfer has already been consumed');
+            const method = item.direction === 'write' ? 'PUT' : 'GET';
+            if (request.method !== method)
+                fail('INVALID_PARAMS', `Transfer requires ${method}`);
+            const length = request.headers['content-length'];
+            if (
+                item.direction === 'write' &&
+                length !== undefined &&
+                (!/^\d+$/.test(length) || Number(length) !== item.size)
+            )
+                fail(
+                    'SIZE_MISMATCH',
+                    'Content-Length does not match prepared size',
+                );
+            item.status = 'active';
+            item.stream = new AbortController();
+            item.http?.remove();
+        });
+        const signal = item.stream!.signal;
+        const disconnected = () => {
+            if (!response.writableFinished) item.stream?.abort();
+        };
+        response.once('close', disconnected);
+        const progress = new Transform({
+            transform(chunk: Buffer, _encoding, callback) {
+                item.offset += chunk.length;
+                if (item.offset > item.size || item.offset > FILE_LIMIT) {
+                    callback(
+                        new FileError(
+                            'SIZE_MISMATCH',
+                            'Stream exceeds prepared size',
+                        ),
+                    );
+                    return;
+                }
+                item.expires = Date.now() + TTL * 1000;
+                callback(null, chunk);
+            },
+        });
+        try {
+            if (item.direction === 'write') {
+                const hash = createHash('sha256');
+                progress.on('data', (chunk: Buffer) => hash.update(chunk));
+                const fd = await fs.open(
+                    item.staging,
+                    constants.O_WRONLY |
+                        constants.O_CREAT |
+                        constants.O_EXCL |
+                        constants.O_NOFOLLOW,
+                    0o600,
+                );
+                try {
+                    await pipeline(
+                        request,
+                        progress,
+                        // The stream owns its FileHandle reference; flush before auto-close.
+                        fd.createWriteStream({ autoClose: true, flush: true }),
+                        { signal },
+                    );
+                    if (item.offset !== item.size)
+                        fail('SIZE_MISMATCH', 'Upload is incomplete');
+                } finally {
+                    await fd.close();
+                }
+                if (
+                    signal.aborted ||
+                    this.disposed ||
+                    this.prepared.get(item.handle) !== item
+                )
+                    fail('SESSION_CLOSED', 'Transfer was cancelled');
+                item.hash = hash.digest('hex');
+                item.status = 'closed';
+                item.stream = undefined;
+                response.setHeader('Content-Type', 'application/json');
+                response.end(JSON.stringify({ size: item.offset }));
+            } else {
+                response.setHeader('Content-Type', 'application/octet-stream');
+                response.setHeader('Content-Length', item.size);
+                const fd = await fs.open(
+                    item.staging,
+                    constants.O_RDONLY | constants.O_NOFOLLOW,
+                );
+                try {
+                    await pipeline(
+                        fd.createReadStream({ autoClose: true }),
+                        progress,
+                        response,
+                        { signal },
+                    );
+                } finally {
+                    await fd.close();
+                }
+                if (item.offset !== item.size)
+                    fail('SIZE_MISMATCH', 'Snapshot is incomplete');
+                // Keep the handle for explicit release, but never allow another read.
+                item.status = 'closed';
+                item.stream = undefined;
+            }
+        } catch (error) {
+            await this.remove(item);
+            throw error;
+        } finally {
+            response.removeListener('close', disconnected);
+        }
     }
     private handle(handle: string, direction: Prepared['direction']) {
         const item = this.prepared.get(handle);
@@ -262,33 +405,55 @@ export class TransferManager {
                     'INVALID_PARAMS',
                     'sha256 must be a hexadecimal SHA-256 digest',
                 );
-            const actual = await this.hash(item);
-            if (actual !== sha256.toLowerCase() || actual !== item.hash)
+            const actual = item.hash;
+            if (actual !== sha256.toLowerCase()) {
+                await this.remove(item);
                 fteFail(
                     'HASH_MISMATCH',
                     'Upload SHA-256 does not match',
                     -32004,
                 );
-            const result = await this.core.commitUpload(
-                item.rootId,
-                item.path,
-                item.staging,
-                item.overwrite,
-                item.expectedVersion,
-            );
-            await this.remove(item);
-            return result;
+            }
+            item.status = 'committing';
+            try {
+                return await this.core.commitUpload(
+                    item.rootId,
+                    item.path,
+                    item.staging,
+                    item.overwrite,
+                    item.expectedVersion,
+                    actual,
+                );
+            } finally {
+                await this.remove(item);
+            }
         });
     }
     async discard(uploadHandle: string) {
+        const known = this.prepared.get(uploadHandle);
+        if (known?.status === 'committing')
+            fail('TOO_LATE', 'Upload commit has already started');
+        const active = known?.direction === 'write' ? known.stream : undefined;
+        active?.abort();
         return this.operation(async () => {
+            // A queued commit may have won admission; never claim that it was undone.
+            if (known?.status === 'committing')
+                fail('TOO_LATE', 'Upload commit has already started');
+            // Aborting the pipeline may already have completed its own cleanup.
+            if (active?.signal.aborted && !this.prepared.has(uploadHandle))
+                return {};
             const item = this.handle(uploadHandle, 'write');
             await this.remove(item);
             return {};
         });
     }
     async release(downloadHandle: string) {
+        const known = this.prepared.get(downloadHandle);
+        const active = known?.direction === 'read' ? known.stream : undefined;
+        active?.abort();
         return this.operation(async () => {
+            if (active?.signal.aborted && !this.prepared.has(downloadHandle))
+                return {};
             const item = this.handle(downloadHandle, 'read');
             await this.remove(item);
             return {};
@@ -339,6 +504,7 @@ export class TransferManager {
                         : constants.O_RDONLY | constants.O_NOFOLLOW,
                     0o600,
                 );
+                item.http?.remove();
                 item.transferId = `staff-transfer-${randomUUID()}`;
                 item.status = 'active';
                 item.expires = Date.now() + TTL * 1000;
@@ -489,6 +655,7 @@ export class TransferManager {
     }
     async close() {
         this.disposed = true;
+        for (const item of this.prepared.values()) item.stream?.abort();
         liveManagers.delete(this);
         clearInterval(this.timer);
         await this.mutex.run(async () => {
