@@ -18,6 +18,7 @@ const paths = {
     plus: 'M12 4v16M4 12h16',
     upload: 'M12 16V3m-5 5 5-5 5 5M4 16v5h16v-5',
     download: 'M12 3v13m-5-5 5 5 5-5M4 16v5h16v-5',
+    transfers: 'M7 20V4m-4 4 4-4 4 4M17 4v16m-4-4 4 4 4-4',
     copy: 'M8 8h13v13H8ZM16 8V3H3v13h5',
     edit: 'm15 4 5 5M4 20l5-1L21 7l-5-5L4 14Z',
     move: 'M12 3v18M3 12h18m-6-6-3-3-3 3m0 12 3 3 3-3M6 9l-3 3 3 3m12 0 3-3-3-3',

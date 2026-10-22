@@ -1241,6 +1241,13 @@ export function App() {
                     disabled={!available}
                     onClick={refresh}
                 />
+                <IconButton
+                    name="transfers"
+                    title="传输记录"
+                    aria-expanded={showTransfers}
+                    aria-controls="transfer-records"
+                    onClick={() => setShowTransfers((value) => !value)}
+                />
                 <input
                     ref={uploadInput}
                     type="file"
@@ -1349,18 +1356,6 @@ export function App() {
                             >
                                 <Icon name="upload" />
                                 上传文件
-                            </button>
-                            <button
-                                type="button"
-                                role="menuitem"
-                                onClick={() => {
-                                    setContextMenu(undefined);
-                                    setShowTransfers(true);
-                                }}
-                            >
-                                <Icon name="upload" />
-                                传输记录
-                                {activeTransfers ? ` · ${activeTransfers}` : ''}
                             </button>
                             {contextEntry && <div role="separator" />}
                         </>
@@ -1963,6 +1958,7 @@ export function App() {
 
             {queueVisible && (
                 <section
+                    id="transfer-records"
                     className={`transfers ${showTransfers ? 'expanded' : ''}`}
                     aria-label="传输队列"
                 >
@@ -1972,7 +1968,7 @@ export function App() {
                             aria-expanded={showTransfers}
                             onClick={() => setShowTransfers((value) => !value)}
                         >
-                            <Icon name="upload" size={14} />
+                            <Icon name="transfers" size={14} />
                             <span>
                                 传输
                                 {activeTransfers ? ` · ${activeTransfers}` : ''}
