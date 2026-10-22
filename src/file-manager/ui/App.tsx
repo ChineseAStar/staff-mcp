@@ -12,6 +12,10 @@ import { openSearchPanel } from '@codemirror/search';
 import { bridge, BridgeError, errorMessage } from './bridge';
 import { TextEditor } from './Editor';
 import { FileContextMenu } from './FileContextMenu';
+import { DirectoryTree } from './DirectoryTree';
+import { useDirectoryTree } from './useDirectoryTree';
+import { parentPath, withinPath } from './tree-types';
+import type { Entry } from './tree-types';
 import {
     MAX_FILE_SIZE,
     transferActive,
@@ -25,14 +29,6 @@ interface Root {
     rootId: string;
     name: string;
     readOnly: boolean;
-}
-
-interface Entry {
-    name: string;
-    path: string;
-    type: 'file' | 'directory' | 'symlink';
-    size: number;
-    mtime: string | number;
 }
 
 interface FileStat extends Omit<Entry, 'name'> {
@@ -130,13 +126,6 @@ export function App() {
     const [rootsError, setRootsError] = useState('');
     const [rootId, setRootId] = useState('');
     const [directory, setDirectory] = useState('');
-    const [entries, setEntries] = useState<Entry[]>([]);
-    const [loading, setLoading] = useState(false);
-    const [listError, setListError] = useState('');
-    const [cursors, setCursors] = useState<string[]>(['']);
-    const [page, setPage] = useState(0);
-    const [nextCursor, setNextCursor] = useState<string>();
-    const [reload, setReload] = useState(0);
     const [selected, setSelected] = useState<Entry>();
     const [stat, setStat] = useState<FileStat>();
     const [statLoading, setStatLoading] = useState(false);
@@ -145,6 +134,9 @@ export function App() {
     const tabsRef = useRef(tabs);
     tabsRef.current = tabs;
     const [activeTabId, setActiveTabId] = useState('');
+    const pendingTabReveal = useRef<
+        { rootId: string; path: string } | undefined
+    >(undefined);
     const [mobileView, setMobileView] = useState<'files' | 'editor'>('files');
     const [opening, setOpening] = useState(false);
     const openingPaths = useRef(new Set<string>());
@@ -171,17 +163,20 @@ export function App() {
     }>();
     const [dialog, setDialogState] = useState<Dialog>();
     const actionIntent = useRef(0);
-    const actionContext = useRef({
-        rootId,
-        directory,
-        page,
-        reload,
-        available,
-    });
-    actionContext.current = { rootId, directory, page, reload, available };
+    const actionContext = useRef({ rootId, directory, available, epoch: 0 });
+    if (
+        actionContext.current.rootId !== rootId ||
+        actionContext.current.available !== available
+    ) {
+        actionContext.current.epoch++;
+        actionIntent.current++;
+    }
+    Object.assign(actionContext.current, { rootId, directory, available });
+    const dialogEpoch = useRef(0);
     const setDialog = (next: Dialog | undefined) => {
         actionIntent.current++;
         setStatLoading(false);
+        dialogEpoch.current = actionContext.current.epoch;
         setDialogState(next);
     };
     const [dialogBusy, setDialogBusy] = useState(false);
@@ -199,36 +194,51 @@ export function App() {
         tabs.some(isDirty) ||
         (dialog?.kind === 'create' && dialog.content.length > 0);
     const mobilePane = tabs.length ? mobileView : 'files';
-    const cursor = cursors[page] ?? '';
-    const refresh = useCallback(() => {
-        setCursors(['']);
-        setPage(0);
-        setReload((value) => value + 1);
-    }, []);
-
-    const transfers = useTransfers(available, refresh);
+    const tree = useDirectoryTree(rootId, available);
+    const treeRef = useRef(tree);
+    treeRef.current = tree;
+    const refresh = () => {
+        actionIntent.current++;
+        setContextMenu(undefined);
+        tree.refreshDirectory(rootId, directory);
+    };
+    const transfers = useTransfers(available, (targetRoot, path) => {
+        tree.refreshDirectory(targetRoot, parentPath(path));
+    });
     const activeTransfers = transfers.jobs.filter(transferActive).length;
 
+    const rootsRequest = useRef(0);
     const loadRoots = useCallback(async () => {
+        const request = ++rootsRequest.current;
+        const valid = () =>
+            request === rootsRequest.current && actionContext.current.available;
         setRootsLoading(true);
         setRootsError('');
         try {
             const result = await bridge.request<{ roots: Root[] }>('roots');
+            if (!valid()) return;
             setRoots(result.roots);
-            setRootId((previous) =>
-                result.roots.some((item) => item.rootId === previous)
-                    ? previous
-                    : (result.roots[0]?.rootId ?? ''),
-            );
+            if (
+                !result.roots.some(
+                    (item) => item.rootId === actionContext.current.rootId,
+                )
+            ) {
+                setRootId(result.roots[0]?.rootId ?? '');
+                setDirectory('');
+                setSelected(undefined);
+            }
         } catch (error) {
-            setRootsError(errorMessage(error));
+            if (valid()) setRootsError(errorMessage(error));
         } finally {
-            setRootsLoading(false);
+            if (request === rootsRequest.current) setRootsLoading(false);
         }
     }, []);
 
     useEffect(() => {
         if (available) void loadRoots();
+        return () => {
+            rootsRequest.current++;
+        };
     }, [available, loadRoots]);
 
     useEffect(() => {
@@ -261,46 +271,15 @@ export function App() {
         setContextMenu(undefined);
         actionIntent.current++;
         setStatLoading(false);
-    }, [rootId, directory, page, reload, available, mobilePane]);
-
-    useEffect(() => {
-        if (!available || !rootId) return;
-        let ignore = false;
-        setLoading(true);
-        setListError('');
-        setSelected(undefined);
-        setStat(undefined);
-        void bridge
-            .request<{ entries: Entry[]; nextCursor?: string }>('list', {
-                rootId,
-                path: directory,
-                limit: 100,
-                ...(cursor ? { cursor } : {}),
-            })
-            .then((result) => {
-                if (ignore) return;
-                setEntries(result.entries);
-                setNextCursor(result.nextCursor);
-            })
-            .catch((error: unknown) => {
-                if (!ignore) {
-                    setListError(errorMessage(error));
-                    setEntries([]);
-                    setNextCursor(undefined);
-                }
-            })
-            .finally(() => {
-                if (!ignore) setLoading(false);
-            });
-        return () => {
-            ignore = true;
-        };
-    }, [available, rootId, directory, cursor, reload]);
+    }, [rootId, available, mobilePane]);
 
     useEffect(() => {
         setStat(undefined);
         setStatError('');
-        if (!selected || !available) return;
+        if (!selected || !available) {
+            setStatLoading(false);
+            return;
+        }
         let ignore = false;
         setStatLoading(true);
         void bridge
@@ -326,17 +305,56 @@ export function App() {
         }
     }, [mobilePane, activeTabId]);
 
+    const selectEntry = (entry: Entry) => {
+        actionIntent.current++;
+        setStatLoading(false);
+        setContextMenu(undefined);
+        setSelected(entry);
+        setDirectory(
+            entry.type === 'directory' ? entry.path : parentPath(entry.path),
+        );
+    };
+
+    // Navigation chooses a mutation/upload destination; the tree root is fixed.
     const navigate = (path: string, nextRoot = rootId) => {
         actionIntent.current++;
         setContextMenu(undefined);
         setMobileView('files');
+        pendingTabReveal.current = undefined;
         setRootId(nextRoot);
         setDirectory(path);
-        setCursors(['']);
-        setPage(0);
         setSelected(undefined);
-        setReload((value) => value + 1);
+        if (nextRoot === rootId) tree.reveal(path, true);
     };
+
+    const revealTab = (tab: FileTab) => {
+        actionIntent.current++;
+        setContextMenu(undefined);
+        setActiveTabId(tab.id);
+        setMobileView('editor');
+        setDirectory(parentPath(tab.path));
+        if (tab.rootId !== rootId) {
+            pendingTabReveal.current = { rootId: tab.rootId, path: tab.path };
+            setRootId(tab.rootId);
+        } else tree.reveal(tab.path);
+        setSelected({
+            name: tab.name,
+            path: tab.path,
+            type: 'file',
+            size: tab.size,
+            mtime: '',
+        });
+    };
+
+    // A tab explicitly activated across roots may reveal ancestors after the
+    // new cache exists. A root-selector change itself loads only the root.
+    useEffect(() => {
+        const pending = pendingTabReveal.current;
+        if (pending?.rootId === rootId) {
+            tree.reveal(pending.path);
+            pendingTabReveal.current = undefined;
+        }
+    }, [rootId]);
 
     const updateTab = useCallback((id: string, patch: Partial<FileTab>) => {
         setTabs((current) =>
@@ -368,8 +386,7 @@ export function App() {
             (tab) => tab.rootId === targetRoot && tab.path === path,
         );
         if (existing) {
-            setActiveTabId(existing.id);
-            setMobileView('editor');
+            revealTab(existing);
             return;
         }
         const key = `${targetRoot}\0${path}`;
@@ -471,8 +488,10 @@ export function App() {
     const openEntry = (entry: Entry) => {
         actionIntent.current++;
         setContextMenu(undefined);
-        if (entry.type === 'directory') navigate(entry.path);
-        else void openPath(rootId, entry.path, entry);
+        if (entry.type === 'directory') {
+            selectEntry(entry);
+            tree.expand(entry.path);
+        } else void openPath(rootId, entry.path, entry);
     };
 
     const saveTab = async (id: string) => {
@@ -515,7 +534,7 @@ export function App() {
                 error: undefined,
             });
             setNotice({ kind: 'success', text: `已保存 ${tab.name}` });
-            refresh();
+            treeRef.current.refreshDirectory(tab.rootId, parentPath(tab.path));
         } catch (error) {
             updateTab(id, {
                 error: errorMessage(error),
@@ -584,14 +603,13 @@ export function App() {
         )
             return;
         // The target is explicit: selecting a row is not an action dependency.
-        const context = actionContext.current;
+        const context = { ...actionContext.current };
         const intent = ++actionIntent.current;
         const currentIntent = () =>
             actionIntent.current === intent &&
             actionContext.current.rootId === targetRoot &&
             actionContext.current.directory === context.directory &&
-            actionContext.current.page === context.page &&
-            actionContext.current.reload === context.reload &&
+            actionContext.current.epoch === context.epoch &&
             actionContext.current.available;
         setStatLoading(true);
         try {
@@ -626,11 +644,11 @@ export function App() {
         x: number,
         y: number,
     ) => {
-        if (!available || loading) return;
+        if (!available) return;
         actionIntent.current++;
         setStatLoading(false);
         setMenu(null);
-        setSelected(entry);
+        selectEntry(entry);
         setContextMenu({ rootId, entry, trigger, x, y });
     };
 
@@ -724,8 +742,10 @@ export function App() {
             setDialog(undefined);
             return;
         }
-        if (!available) {
-            setDialogError('连接当前不可用，未执行操作。');
+        if (!available || dialogEpoch.current !== actionContext.current.epoch) {
+            setDialogError(
+                '连接或根目录已变化，未执行操作。草稿保留，请关闭后重新发起。',
+            );
             return;
         }
         setDialogBusy(true);
@@ -745,7 +765,10 @@ export function App() {
                     },
                 );
                 setDialog(undefined);
-                refresh();
+                treeRef.current.refreshDirectory(
+                    dialog.rootId,
+                    dialog.directory,
+                );
                 setNotice({ kind: 'success', text: `已创建 ${name}` });
                 if (dialog.kind === 'create')
                     void openPath(dialog.rootId, path);
@@ -803,8 +826,27 @@ export function App() {
                         };
                     }),
                 );
+                treeRef.current.removeSubtree(
+                    dialog.rootId,
+                    dialog.target.path,
+                );
+                treeRef.current.removeSubtree(dialog.rootId, to);
+                treeRef.current.refreshDirectory(dialog.rootId, parent);
+                if (parentPath(to) !== parent)
+                    treeRef.current.refreshDirectory(
+                        dialog.rootId,
+                        parentPath(to),
+                    );
+                if (actionContext.current.rootId === dialog.rootId) {
+                    const currentDirectory = actionContext.current.directory;
+                    if (withinPath(currentDirectory, dialog.target.path)) {
+                        const next = `${to}${currentDirectory.slice(dialog.target.path.length)}`;
+                        setDirectory(next);
+                        treeRef.current.reveal(next, true);
+                    }
+                    setSelected(undefined);
+                }
                 setDialog(undefined);
-                refresh();
                 setNotice({
                     kind: 'success',
                     text: `已${dialog.kind === 'rename' ? '重命名' : '移动'}到 ${to}`,
@@ -829,8 +871,25 @@ export function App() {
                 setTabs(remaining);
                 if (!remaining.some((tab) => tab.id === activeTabId))
                     setActiveTabId(remaining[0]?.id ?? '');
+                const parent = parentPath(dialog.target.path);
+                treeRef.current.removeSubtree(
+                    dialog.rootId,
+                    dialog.target.path,
+                );
+                treeRef.current.refreshDirectory(dialog.rootId, parent);
+                if (actionContext.current.rootId === dialog.rootId) {
+                    if (
+                        withinPath(
+                            actionContext.current.directory,
+                            dialog.target.path,
+                        )
+                    ) {
+                        setDirectory(parent);
+                        treeRef.current.reveal(parent, true);
+                    }
+                    setSelected(undefined);
+                }
                 setDialog(undefined);
-                refresh();
                 setNotice({
                     kind: 'success',
                     text: `已删除 ${dialog.target.name}`,
@@ -1087,12 +1146,11 @@ export function App() {
                                 onClick={() =>
                                     fileMenuAction(() => {
                                         refresh();
-                                        void loadRoots();
                                     })
                                 }
                             >
                                 <Icon name="refresh" />
-                                刷新
+                                刷新当前目标目录
                             </button>
                             <div role="separator" />
                             <button
@@ -1305,13 +1363,7 @@ export function App() {
                 >
                     <div className="list-heading">
                         <span>{selected ? selected.name : '名称'}</span>
-                        {opening ? (
-                            <span role="status">正在打开…</span>
-                        ) : (
-                            <span>
-                                {loading ? '读取中…' : `${entries.length} 项`}
-                            </span>
-                        )}
+                        {opening && <span role="status">正在打开…</span>}
                         {tabs.length > 0 && (
                             <button
                                 className="text-button show-editor"
@@ -1325,144 +1377,53 @@ export function App() {
                             </button>
                         )}
                     </div>
-                    {rootsError || listError ? (
+                    <div
+                        className="target-directory-path"
+                        title={`${rootId}:/${directory}`}
+                    >
+                        新建 / 上传目标：/{directory || ''}
+                        <button
+                            className="text-button"
+                            disabled={!available}
+                            onClick={refresh}
+                            title="刷新当前目标目录"
+                        >
+                            刷新此目录
+                        </button>
+                    </div>
+                    {rootsError && (
                         <div className="list-error" role="alert">
-                            <p>{rootsError || listError}</p>
-                            <button
-                                onClick={() =>
-                                    rootsError ? void loadRoots() : refresh()
-                                }
-                            >
+                            <p>{rootsError}</p>
+                            <button onClick={() => void loadRoots()}>
                                 重试
                             </button>
                         </div>
-                    ) : (
-                        <div
-                            className="file-list"
-                            role="list"
-                            aria-busy={loading}
-                        >
-                            {entries.map((entry) => (
-                                <div
-                                    key={entry.path}
-                                    role="listitem"
-                                    className={`file-row ${selected?.path === entry.path ? 'selected' : ''}`}
-                                    onContextMenu={(event) => {
-                                        event.preventDefault();
-                                        const trigger =
-                                            event.currentTarget.querySelector<HTMLElement>(
-                                                '.entry-select',
-                                            )!;
-                                        showContextMenu(
-                                            entry,
-                                            trigger,
-                                            event.clientX,
-                                            event.clientY,
-                                        );
-                                    }}
-                                    onKeyDown={(event) => {
-                                        if (
-                                            event.key !== 'ContextMenu' &&
-                                            !(
-                                                event.shiftKey &&
-                                                event.key === 'F10'
-                                            )
-                                        )
-                                            return;
-                                        event.preventDefault();
-                                        const trigger =
-                                            event.target as HTMLElement;
-                                        const bounds =
-                                            trigger.getBoundingClientRect();
-                                        showContextMenu(
-                                            entry,
-                                            trigger,
-                                            bounds.left,
-                                            bounds.bottom,
-                                        );
-                                    }}
-                                >
-                                    <button
-                                        className="entry-open"
-                                        disabled={!available || loading}
-                                        title={`${entry.path}\n${formatDate(entry.mtime)}`}
-                                        onClick={() => openEntry(entry)}
-                                    >
-                                        <span
-                                            className={`entry-icon ${entry.type}`}
-                                        >
-                                            <Icon
-                                                name={entryIcon(entry)}
-                                                size={19}
-                                            />
-                                        </span>
-                                        <span className="entry-name">
-                                            {entry.name}
-                                        </span>
-                                        {entry.type === 'directory' ? (
-                                            <Icon name="chevron" size={13} />
-                                        ) : (
-                                            <span className="entry-size">
-                                                {formatSize(entry.size)}
-                                            </span>
-                                        )}
-                                    </button>
-                                    <button
-                                        className="entry-select icon-button"
-                                        title={`选择 ${entry.name} 的操作`}
-                                        aria-label={`选择 ${entry.name} 的操作`}
-                                        aria-haspopup="menu"
-                                        aria-expanded={
-                                            contextMenu?.entry.path ===
-                                                entry.path &&
-                                            contextMenu.rootId === rootId
-                                        }
-                                        disabled={!available || loading}
-                                        onClick={(event) => {
-                                            const trigger = event.currentTarget;
-                                            const bounds =
-                                                trigger.getBoundingClientRect();
-                                            showContextMenu(
-                                                entry,
-                                                trigger,
-                                                bounds.left,
-                                                bounds.bottom,
-                                            );
-                                        }}
-                                    >
-                                        <Icon name="more" size={16} />
-                                    </button>
-                                </div>
-                            ))}
-                            {!entries.length && (
-                                <div className="empty-state">
-                                    <Icon name="folder" size={28} />
-                                    <span>
-                                        {loading || rootsLoading
-                                            ? '读取中…'
-                                            : !available
-                                              ? '尚未连接'
-                                              : !roots.length
-                                                ? '没有可用目录'
-                                                : '空文件夹'}
-                                    </span>
-                                    {available &&
-                                        root &&
-                                        !readOnly &&
-                                        !loading && (
-                                            <button
-                                                className="text-button"
-                                                onClick={() =>
-                                                    uploadInput.current?.click()
-                                                }
-                                            >
-                                                上传文件
-                                            </button>
-                                        )}
-                                </div>
-                            )}
-                        </div>
                     )}
+                    <DirectoryTree
+                        tree={tree}
+                        available={available}
+                        directory={directory}
+                        activePath={
+                            activeTab?.rootId === rootId
+                                ? activeTab.path
+                                : undefined
+                        }
+                        selectedPath={
+                            selected?.path ??
+                            (activeTab?.rootId === rootId
+                                ? activeTab.path
+                                : undefined)
+                        }
+                        menuPath={
+                            contextMenu?.rootId === rootId
+                                ? contextMenu.entry.path
+                                : undefined
+                        }
+                        onSelect={selectEntry}
+                        onOpen={openEntry}
+                        onMenu={showContextMenu}
+                        entryIcon={entryIcon}
+                    />
                     {selected && (
                         <div
                             className="selection-summary"
@@ -1489,30 +1450,6 @@ export function App() {
                         <div className="inline-error" role="alert">
                             {statError}
                         </div>
-                    )}
-                    {(page > 0 || nextCursor) && (
-                        <nav className="pagination" aria-label="目录分页">
-                            <button
-                                disabled={!available || loading || !page}
-                                onClick={() => setPage((value) => value - 1)}
-                            >
-                                上一页
-                            </button>
-                            <span>第 {page + 1} 页</span>
-                            <button
-                                disabled={!available || loading || !nextCursor}
-                                onClick={() => {
-                                    if (!nextCursor) return;
-                                    setCursors((current) => [
-                                        ...current.slice(0, page + 1),
-                                        nextCursor,
-                                    ]);
-                                    setPage((value) => value + 1);
-                                }}
-                            >
-                                下一页
-                            </button>
-                        </nav>
                     )}
                 </section>
 
@@ -1542,8 +1479,7 @@ export function App() {
                                         }
                                         title={`${tab.path}${isDirty(tab) ? '（未保存）' : ''}`}
                                         onClick={() => {
-                                            setActiveTabId(tab.id);
-                                            setMobileView('editor');
+                                            revealTab(tab);
                                         }}
                                         onKeyDown={(event) => {
                                             if (
@@ -1572,7 +1508,7 @@ export function App() {
                                                     (next + tabs.length) %
                                                         tabs.length
                                                 ];
-                                            setActiveTabId(target.id);
+                                            revealTab(target);
                                             document
                                                 .getElementById(
                                                     `${target.id}-label`,
@@ -1787,6 +1723,12 @@ export function App() {
                                     </Menu>
                                 )}
                             </div>
+                        </div>
+                    )}
+                    {!tabs.length && (
+                        <div className="empty-state">
+                            <Icon name="file" size={28} />
+                            <span>从左侧目录树打开文件</span>
                         </div>
                     )}
                     {tabs.map((tab) => (
@@ -2195,7 +2137,7 @@ export function App() {
                                                 name="content"
                                                 value={dialog.content}
                                                 onChange={(event) =>
-                                                    setDialog({
+                                                    setDialogState({
                                                         ...dialog,
                                                         content:
                                                             event.target.value,
@@ -2336,11 +2278,14 @@ export function App() {
                                     {dialogError}
                                 </div>
                             )}
-                            {!available && dialog.kind !== 'close' && (
-                                <p className="dialog-error">
-                                    连接已暂停或断开。草稿已保留，操作尚不可用。
-                                </p>
-                            )}
+                            {(!available ||
+                                dialogEpoch.current !==
+                                    actionContext.current.epoch) &&
+                                dialog.kind !== 'close' && (
+                                    <p className="dialog-error">
+                                        连接或根目录已变化。草稿已保留，请关闭后重新发起操作。
+                                    </p>
+                                )}
                             <div className="modal-actions">
                                 <button
                                     type="button"
@@ -2366,7 +2311,10 @@ export function App() {
                                     }
                                     disabled={
                                         dialogBusy ||
-                                        (!available && dialog.kind !== 'close')
+                                        ((!available ||
+                                            dialogEpoch.current !==
+                                                actionContext.current.epoch) &&
+                                            dialog.kind !== 'close')
                                     }
                                 >
                                     {dialogBusy

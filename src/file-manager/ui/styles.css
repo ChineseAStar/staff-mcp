@@ -487,20 +487,6 @@ input[type='checkbox'] {
     text-overflow: ellipsis;
     font-size: 12px;
 }
-.pagination {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 6px 10px;
-    gap: 8px;
-    border-top: 1px solid var(--color-border-light);
-    color: var(--text-tertiary);
-    font-size: 11px;
-}
-.pagination button {
-    min-height: 28px;
-    font-size: 11px;
-}
 .list-error {
     flex: 1;
     min-height: 0;
@@ -1063,14 +1049,10 @@ progress::-moz-progress-bar {
     }
 }
 @media (min-width: 900px) {
-    .file-app[data-has-tabs='true'] .directory-panel {
-        width: 280px;
-        max-width: 34%;
+    .directory-panel {
+        width: 270px;
         flex: none;
         border-right: 1px solid var(--color-border);
-    }
-    .file-app[data-has-tabs='false'] .editor-section {
-        display: none;
     }
     .show-editor {
         display: none;
@@ -1167,4 +1149,79 @@ progress::-moz-progress-bar {
 .notice > button:not(.icon-button) {
     flex: none;
     font-size: 12px;
+}
+
+/* Tree rows keep names usable in the narrow pane; metadata lives in titles
+   and the selected-entry summary rather than competing for row width. */
+.directory-tree [role='treeitem'] {
+    outline: none;
+}
+.directory-tree [role='treeitem']:focus-visible > .file-row {
+    outline: 2px solid var(--interactive-focus);
+    outline-offset: -2px;
+}
+.directory-tree .entry-open {
+    gap: 6px;
+    padding-inline: 3px;
+    min-height: 35px;
+}
+.tree-chevron {
+    display: flex;
+    width: 12px;
+    flex: none;
+}
+.tree-chevron.expanded {
+    transform: rotate(90deg);
+}
+.file-row.target-directory {
+    background: var(--color-surface-active);
+    border-color: var(--color-border);
+}
+.file-row.current-file {
+    color: var(--color-primary);
+}
+.target-directory-path {
+    flex: none;
+    padding: 4px 12px 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+    border-bottom: 1px solid var(--color-border-light);
+}
+.target-directory-path button {
+    display: block;
+    margin-top: 4px;
+    padding: 0;
+}
+.tree-status {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+.tree-status:empty {
+    display: none;
+}
+.tree-status > span,
+.tree-status > div {
+    display: block;
+    padding-block: 6px;
+}
+.tree-status [role='alert'] {
+    color: #c33b49;
+    overflow-wrap: anywhere;
+}
+.dark .tree-status [role='alert'] {
+    color: #fb8794;
+}
+.tree-status button {
+    min-height: 28px;
+    margin-block: 3px;
+    font-size: 11px;
+}
+.tree-status [role='alert'] button {
+    display: block;
+}
+@media (pointer: coarse) {
+    .directory-tree .entry-open {
+        min-height: 46px;
+    }
 }

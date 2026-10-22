@@ -78,7 +78,10 @@ function progressStatus(progress: TransferProgress): TransferStatus {
     return 'running';
 }
 
-export function useTransfers(available: boolean, onUploaded: () => void) {
+export function useTransfers(
+    available: boolean,
+    onUploaded: (rootId: string, path: string) => void,
+) {
     const [jobs, setJobs] = useState<TransferJob[]>([]);
     const jobsRef = useRef(jobs);
     const enabledRef = useRef(available);
@@ -275,7 +278,7 @@ export function useTransfers(available: boolean, onUploaded: () => void) {
                     loaded: job.size,
                     error: undefined,
                 });
-                onUploadedRef.current();
+                onUploadedRef.current(job.rootId, job.path);
             } catch (error) {
                 const current = jobsRef.current.find(
                     (entry) => entry.id === job.id,
