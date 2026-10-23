@@ -24,6 +24,7 @@ import {
 import { TransferManager } from './transfers.js';
 import {
     APPS,
+    DATA,
     FILES,
     TERMINAL,
     parse as parseExtension,
@@ -31,7 +32,6 @@ import {
     supports,
 } from '../extensions/protocol.js';
 import { FILE_MANAGER, readAppResource } from '../extensions/apps.js';
-import { takeHttpTransfers } from './http-transfer.js';
 
 const RESOURCE_LIMIT = 256 * 1024;
 const pathField = z.string();
@@ -148,20 +148,17 @@ export class FileManagerSession {
         private readonly core: FileCore,
         private readonly server: McpServer,
         runtimeDirectory: string,
-        wireAvailable: boolean,
+        requireData: () => void,
     ) {
-        this.transfers = new TransferManager(
-            core,
-            runtimeDirectory,
-            takeHttpTransfers(server),
-            () => this.requireExtension(),
-            wireAvailable,
-        );
+        this.transfers = new TransferManager(core, runtimeDirectory, () => {
+            this.requireExtension();
+            requireData();
+        });
         core.listeners.add(this.notify);
     }
     initialize() {
         if (this.closed || this.initialized) return;
-        for (const extension of [APPS, FILES, TERMINAL]) {
+        for (const extension of [APPS, FILES, TERMINAL, DATA]) {
             if (supports(this.server, extension))
                 this.negotiated.add(extension);
         }
@@ -618,7 +615,7 @@ export function registerFileManager(
             }),
         );
     }
-    return (wireAvailable: boolean) => {
+    return (requireData: () => void) => {
         if (session && !session.closed)
             throw new Error(
                 'Previous file-manager transport is still connected',
@@ -627,7 +624,7 @@ export function registerFileManager(
             core,
             server,
             runtimeDirectory,
-            wireAvailable,
+            requireData,
         );
         return session;
     };

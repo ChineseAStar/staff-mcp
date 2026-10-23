@@ -50,7 +50,7 @@ export function registerTerminal(
                 if (!terminal)
                     extensionError(
                         'TERMINAL_DISABLED',
-                        'Terminal requires explicit enablement and a binary transport',
+                        'Terminal requires explicit enablement and a data session',
                     );
                 switch (method) {
                     case 'create':

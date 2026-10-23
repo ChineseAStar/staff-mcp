@@ -80,7 +80,7 @@ program
     )
     .option(
         '--ru, --reverse-url <url>',
-        'WS/WSS remote-leg endpoint (e.g. wss://gateway.example/remote)',
+        'HTTP(S) Web reverse endpoint (e.g. https://web.example/api/mcp/reverse)',
     )
     .option('--rt, --reverse-token <token>', 'Security token for Reverse MCP')
     .option('--rn, --reverse-name <name>', 'Server name for Reverse MCP')
@@ -272,7 +272,10 @@ program
                 });
 
                 try {
-                    validateAdditionalDockerArgs(additionalDockerArgs);
+                    validateAdditionalDockerArgs(
+                        additionalDockerArgs,
+                        options.transport === 'stdio',
+                    );
                 } catch (error) {
                     const message =
                         error instanceof Error ? error.message : String(error);
@@ -366,6 +369,7 @@ program
                 dockerArgs,
                 options.transport,
                 {
+                    dataAuto: options.transport === 'stdio',
                     nameHint: buildDockerNameHint({
                         workspaceDir: hostCwd,
                         transport: options.transport,

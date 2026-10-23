@@ -6,7 +6,7 @@ import type {
     ChannelOpen,
     ChannelReceiver,
     DataChannel,
-} from '../transport-v1/ExtensionTransport.js';
+} from '../data/types.js';
 import { FileCore } from '../file-manager/file-core.js';
 import {
     TERMINAL,
@@ -433,13 +433,25 @@ export class TerminalSession {
         return {
             data: async (data) => {
                 this.check(item);
-                if (data.byteLength > INPUT_LIMIT)
+                if (data.byteLength > 64 * 1024)
                     extensionError(
                         'LIMIT_EXCEEDED',
-                        'Terminal input frame limit is 32 KiB',
+                        'Terminal input delivery limit is 64 KiB',
                     );
                 try {
-                    await writeInput(item.pty!, data, () => this.check(item));
+                    // HTTP delivery boundaries need not match the host's <=32 KiB
+                    // inputs. Split raw bytes, not UTF-8 text, and await each write.
+                    for (
+                        let offset = 0;
+                        offset < data.byteLength;
+                        offset += INPUT_LIMIT
+                    ) {
+                        await writeInput(
+                            item.pty!,
+                            data.subarray(offset, offset + INPUT_LIMIT),
+                            () => this.check(item),
+                        );
+                    }
                 } catch {
                     this.stop(item, 'INPUT_FAILED');
                     extensionError('INVALID_STATE', 'Terminal input failed');

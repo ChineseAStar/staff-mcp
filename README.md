@@ -30,7 +30,7 @@ node /path/to/staff-mcp/dist/src/index.js --working-dir /path/to/your/project
 ```
 
 ### 2. Docker Transparent Proxy Mode (Cyber-Shell)
-Seamlessly spawn the AI assistant **inside any Docker container** while keeping the protocol connection with the host. It mounts your project and the `staff-mcp` binary automatically—zero overhead, instant startup!
+Run staff-mcp inside a compatible Docker image while keeping standard MCP control connected to the host. The wrapper mounts the project and package; image startup, Node/native ABI/libc and mount permissions still apply. Local stdio binary-data mapping has the topology limits below; this is not a promise that every Docker Desktop or remote daemon works.
 
 ```bash
 # Debug a Node.js project inside a pure Alpine container
@@ -59,13 +59,13 @@ Add the following to your `claude_desktop_config.json`:
 ```
 
 ### 4. Reverse MCP Mode (Intranet Penetration)
-Connect your local machine to a centralized remote gateway (like `chat-ai`) from behind NAT/Firewalls. No local open ports required! It retries disconnects with fresh epochs and never replays tool calls, transfer handles or terminal input. The administrator must supply the explicit public WS/WSS endpoint; chat-ai reads its connection instructions from `CHAT_GATEWAY_PUBLIC_URL`, not a private random gateway port.
+Connect outward from behind NAT/firewalls to chat-ai's existing Web entrypoint, without an inbound listener on staff. Control uses SSE + POST; remote-initiated raw HTTP GET/PUT carries file/terminal bytes on that same Web port. The administrator explicitly configures `MCP_REVERSE_URL` on chat-ai; it is not guessed from a private port. Reconnect creates fresh sessions and never replays tool calls, transfer handles or terminal input.
 
 ```bash
 node /path/to/staff-mcp/dist/src/index.js -t reverse \
-  --ru wss://gateway.example.com/remote \
+  --ru https://chat.example.com/api/mcp/reverse \
   --rt your_secure_token_here \
-  --rn my-macbook-pro
+  --rn my-workstation
 ```
 
 ### 5. Authenticated HTTP Mode
@@ -78,14 +78,16 @@ node /path/to/staff-mcp/dist/src/index.js -t http -p 3000 \
   --http-token your_secure_token_here --working-dir /path/to/your/project
 ```
 
-When a token is configured, clients must send `Authorization: Bearer <token>` on every request.
+When a token is configured, clients must send `Authorization: Bearer <token>` on every MCP control request.
 For a full Authorization-header field, enter `Bearer <token>`; for a Bearer-token
 field, enter only the token. Raw tokens without the `Bearer` scheme are rejected.
 Missing or incorrect credentials return HTTP 401, including requests with an
 existing `mcp-session-id`. Authentication covers `/mcp` and the legacy `/sse` and
 `/messages` routes. CORS `OPTIONS` preflight remains public and cannot invoke MCP.
+The raw `/mcp/data/...` routes use their own negotiated, connection-bound data
+Bearer token plus `X-Data-Binding`, not the shared MCP control token.
 
-Omitting `--http-token` leaves the HTTP listener unauthenticated.
+Omitting `--http-token` leaves MCP control on the HTTP listener unauthenticated.
 Anyone who can reach such a server can invoke its tools, so use this mode only
 on trusted networks. An explicitly empty token or one containing whitespace is
 rejected at startup. `--docker` forwards `--http-token` to the container command
@@ -100,13 +102,13 @@ protect the token in transit. This is a shared server token, not an OAuth flow.
 
 ## Reverse v1 and protocol boundary
 
-The authoritative custom protocol is `chat-ai/docs/protocol/README.md` (matching `feat/mcp-file-manager` checkout). chat-ai and staff-mcp implement it independently; no extension SDK is required. The official MCP SDK and standard tools/resources/prompts remain. Independent `mcp-fte` / `mcp-reverse` dependencies and their runtime instructions have been removed; there is no old FTE chunk or reverse SSE fallback. Old reverse HTTP/SSE endpoints are not WS aliases. Coordinate both endpoints' upgrade; no chat database migration is involved.
+The authoritative custom protocol is `chat-ai/docs/protocol/README.md` (matching `feat/mcp-file-manager` checkout). chat-ai, staff-mcp and third parties can implement it independently; no extension SDK is required. The official MCP SDK, standard stdio/Streamable HTTP and tools/resources/prompts remain unchanged. There is no old FTE chunk or WS fallback, and no chat database migration.
 
-Reverse uses subprotocol `cc.qqxing.reverse.v1`, `Authorization: Bearer <token>` and `X-MCP-Server-Name`. Use `wss://.../remote` with certificate verification outside loopback; `ws://127.0.0.1:<port>/remote` is only for local development. No credentials, query or fragment in the URL. A transport pairing is not MCP initialization or user authorization. Readiness is reported only after SDK initialization, and short-lived connections do not reset exponential backoff.
+Reverse GETs `<base>/sse` with `Authorization: Bearer <token>` and `X-MCP-Server-Name`; an SSE endpoint event supplies the POST message URL. SSE message events contain ordinary MCP JSON-RPC, not a private envelope. Explicit HTTP and HTTPS are accepted; HTTP logs one plaintext warning per start and does not protect tokens or payloads. Use HTTPS on untrusted networks; HTTPS verifies CA and target identity without automatic downgrade. The configured base URL has no credentials, query or fragment. No WebSocket upgrade, gateway process, launcher or private host leg is required. SDK initialization, data-session readiness and current user authorization remain separate checks; short-lived connections do not reset exponential backoff.
 
 Optional CLI timeouts (milliseconds, forwarded in Docker mode):
 
-- `--reverse-connect-timeout`: 15000; 0 disables the WS connection deadline.
+- `--reverse-connect-timeout`: 15000; 0 disables the SSE connection deadline.
 - `--reverse-initialization-timeout`: 15000; must be positive.
 - `--reverse-read-timeout`: 45000; heartbeat liveness, not tool execution duration.
 - `--reverse-stable-time`: 30000; stable lifetime before retry reset (0 resets immediately).
@@ -117,11 +119,11 @@ Optional CLI timeouts (milliseconds, forwarded in Docker mode):
 
 ### Independent file workspace
 
-The file manager is discovered under `experimental["cc.qqxing/extensions"]` (apps/files v1), then `cc.qqxing/apps/v1/list`, independently of model Tools. File CRUD, drafts, attachments and explicit download saving retain their existing behavior. The app and `transfer_file` share files v1 over direct binary HTTP tickets or reverse binary channels, with no FTE fallback. Stdio has no binary plane: ordinary tools/resources/prompts still work, but file transfer and terminal are unavailable. See [File manager contract and UI build](docs/file-manager.md) for exact methods, lifecycle, limits and packaging.
+The file manager is discovered under `experimental["cc.qqxing/extensions"]` (apps/files/data v1), then `cc.qqxing/apps/v1/list`, independently of model Tools. File CRUD, drafts, attachments and explicit download saving retain their existing behavior. The app and `transfer_file` share files v1 and the same public HTTP dataSession used by terminal: `cc.qqxing/data/v1/configure {binding}`, then `open` binds a prepared resource. Local stdio lazily opens loopback, local Docker stdio maps it automatically, direct HTTP shares the MCP port, and reverse actively GETs/PUTs the host Web port. Raw binary and cumulative consumption ACKs use a 256 KiB sliding window, not Base64 or per-chunk stop-and-wait. Unsupported extensions leave ordinary tools/resources/prompts unchanged; no FTE fallback. See [File manager contract and UI build](docs/file-manager.md) for exact methods, lifecycle, limits and packaging.
 
 ### Human terminal (explicit high-risk opt-in)
 
-`--terminal` is off by default. It needs Linux, a loadable optional `node-pty`, an administrator-selected executable shell (`--terminal-shell`, default `/bin/bash`) and reverse binary transport. HTTP/stdio do not advertise terminal. Native loading failure leaves ordinary MCP available. chat-ai additionally requires the current chat's MCP grant, separate `allowTerminal:true` (default false), and a secure browser entrypoint; public HTTPS origin policy is configured by `MCP_TERMINAL_HTTPS_ORIGIN` on the host, independently of `CHAT_GATEWAY_PUBLIC_URL`.
+`--terminal` is off by default. It needs Linux, a loadable optional `node-pty`, an administrator-selected executable shell (`--terminal-shell`, default `/bin/bash`) and negotiated terminal/data v1 with a usable duplex dataSession over local stdio/Docker, direct HTTP or reverse. Native loading failure leaves ordinary MCP available. chat-ai additionally requires the current chat's MCP grant, separate `allowTerminal:true` (default false), and a secure browser entrypoint; public HTTPS origin policy is configured by `MCP_TERMINAL_HTTPS_ORIGIN` on the host, independently of `MCP_REVERSE_URL`.
 
 The PTY runs as the staff process uid: its starting root/cwd is **not a sandbox** and shell filesystem/network effects are not restricted by file-tool path checks. Terminal bytes never enter model context or chat history. Browser long-poll/next-read ACK propagates backpressure; a separate 30-second presence/remote lease is not the file app's two-hour TTL. Hidden/disconnected UI stops input/renewal and requests cleanup, with no automatic resume; descendant cleanup is best effort, not rollback.
 
@@ -132,7 +134,11 @@ Never pollute your host machine again. By simply appending `--docker <image>`, `
 - Instantly injects itself into the container via read-only bind mounts (no `npm install` inside the container).
 - Automatically translates Windows/Mac paths to Linux container paths.
 - Names containers after their launch context (e.g. `staff-mcp-myproj-3000-a1b2c3` = workspace `myproj`, HTTP port `3000`, random suffix `a1b2c3`), so multiple sessions are easy to tell apart in `docker ps`.
-- Provides a `--docker-args` backdoor for hardware pass-through (e.g., ADB USB debugging, GPUs, host network).
+- Allows `--docker-args` for compatible hardware/environment settings (e.g., ADB USB debugging or GPUs); stdio automatic data publication rejects host/container networking and overrides of its managed bootstrap/mapping.
+
+For **local Docker stdio**, the existing wrapper reserves a private container port published to a random **127.0.0.1** host port and inspects only its own cidfile container. A read-only mount of a host **0600 metadata file** supplies the reachable base URL without rewriting stdin/stdout or asking users to discover container IPs. Even clients that never opt in reserve this publication/forwarding resource; the container application listener remains lazy until `data/v1/configure`. Non-Docker stdio does not listen before opt-in. HTTP/reverse add no such publication.
+
+This path requires a local daemon and client/wrapper sharing reachable loopback, with a compatible bridge/publication topology. Remote/TCP/SSH Docker contexts and incompatible networking are rejected; arbitrary Docker Desktop, network-none or cross-SSH sidebands/tunnels are not claimed. Loopback publication is not isolation from hostile containers. Metadata must be readable by the container uid (0600 is not automatically relaxed), workspace access depends on actual uid/gid, and native PTY ABI/libc must match the image. The wrapper does not chown mounts or switch PTYs to browser-user identities. Exit, failure and startup timeout clean the owned container, publication and metadata; no cross-restart resource recovery is promised.
 
 ### 2. Skill & Profile Ecosystem (`--profile`)
 `staff-mcp` acts as an "AI Workspace Configurator". It uses a **5-tier Cascade Resolution** architecture to load role-specific skills (SOPs & Prompts) dynamically, all under the unified `.staff` directory convention:
@@ -182,37 +188,36 @@ It will securely download, configure, and reload the skill without you lifting a
 | `-p, --port` | Port for HTTP server | `3000` |
 | `-h, --host` | Host for HTTP server | `127.0.0.1` |
 | `--ht, --http-token` | Optional bearer token for HTTP transport | `undefined` (no authentication) |
-| `--ru, --reverse-url` | Explicit WS/WSS gateway `/remote` endpoint | `undefined` |
+| `--ru, --reverse-url` | Explicit HTTP(S) Web `/api/mcp/reverse` base endpoint | `undefined` |
 | `--rt, --reverse-token` | Security token for Reverse MCP | `undefined` |
 | `--rn, --reverse-name` | Server name for Reverse MCP | `undefined` |
-| `--terminal` | Opt in to Linux PTY on reverse binary transport (staff uid, cwd is not a sandbox) | `false` |
+| `--terminal` | Opt in to Linux PTY with a negotiated duplex dataSession (staff uid, cwd is not a sandbox) | `false` |
 | `--terminal-shell` | Administrator-selected absolute executable shell | `/bin/bash` |
-| `--proxy` | HTTP(S) proxy for supported HTTP clients and reverse WS/WSS CONNECT | `undefined` |
+| `--proxy` | HTTP(S) proxy for supported HTTP clients and reverse control/data HTTP requests | `undefined` |
 
 ### 🌐 Proxy Support (Corporate Networks)
 
 staff-mcp configures its Undici HTTP clients from `HTTP_PROXY` / `HTTPS_PROXY` (and lowercase equivalents), with `NO_PROXY` matching for exact hosts/IPs, domain suffixes, `*`, host:port and IPv4/IPv6 CIDRs. Explicit `--proxy` takes precedence for those clients and reverse connections, bypassing `NO_PROXY`.
 
-Reverse v1 retains corporate proxy routing through `ws` + `HttpsProxyAgent` (`https-proxy-agent` 7.0.6), not through the Undici dispatcher. Without explicit `--proxy`, it reuses `selectProxyForOrigin`, mapping WSS to HTTPS and WS to HTTP for environment/`NO_PROXY` selection. WSS uses `HTTPS_PROXY`, falling back to `HTTP_PROXY`; lowercase variants are supported. A `NO_PROXY` match or no selected proxy means direct connection; selected HTTP(S) proxies use CONNECT. Proxy and WSS target certificate verification remain enabled. Proxy routing does not replace authentication, certificate trust, DNS or target reachability configuration. Validate corporate WAN reachability in the target network; local results do not establish availability of that path.
+Reverse control and data share an injected Undici HTTP pool. Without explicit `--proxy`, `selectProxyForOrigin` selects HTTP(S) environment proxies and applies target `NO_PROXY`; HTTPS uses `HTTPS_PROXY` with `HTTP_PROXY` fallback, including lowercase variants. An explicit proxy overrides that selection. Proxy and target certificate verification remain enabled and redirects are not followed. This does not replace proxy authentication, CA trust, DNS or target reachability. Validate corporate WAN streaming/SSE and cancellation in the target network; local results do not establish that path's availability.
 
 In `--docker` mode the HTTP-client and reverse proxy settings are evaluated inside the container; Docker environment injection or explicit `--proxy` can supply them. For TLS interception, `NODE_EXTRA_CA_CERTS=/path/to/ca.pem` adds trust rather than disabling certificate verification; certificate files must be visible inside the container, and native ABI/libc compatibility remains a deployment requirement.
 
 ### Hardware Pass-through Example (Android Reverse Engineering)
-If you need the AI to interact with an Android device connected via USB while running inside a container, utilizing network-based ADB pass-through is the most reliable cross-platform solution:
+If you need the AI to interact with an Android device connected via USB while running inside a container, network-based ADB can be configured separately. These examples do not verify Docker Desktop stdio data mapping or device access; restrict ADB exposure to trusted peers:
 
 ```bash
 # 1. Start ADB Server on the host machine listening on all interfaces:
 # adb kill-server && adb -a nodaemon server start
 
 # 2. Start staff-mcp with the ADB_SERVER_SOCKET environment variable injected
-# On Mac/Windows:
+# On Mac/Windows, if this hostname and the local Docker topology are available:
 node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest -D "-e ADB_SERVER_SOCKET=tcp:host.docker.internal:5037"
 
-# On Native Linux (If not using --network host, point to the docker bridge IP):
+# On Native Linux, use the actual reachable bridge address (example only):
 node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest -D "-e ADB_SERVER_SOCKET=tcp:172.17.0.1:5037"
 
-# Alternative for Native Linux (Share host network stack completely):
-node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest -D "--network host"
+# stdio automatic data publication does not support --network host.
 ```
 
 ---

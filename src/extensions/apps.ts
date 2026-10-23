@@ -1,7 +1,14 @@
 import * as fs from 'node:fs/promises';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { APPS, FILES, TERMINAL, parse, extensionError } from './protocol.js';
+import {
+    APPS,
+    DATA,
+    FILES,
+    TERMINAL,
+    parse,
+    extensionError,
+} from './protocol.js';
 
 export const FILE_UI_URI = 'ui://staff-file-manager/v1/index.html';
 export const TERMINAL_UI_URI = 'ui://staff-mcp/terminal';
@@ -14,7 +21,7 @@ const files = {
     resourceUri: FILE_UI_URI,
     mimeType: 'text/html',
     bridgeVersion: 1,
-    requiredExtensions: { [FILES]: 1 },
+    requiredExtensions: { [FILES]: 1, [DATA]: 1 },
     methods: [
         'roots',
         'list',
@@ -49,7 +56,7 @@ const terminal = {
     highRisk: true,
     terminal: true,
     methods: [],
-    requiredExtensions: { [TERMINAL]: 1 },
+    requiredExtensions: { [TERMINAL]: 1, [DATA]: 1 },
 };
 
 export function registerApps(

@@ -1,12 +1,16 @@
-import WebSocket from 'ws';
-import { HttpsProxyAgent } from 'https-proxy-agent';
-import { selectProxyForOrigin } from '../utils/proxy.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { performance } from 'node:perf_hooks';
-import { checkServerIdentity } from 'node:tls';
 import { setTimeout as delay } from 'node:timers/promises';
-import { ExtensionTransport } from '../transport-v1/ExtensionTransport.js';
-import { WIRE } from '../transport-v1/Wire.js';
+import { configureExtensionData } from '../extensions/runtime.js';
+import { HttpDataSession } from '../data/HttpDataSession.js';
+import { ReverseSseTransport } from '../reverse/SseTransport.js';
+import {
+    createReverseHttp,
+    reverseProxyUrl,
+    validateReverseUrl,
+} from '../reverse/http.js';
+
+export { reverseProxyUrl, validateReverseUrl } from '../reverse/http.js';
 
 export interface ReverseServerOptions {
     proxy?: string;
@@ -30,88 +34,7 @@ export interface ReverseController {
     readonly closed: Promise<void>;
 }
 
-export function validateReverseUrl(value: string): URL {
-    const url = new URL(value);
-    if (
-        !['ws:', 'wss:'].includes(url.protocol) ||
-        url.username ||
-        url.password ||
-        url.search ||
-        url.hash
-    )
-        throw new Error(
-            'Reverse URL must be an explicit WS/WSS endpoint without credentials, query or fragment.',
-        );
-    if (
-        url.protocol !== 'wss:' &&
-        !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
-    )
-        throw new Error(
-            'Non-loopback reverse connections require WSS with certificate verification.',
-        );
-    return url;
-}
-
-/** Apply the same corporate proxy / NO_PROXY routing rules as ordinary outbound fetch. */
-export function reverseProxyUrl(
-    url: URL,
-    explicit?: string,
-    env = process.env,
-): URL | undefined {
-    const origin = new URL(url);
-    origin.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
-    const selected =
-        explicit ??
-        selectProxyForOrigin(origin, {
-            httpProxy: env.HTTP_PROXY || env.http_proxy,
-            httpsProxy: env.HTTPS_PROXY || env.https_proxy,
-            noProxy: env.NO_PROXY || env.no_proxy,
-        });
-    if (selected === null || selected === undefined) return undefined;
-    try {
-        const proxy = new URL(selected);
-        if (
-            !['http:', 'https:'].includes(proxy.protocol) ||
-            proxy.search ||
-            proxy.hash
-        )
-            throw new Error('Invalid proxy');
-        decodeURIComponent(proxy.username);
-        decodeURIComponent(proxy.password);
-        return proxy;
-    } catch {
-        // Do not expose a URL containing credentials through startup errors.
-        throw new Error('Reverse proxy must be a valid HTTP(S) proxy URL.');
-    }
-}
-
-function proxyAgent(proxy: URL, signal: AbortSignal) {
-    // The agent logs its URL in DEBUG mode. Credentials belong only in CONNECT headers.
-    const address = new URL(proxy);
-    address.pathname = '/';
-    let authorization: string | undefined;
-    if (address.username || address.password) {
-        try {
-            authorization =
-                'Basic ' +
-                Buffer.from(
-                    `${decodeURIComponent(address.username)}:${decodeURIComponent(address.password)}`,
-                ).toString('base64');
-        } catch {
-            throw new Error('Invalid proxy credential encoding.');
-        }
-        address.username = '';
-        address.password = '';
-    }
-    return new HttpsProxyAgent(address, {
-        headers: authorization ? { 'Proxy-Authorization': authorization } : {},
-        rejectUnauthorized: true,
-        // Covers a stalled CONNECT before ws has received a socket, including stop().
-        signal,
-    });
-}
-
-/** Fresh SDK transport binding, epoch and resources per attempt; no request or input replay. */
+/** New HTTP pool, SDK transport and data resources per attempt; never replay requests or input. */
 export async function startReverseServer(
     serverFactory: () => McpServer,
     value: string,
@@ -133,128 +56,121 @@ export async function startReverseServer(
         error: (message: string) =>
             console.error(`[staff-mcp][reverse] ${message}`),
     };
+    if (url.protocol === 'http:')
+        log.warn(
+            'Explicit HTTP reverse control uses plaintext; use HTTPS on untrusted networks.',
+        );
     const abort = new AbortController();
-    let active: WebSocket | undefined;
+    let active: ReverseSseTransport | undefined;
     let activeServer: McpServer | undefined;
-    // Tool registration starts project watchers. Reuse registrations, never transport resources.
+    // Tool registration owns watchers. Reuse registrations, never per-connection resources.
     let registeredServer: McpServer | undefined;
     let backoff = options.reconnect?.initialDelay ?? 1000;
     const run = async () => {
         while (!abort.signal.aborted) {
-            let transport: ExtensionTransport | undefined;
             let server: McpServer | undefined;
             let initializedAt: number | undefined;
             let previousInitialized: (() => void) | undefined;
             let initializationTimer: NodeJS.Timeout | undefined;
-            let heartbeat: NodeJS.Timeout | undefined;
-            let connectionTimer: NodeJS.Timeout | undefined;
-            let agent: ReturnType<typeof proxyAgent> | undefined;
             const attempt = new AbortController();
-            const stopAttempt = () => attempt.abort();
-            abort.signal.addEventListener('abort', stopAttempt, { once: true });
+            const stopped = () => {
+                attempt.abort();
+                void active?.close();
+            };
+            abort.signal.addEventListener('abort', stopped, { once: true });
+            const http = createReverseHttp(url, proxy, attempt.signal);
+            const transport = new ReverseSseTransport(
+                url,
+                { Authorization: `Bearer ${token}`, 'X-MCP-Server-Name': name },
+                http.fetch,
+                options.connectTimeout,
+                options.heartbeat?.readTimeout,
+            );
+            active = transport;
             try {
-                agent = proxy ? proxyAgent(proxy, attempt.signal) : undefined;
-                const identityCheck: typeof checkServerIdentity = (
-                    _hostname,
-                    certificate,
-                ) =>
-                    checkServerIdentity(
-                        url.hostname.replace(/^\[|\]$/g, ''),
-                        certificate,
-                    );
-                const socketOptions = {
-                    agent,
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                        'X-MCP-Server-Name': name,
-                    },
-                    handshakeTimeout: options.connectTimeout ?? 15000,
-                    perMessageDeflate: false,
-                    maxPayload: WIRE.mcp,
-                    followRedirects: false,
-                    rejectUnauthorized: true,
-                    // CONNECT agents omit the target host when upgrading an existing socket.
-                    // Verify the configured gateway identity, including IP SANs, not localhost.
-                    checkServerIdentity: identityCheck,
-                };
-                // Use the Node request-options overload: @types/ws incorrectly types the
-                // TLS identity callback as returning boolean instead of Error | undefined.
-                const ws = new WebSocket(url, WIRE.protocol, socketOptions);
-                active = ws;
-                const timeout = options.connectTimeout ?? 15000;
-                if (timeout > 0) {
-                    connectionTimer = setTimeout(() => {
-                        attempt.abort();
-                        ws.terminate();
-                    }, timeout);
-                    connectionTimer.unref();
-                }
-                transport = await new Promise<ExtensionTransport>(
-                    (resolve, reject) => {
-                        const failed = () =>
-                            reject(new Error('REVERSE_CONNECT_FAILED'));
-                        const closed = () =>
-                            reject(new Error('REVERSE_CONNECT_CLOSED'));
-                        ws.once('error', failed);
-                        ws.once('close', closed);
-                        ws.once('open', () => {
-                            ws.removeListener('error', failed);
-                            ws.removeListener('close', closed);
-                            resolve(new ExtensionTransport(ws, 'remote'));
-                        });
-                    },
-                );
-                clearTimeout(connectionTimer);
-                await transport.waitUntilPaired();
-                if (abort.signal.aborted) break;
                 server = registeredServer ??= serverFactory();
                 activeServer = server;
+                configureExtensionData(
+                    server,
+                    (binding, accept, signal, origin) => {
+                        if (origin !== undefined)
+                            throw new Error(
+                                'Reverse data does not accept an advertised origin',
+                            );
+                        const sessionId = transport.sessionId;
+                        if (
+                            !sessionId ||
+                            attempt.signal.aborted ||
+                            signal.aborted
+                        )
+                            throw new Error(
+                                'Reverse data control session unavailable',
+                            );
+                        const expected = new URL(url.href);
+                        expected.pathname =
+                            url.pathname.replace(/\/$/, '') +
+                            '/data/' +
+                            sessionId;
+                        return {
+                            session: new HttpDataSession({
+                                role: 'remote',
+                                binding,
+                                accept,
+                                fetch: http.fetch,
+                                validateEndpoint: (endpoint) => {
+                                    if (
+                                        endpoint.origin !== expected.origin ||
+                                        endpoint.pathname !==
+                                            expected.pathname ||
+                                        endpoint.username ||
+                                        endpoint.password ||
+                                        endpoint.search ||
+                                        endpoint.hash
+                                    )
+                                        throw new Error(
+                                            'Reverse data endpoint rejected',
+                                        );
+                                },
+                            }),
+                        };
+                    },
+                );
                 previousInitialized = server.server.oninitialized;
                 server.server.oninitialized = () => {
                     previousInitialized?.();
                     initializedAt = performance.now();
                     clearTimeout(initializationTimer);
-                    log.info('MCP initialized on a new paired epoch.');
+                    log.info('MCP initialized on a new SSE session.');
                 };
                 initializationTimer = setTimeout(
-                    () => ws.terminate(),
-                    options.initializationTimeout ?? 15000,
+                    () => {
+                        void transport.close();
+                    },
+                    (options.connectTimeout ?? 15000) +
+                        (options.initializationTimeout ?? 15000),
                 );
                 initializationTimer.unref();
-                const readTimeout = options.heartbeat?.readTimeout ?? 45000;
-                let lastPong = performance.now();
-                ws.on('pong', () => {
-                    lastPong = performance.now();
-                });
-                heartbeat = setInterval(
-                    () => {
-                        if (performance.now() - lastPong >= readTimeout) {
-                            ws.terminate();
-                            return;
-                        }
-                        if (ws.readyState === WebSocket.OPEN)
-                            ws.ping(undefined, undefined, () => {});
-                    },
-                    Math.max(250, Math.min(10000, Math.floor(readTimeout / 3))),
-                );
-                heartbeat.unref();
                 await server.connect(transport);
+                // start() completes once the endpoint is admitted; initialization has its own deadline.
+                if (initializedAt === undefined) {
+                    clearTimeout(initializationTimer);
+                    initializationTimer = setTimeout(() => {
+                        void transport.close();
+                    }, options.initializationTimeout ?? 15000);
+                    initializationTimer.unref();
+                }
                 await transport.closed;
             } catch {
-                // No raw exceptions, frames, headers or URL are dumped even in debug mode.
                 if (!abort.signal.aborted)
                     log.warn(
-                        'Connection attempt ended before readiness or transport closed.',
+                        'Connection attempt ended before readiness or control connection closed.',
                     );
             } finally {
-                clearTimeout(connectionTimer);
                 clearTimeout(initializationTimer);
-                clearInterval(heartbeat);
-                await transport?.close().catch(() => {});
-                active?.terminate();
+                await transport.close().catch(() => {});
                 attempt.abort();
-                agent?.destroy();
-                abort.signal.removeEventListener('abort', stopAttempt);
+                await http.close().catch(() => {});
+                abort.signal.removeEventListener('abort', stopped);
                 await server?.close().catch(() => {});
                 if (server) server.server.oninitialized = previousInitialized;
                 active = undefined;
@@ -268,7 +184,9 @@ export async function startReverseServer(
                     (options.reconnect?.stableConnectionMs ?? 30000)
             )
                 backoff = options.reconnect?.initialDelay ?? 1000;
-            log.info('Disconnected; retrying with a new epoch and no replay.');
+            log.info(
+                'Disconnected; retrying with a new session and no replay.',
+            );
             try {
                 await delay(backoff, undefined, { signal: abort.signal });
             } catch {
@@ -285,7 +203,7 @@ export async function startReverseServer(
         closed,
         stop: async () => {
             abort.abort();
-            active?.terminate();
+            await active?.close().catch(() => {});
             await activeServer?.close().catch(() => {});
             await closed;
         },

@@ -1,7 +1,6 @@
-import {
-    HttpTransferRouter,
-    enableHttpTransfers,
-} from '../file-manager/http-transfer.js';
+import { HttpDataSession } from '../data/HttpDataSession.js';
+import { handleNodeRequest } from '../data/node.js';
+import { configureExtensionData } from '../extensions/runtime.js';
 import express from 'express';
 import cors from 'cors';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -30,11 +29,21 @@ export async function startHttpServer(
     // CORS preflight is public and never reaches MCP session handling.
     app.use(cors());
 
-    // Ticket authentication is scoped to the prepared FileSession, not the MCP bearer.
-    // Raw bytes must never pass through JSON parsing (even with application/json content type).
-    const transfers = new HttpTransferRouter();
-    app.all('/mcp/transfers/:opaqueId', (req, res) => {
-        void transfers.handle(req, res);
+    // Session-owned public data endpoints must bypass the MCP JSON parser.
+    const dataSessions = new Map<string, HttpDataSession>();
+    app.use((req, res, next) => {
+        const match = /^\/mcp\/data\/([A-Za-z0-9_-]{16,256})(?:\/|$)/.exec(
+            req.url,
+        );
+        if (!match) return next();
+        const session = dataSessions.get(match[1]);
+        if (!session) {
+            res.status(404).end();
+            return;
+        }
+        void handleNodeRequest(session, req, res).then((handled) => {
+            if (!handled) res.status(404).end();
+        });
     });
 
     // When configured, authenticate before parsing bodies or accessing sessions.
@@ -109,7 +118,44 @@ export async function startHttpServer(
             sessions.delete(newSessionId);
         };
 
-        enableHttpTransfers(server, transfers);
+        configureExtensionData(server, (binding, accept, signal, origin) => {
+            signal.throwIfAborted();
+            if (dataSessions.has(binding))
+                throw new Error('Data binding already exists.');
+            const authority = req.get('host');
+            if (!authority)
+                throw new Error('MCP HTTP Host header is required.');
+            const endpoint = new URL(
+                `/mcp/data/${binding}`,
+                origin ?? `${req.protocol}://${authority}`,
+            ).href;
+            const session = new HttpDataSession({
+                role: 'remote',
+                binding,
+                endpoint,
+                accept,
+                // This transport only serves bytes; reverse injects its own outbound binding.
+                fetch: async () => {
+                    throw new Error(
+                        'Outbound data is unavailable in HTTP listener mode',
+                    );
+                },
+                validateEndpoint: () => {
+                    throw new Error(
+                        'Outbound data endpoint is unavailable in HTTP listener mode',
+                    );
+                },
+            });
+            dataSessions.set(binding, session);
+            return {
+                session,
+                endpoint,
+                close: () => {
+                    if (dataSessions.get(binding) === session)
+                        dataSessions.delete(binding);
+                },
+            };
+        });
         await server.connect(t);
         sessions.set(newSessionId, t);
 

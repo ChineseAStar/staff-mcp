@@ -1,13 +1,9 @@
 import * as fs from 'node:fs/promises';
 import { constants, rmSync } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
-import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { pipeline } from 'node:stream/promises';
-import { Writable } from 'node:stream';
-import type { HttpTicket, HttpTransferRouter } from './http-transfer.js';
 import {
     FILE_LIMIT,
     FileCore,
@@ -27,7 +23,7 @@ import type {
     ChannelOpen,
     ChannelReceiver,
     DataChannel,
-} from '../transport-v1/ExtensionTransport.js';
+} from '../data/types.js';
 
 export interface PrepareParams {
     operationId: string;
@@ -76,7 +72,6 @@ interface Prepared {
     io: Mutex;
     abort: AbortController;
     channel?: DataChannel;
-    ticket?: HttpTicket;
 }
 const terminal = (state: State) =>
     ['committed', 'released', 'expired', 'failed', 'unknown'].includes(state);
@@ -85,7 +80,7 @@ process.once('exit', () => {
     for (const manager of managers) manager.cleanupOnExit();
 });
 
-/** Session-owned files v1 resources. HTTP and wire consume the same one-shot transfer. */
+/** Session-owned files v1 resources, independent of the data session transport. */
 export class TransferManager {
     private readonly operations = new Map<string, Prepared>();
     private readonly resources = new Map<string, Prepared>();
@@ -95,9 +90,7 @@ export class TransferManager {
     constructor(
         private readonly core: FileCore,
         private readonly runtimeDirectory: string,
-        private readonly http?: HttpTransferRouter,
         private readonly authorize: () => void = () => {},
-        private readonly wireAvailable = false,
     ) {
         managers.add(this);
         this.timer = setInterval(() => this.sweep(), 1000);
@@ -149,7 +142,6 @@ export class TransferManager {
             item.error = { code: failure.code, message: failure.message };
         }
         item.abort.abort();
-        item.ticket?.remove();
         item.channel?.close(state.toUpperCase());
         void this.cleanup(item).catch(() => {});
     }
@@ -228,22 +220,6 @@ export class TransferManager {
                 Math.ceil(item.expires - performance.now()),
             ),
             recordTtlMs: RECORD_TTL_MS,
-            ...(this.wireAvailable
-                ? {
-                      link: {
-                          kind: 'channel',
-                          purpose: FILES,
-                          resourceId: item.transferId,
-                          direction:
-                              item.params.mode === 'write'
-                                  ? 'host-to-remote'
-                                  : 'remote-to-host',
-                      },
-                  }
-                : {}),
-            ...(item.ticket && !item.bound
-                ? { http: { path: item.ticket.path, token: item.ticket.token } }
-                : {}),
         };
     }
 
@@ -268,8 +244,6 @@ export class TransferManager {
             await existing.job?.catch(() => {});
             return this.preparedView(existing);
         }
-        if (!this.http && !this.wireAvailable)
-            fail('CAPABILITY_UNAVAILABLE', 'No binary transport is available');
         if (this.operations.size >= MAX_RECORDS)
             fail('LIMIT_EXCEEDED', 'Transfer record limit reached');
         if (
@@ -365,10 +339,6 @@ export class TransferManager {
             this.alive(item);
             this.authorize();
             item.state = 'prepared';
-            if (this.http)
-                item.ticket = this.http.register((request, response) =>
-                    this.streamHttp(item, request, response),
-                );
         } catch (error) {
             this.finish(item, 'failed', error);
             throw error;
@@ -392,7 +362,7 @@ export class TransferManager {
         return { operationId, expiresInMs: LEASE_MS };
     }
 
-    private async bind(item: Prepared, channel?: DataChannel) {
+    private async bind(item: Prepared, channel: DataChannel) {
         this.authorize();
         this.alive(item);
         if (item.state !== 'prepared' || item.bound)
@@ -400,7 +370,6 @@ export class TransferManager {
         item.bound = true;
         item.state = 'streaming';
         item.channel = channel;
-        item.ticket?.remove();
         if (item.params.mode === 'write') {
             try {
                 await item.io.run(async () => {
@@ -518,7 +487,7 @@ export class TransferManager {
             this.finish(item, 'failed', error);
         };
         if (item.params.mode === 'read') {
-            // Do not block channel acceptance on the first credit. The wire writer waits for accept.
+            // Start asynchronously: the data writer waits for channel acceptance.
             void this.read(item, (data) => channel.write(data))
                 .then(() => channel.end())
                 .catch(failure);
@@ -566,79 +535,6 @@ export class TransferManager {
         };
     }
 
-    private async streamHttp(
-        item: Prepared,
-        request: IncomingMessage,
-        response: ServerResponse,
-    ) {
-        this.authorize();
-        const method = item.params.mode === 'write' ? 'PUT' : 'GET';
-        if (request.method !== method)
-            fail('INVALID_PARAMS', 'Invalid binary transfer method');
-        const length = request.headers['content-length'];
-        if (
-            item.params.mode === 'write' &&
-            length !== undefined &&
-            (!/^\d+$/.test(length) || Number(length) !== item.size)
-        )
-            fail('SIZE_MISMATCH', 'Content-Length differs from prepared size');
-        await this.bind(item);
-        const disconnected = () => {
-            if (!response.writableFinished)
-                this.finish(
-                    item,
-                    'failed',
-                    new FileError('INVALID_STATE', 'HTTP stream disconnected'),
-                );
-        };
-        response.once('close', disconnected);
-        try {
-            if (item.params.mode === 'write') {
-                const output = new Writable({
-                    highWaterMark: 65536,
-                    write: (chunk: Buffer, _encoding, callback) => {
-                        const consume = async () => {
-                            for (
-                                let offset = 0;
-                                offset < chunk.length;
-                                offset += 65536
-                            )
-                                await this.write(
-                                    item,
-                                    chunk.subarray(offset, offset + 65536),
-                                );
-                        };
-                        void consume().then(() => callback(), callback);
-                    },
-                });
-                await pipeline(request, output, { signal: item.abort.signal });
-                await this.endWrite(item);
-                response.setHeader('Content-Type', 'application/json');
-                response.end(
-                    JSON.stringify({ size: item.loaded, sha256: item.sha256 }),
-                );
-            } else {
-                response.setHeader('Content-Type', 'application/octet-stream');
-                response.setHeader('Content-Length', item.size);
-                await this.read(
-                    item,
-                    (data) =>
-                        new Promise<void>((resolve, reject) => {
-                            response.write(data, (error) =>
-                                error ? reject(error) : resolve(),
-                            );
-                        }),
-                );
-                response.end();
-            }
-        } catch (error) {
-            this.finish(item, 'failed', error);
-            throw error;
-        } finally {
-            response.removeListener('close', disconnected);
-        }
-    }
-
     async commit(operationId: string, transferId: string, sha256: string) {
         this.authorize();
         const item = this.operations.get(operationId);
@@ -667,7 +563,6 @@ export class TransferManager {
         // Synchronous admission fences cancellation before any await or publication.
         item.commitHash = sha256;
         item.state = 'committing';
-        item.ticket?.remove();
         try {
             const result = await this.core.commitUpload(
                 item.params.rootId,

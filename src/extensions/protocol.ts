@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 export const EXTENSIONS = 'cc.qqxing/extensions';
 export const APPS = 'cc.qqxing/apps';
+export const DATA = 'cc.qqxing/data';
 export const FILES = 'cc.qqxing/files';
 export const TERMINAL = 'cc.qqxing/terminal';
 export const LEASE_MS = 30_000;
@@ -51,6 +52,7 @@ export function manifest(terminal: boolean) {
         extensions: {
             [APPS]: { versions: [1] },
             [FILES]: { versions: [1] },
+            [DATA]: { versions: [1] },
             ...(terminal ? { [TERMINAL]: { versions: [1] } } : {}),
         },
     };

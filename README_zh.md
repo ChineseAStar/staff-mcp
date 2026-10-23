@@ -30,7 +30,7 @@ node /path/to/staff-mcp/dist/src/index.js --working-dir /path/to/your/project
 ```
 
 ### 2. Docker 透明代理模式 (Cyber-Shell)
-以“零侵入”的方式，将 AI 助手瞬间无缝注入到**任意 Docker 容器**中，同时保持与宿主机客户端的协议连接！底层自动挂载你的项目和 `staff-mcp` 程序包——无需 `npm install`，瞬间启动！
+在兼容的 Docker 镜像中运行 staff-mcp，保留宿主的标准 MCP 控制连接。wrapper 自动挂载项目和程序包；启动仍取决于镜像、Node/native ABI/libc 和挂载权限。本地 stdio 数据自动映射有下述拓扑边界，不保证所有 Docker Desktop 或远程 daemon 可用。
 
 ```bash
 # 在一个纯净的 Alpine Node 容器里调试你的代码
@@ -59,13 +59,13 @@ node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest 
 ```
 
 ### 4. Reverse MCP 模式 (内网穿透)
-身处 NAT 或防火墙深处？无需公网 IP 和端口映射，主动连回中心化的远端网关 (如 `chat-ai`)！断线重试使用新 epoch，不重放工具请求、文件句柄或终端输入。管理员须提供显式公开 WS/WSS 地址；chat-ai 从 `CHAT_GATEWAY_PUBLIC_URL` 读取连接指引，不将随机私有网关端口当公开地址。
+staff 从 NAT/防火墙后主动连接 chat-ai 现有 Web 入口，无需本地入站 listener。控制使用 SSE + POST，文件/终端通过 remote 主动 raw HTTP GET/PUT 走同一 Web 端口。管理员在 chat-ai 显式配置 `MCP_REVERSE_URL`，不从私有端口猜公开地址。断线使用新 session，不重放工具调用、文件句柄或终端输入。
 
 ```bash
 node /path/to/staff-mcp/dist/src/index.js -t reverse \
-  --ru wss://gateway.example.com/remote \
+  --ru https://chat.example.com/api/mcp/reverse \
   --rt your_secure_token_here \
-  --rn my-macbook-pro
+  --rn my-workstation
 ```
 
 ### 5. 带身份验证的 HTTP 模式
@@ -77,13 +77,15 @@ node /path/to/staff-mcp/dist/src/index.js -t http -p 3000 \
   --http-token your_secure_token_here --working-dir /path/to/your/project
 ```
 
-配置 token 后，客户端每次请求都必须发送 `Authorization: Bearer <token>`。如果配置项接收完整的
+配置 token 后，客户端每次 MCP 控制请求都必须发送 `Authorization: Bearer <token>`。如果配置项接收完整的
 Authorization 请求头值，填写 `Bearer <token>`；如果是 Bearer token 配置项，只填写
 token。仅发送原始 token、不带 `Bearer` 前缀的请求会被拒绝。缺失或错误的凭证返回
 HTTP 401，携带已有 `mcp-session-id` 也不能绕过验证。保护范围包括 `/mcp` 和兼容
 路由 `/sse`、`/messages`。CORS `OPTIONS` 预检无需凭证，但无法调用 MCP。
+raw `/mcp/data/...` 路由使用协商的连接级 data Bearer token 与 `X-Data-Binding`，
+不是 MCP 控制面的共享 token。
 
-不传 `--http-token` 时，HTTP listener 不要求鉴权。任何能够
+不传 `--http-token` 时，HTTP listener 的 MCP 控制面不要求鉴权。任何能够
 连接服务的客户端都能调用工具，因此仅应在可信网络中使用此模式。显式传入空 token
 或含空白字符的 token 时，服务拒绝启动。`--docker` 仅在提供 token 时将其透传到容器命令。
 命令行 token 可能出现在 shell 历史和进程列表中，请限制对这些信息的访问。
@@ -95,13 +97,13 @@ token。这里使用服务端共享 token，不提供 OAuth 流程。
 
 ### Reverse v1 与协议边界
 
-自定义协议权威为 `chat-ai/docs/protocol/README.md`（匹配的 `feat/mcp-file-manager` checkout），两端各自实现，无指定扩展 SDK。官方 MCP SDK 和标准 tools/resources/prompts 保留。独立 `mcp-fte` / `mcp-reverse` 依赖及旧运行要求已移除，不提供旧 FTE 分块或 reverse SSE 回退，旧 HTTP/SSE 地址不是 WS 别名。两端需协调升级，不迁移聊天数据库。
+自定义协议权威为 `chat-ai/docs/protocol/README.md`（匹配的 `feat/mcp-file-manager` checkout）。chat-ai、staff-mcp 及第三方可自行实现，无指定扩展 SDK。官方 MCP SDK、标准 stdio/Streamable HTTP 和 tools/resources/prompts 不变；无旧 FTE 分块或 WS 回退，不迁移聊天数据库。
 
-Reverse 使用 `cc.qqxing.reverse.v1` 子协议、`Authorization: Bearer <token>` 与 `X-MCP-Server-Name`。非 loopback 必须 `wss://.../remote` 并验证证书；仅本机调试允许 `ws://127.0.0.1:<port>/remote`。URL 禁止凭据、query、fragment。配对成功不等于 MCP 初始化或用户授权；只有 SDK 初始化后才报告 ready，短暂连接不重置指数退避，不重放请求。
+Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Server-Name`；SSE endpoint 事件给出 POST 回送地址，message 事件直接承载 MCP JSON-RPC，无私有信封。源码接受显式 HTTP/HTTPS；HTTP 每次启动警告一次明文风险，不能保护 token 或正文，不可信网络应使用 HTTPS。HTTPS 验证证书与目标身份，不自动降级；配置基址无凭据、query、fragment。无需 WebSocket upgrade、独立 gateway/launcher 或私有 host leg。SDK 初始化、数据面就绪和用户授权是不同事实；短暂连接不重置指数退避。
 
 可配置参数（毫秒，Docker 也透传）：
 
-- `--reverse-connect-timeout`：15000，0 禁用 WS 建连超时。
+- `--reverse-connect-timeout`：15000，0 禁用 SSE 建连超时。
 - `--reverse-initialization-timeout`：15000，必须正值。
 - `--reverse-read-timeout`：45000，心跳活性检测，不是工具执行时长。
 - `--reverse-stable-time`：30000，达到稳定时长才重置重试（0 为立即重置）。
@@ -112,11 +114,11 @@ Reverse 使用 `cc.qqxing.reverse.v1` 子协议、`Authorization: Bearer <token>
 
 ### 独立文件工作区
 
-文件管理器通过 `experimental["cc.qqxing/extensions"]` 的 apps/files v1 发现，再调用 `cc.qqxing/apps/v1/list`，独立于模型 Tools。文件 CRUD、草稿、附件快照与显式下载保存行为保留；应用和 `transfer_file` 共用 files v1，经直接 HTTP 二进制 ticket 或 reverse 二进制 channel 传输，无 FTE 回退。stdio 没有二进制数据面：普通 tools/resources/prompts 可用，但不能传文件或开终端。真实方法、授权、生命周期、限额及打包见[文件管理合同与构建说明（英文）](docs/file-manager.md)。
+文件管理器通过 `experimental["cc.qqxing/extensions"]` 的 apps/files/data v1 发现，再调用 `cc.qqxing/apps/v1/list`，独立于模型 Tools。文件 CRUD、草稿、附件快照与显式下载保存行为保留；应用和 `transfer_file` 共用 files v1，与 terminal 使用当前连接同一公共 HTTP dataSession：先 `cc.qqxing/data/v1/configure {binding}`，再 open 绑定准备好的资源。本机 stdio lazy loopback、本地 Docker stdio 自动映射、direct HTTP 同 MCP 端口、reverse 主动 GET/PUT 同 Web 端口；raw binary 与累计消费 ACK 使用 256 KiB 滑动窗口，不走 Base64 或逐块 stop-and-wait。未实现扩展不影响普通 tools/resources/prompts，无 FTE 回退。真实方法、授权、生命周期、限额及打包见[文件管理合同与构建说明（英文）](docs/file-manager.md)。
 
 ### 人工终端（独立高危授权）
 
-`--terminal` 默认关闭，须 Linux、可加载的 optional `node-pty`、管理员指定的可执行 shell（`--terminal-shell` 默认 `/bin/bash`）和 reverse 二进制通道；HTTP/stdio 不宣告终端。native 加载失败不影响普通 MCP。chat-ai 还须当前会话 MCP 授权、独立 `allowTerminal:true`（默认 false）及安全浏览器入口；公开 HTTPS origin 策略由宿主 `MCP_TERMINAL_HTTPS_ORIGIN` 配置，与 `CHAT_GATEWAY_PUBLIC_URL` 无关。
+`--terminal` 默认关闭，须 Linux、可加载的 optional `node-pty`、管理员指定的可执行 shell（`--terminal-shell` 默认 `/bin/bash`）及协商 terminal/data v1 后可用的 duplex dataSession，可经本机 stdio/本地 Docker、direct HTTP 或 reverse 接入。native 加载失败不影响普通 MCP。chat-ai 还须当前会话 MCP 授权、独立 `allowTerminal:true`（默认 false）及安全浏览器入口；公开 HTTPS origin 策略由宿主 `MCP_TERMINAL_HTTPS_ORIGIN` 配置，与 `MCP_REVERSE_URL` 无关。
 
 PTY 以 staff 的 OS uid 运行，root/cwd 只是起始目录，**不是 sandbox**；shell 的文件和网络副作用不受文件工具路径检查约束。终端输入输出不进入模型或聊天历史。浏览器 long-poll/下一 read ACK 传递背压，独立 30 秒 presence/远端租约不是文件应用的两小时 TTL。隐藏或失联 UI 停止输入/续租并请求清理，不自动恢复；后代回收 best effort，不撤销副作用。
 
@@ -127,7 +129,11 @@ PTY 以 staff 的 OS uid 运行，root/cwd 只是起始目录，**不是 sandbox
 - 通过只读挂载 (`read-only bind mounts`) 瞬间注入容器（无需网络重下）。
 - 自动处理 Windows/Mac 与 Linux 容器之间的路径转换问题。
 - 容器名自带启动上下文（例如 `staff-mcp-myproj-3000-a1b2c3` = 工作区 `myproj`、HTTP 端口 `3000`、随机后缀 `a1b2c3`），多个会话并存时在 `docker ps` 中一眼可辨。
-- 提供 `--docker-args` 硬件透传后门（如 ADB USB 调试、GPU 计算、宿主机网络）。
+- 提供 `--docker-args` 配置兼容的硬件/环境参数（如 ADB USB 调试、GPU）；stdio 自动发布拒绝 host/container 网络与覆盖内部 bootstrap/映射参数。
+
+**本地 Docker stdio** 由原 wrapper 自动预留容器私有端口到 **127.0.0.1 随机宿主端口**，仅 inspect 自己 cidfile 的容器；只读挂载宿主 **0600 metadata 文件**提供可达 baseUrl，不改 stdin/stdout，不手找容器 IP。**未 opt-in 的普通 Docker stdio 也分配发布/转发资源，但容器应用 listener 等 `data/v1/configure` 才懒启动；非 Docker 未 opt-in 不监听。** HTTP/reverse 不增加这项额外发布。
+
+此路径要求本地 daemon、客户端与 wrapper 共享可达 loopback、兼容 bridge/端口发布；拒绝 remote/TCP/SSH Docker context 和不兼容网络。不宣称任意 Docker Desktop、network-none、跨 SSH 或额外 sideband/隧道均可用，loopback 发布不是敌对容器隔离保证。容器 uid 须能读 0600 metadata，工作区权限取决于实际 uid/gid，原生 PTY ABI/libc 须匹配镜像；不自动 chown 挂载或按浏览器用户切换身份。退出、失败和启动超时收敛自有容器、映射和 metadata，不提供跨重启资源恢复。
 
 ### 2. 技能与工种生态系统 (`--profile`)
 `staff-mcp` 充当了"AI 工位配置器"的角色。它采用 **5 级级联寻址架构 (Cascade Resolution)** 动态加载角色专属的技能包 (SOP 与提示词)，统一使用 `.staff` 目录规范：
@@ -178,37 +184,36 @@ node /path/to/staff-mcp/dist/src/index.js --profile android-reverse
 | `-p, --port` | HTTP 服务的监听端口 | `3000` |
 | `-h, --host` | HTTP 服务的监听地址 | `127.0.0.1` |
 | `--ht, --http-token` | HTTP 模式可选的 Bearer token | `undefined`（不鉴权） |
-| `--ru, --reverse-url` | 显式 WS/WSS 网关 `/remote` 地址 | `undefined` |
+| `--ru, --reverse-url` | 显式 HTTP(S) Web `/api/mcp/reverse` 基址 | `undefined` |
 | `--rt, --reverse-token` | Reverse MCP 的安全认证令牌 | `undefined` |
 | `--rn, --reverse-name` | Reverse MCP 的服务注册名称 | `undefined` |
-| `--terminal` | 显式启用 Linux reverse 二进制 PTY（staff uid，cwd 非 sandbox） | `false` |
+| `--terminal` | 显式启用可用 duplex dataSession 上的 Linux PTY（staff uid，cwd 非 sandbox） | `false` |
 | `--terminal-shell` | 管理员指定的绝对可执行 shell 路径 | `/bin/bash` |
-| `--proxy` | 支持的 HTTP 客户端及 reverse WS/WSS CONNECT 的 HTTP(S) 代理 | `undefined` |
+| `--proxy` | 支持的 HTTP 客户端及 reverse 控制/数据 HTTP 请求 的 HTTP(S) 代理 | `undefined` |
 
 ### 🌐 代理支持（企业内网）
 
 staff-mcp 的 Undici HTTP 客户端读取 `HTTP_PROXY` / `HTTPS_PROXY`（含小写形式），`NO_PROXY` 支持精确主机/IP、域名后缀、`*`、host:port 和 IPv4/IPv6 CIDR。显式 `--proxy` 对这些客户端及 reverse 连接均优先于环境变量，且不应用 `NO_PROXY`。
 
-Reverse v1 通过 `ws` + `HttpsProxyAgent`（`https-proxy-agent` 7.0.6）保留企业代理路由，不由 Undici dispatcher 实现 WebSocket。未显式传 `--proxy` 时复用 `selectProxyForOrigin`，将 WSS/WS 分别映射为 HTTPS/HTTP 后选择环境代理并检查目标 `NO_PROXY`；WSS 优先 `HTTPS_PROXY`，缺失时回退 `HTTP_PROXY`，支持小写形式。命中 `NO_PROXY` 或未选中代理时直连，选中的 HTTP(S) 代理使用 CONNECT；代理与 WSS 目标证书校验保持开启。代理路由不替代认证、证书信任、DNS 和目标可达性配置；公司 WAN 路径须在实际网络中独立验证，不能用本机结果替代。
+Reverse 控制与数据共用注入的 Undici HTTP pool。未显式传 `--proxy` 时通过 `selectProxyForOrigin` 按 HTTP(S) 目标选择环境代理并检查 `NO_PROXY`；HTTPS 优先 `HTTPS_PROXY`，缺失时回退 `HTTP_PROXY`，支持小写形式。显式代理覆盖该选择。代理与目标证书校验保持开启，不跟随重定向；仍须配置代理认证、CA 信任、DNS 与目标可达性。公司 WAN 的 SSE、流式上传/下载和取消须在实际网络验证，本机结果不能替代。
 
 Docker 内对支持的 HTTP 客户端与 reverse 连接应用上述代理设置，可由容器环境或 `--proxy` 提供。TLS 拦截可用 `NODE_EXTRA_CA_CERTS=/path/to/ca.pem` 增加信任，不关闭证书校验；证书文件须在容器内可见，native ABI/libc 兼容仍是部署要求。
 
 ### 硬件透传案例 (Android 移动端逆向)
-如果你希望 AI 在容器内运行时，仍能连接并控制物理机上的 Android 手机，利用基于网络端口的 ADB 透传是最稳妥的跨平台方案：
+如果你希望 AI 在容器内运行时，仍能连接并控制物理机上的 Android 手机，可单独配置网络 ADB。以下示例不证明 Docker Desktop stdio 数据映射或设备访问可用，ADB 暴露范围须限制为受信任对端：
 
 ```bash
 # 1. 首先在物理机上启动 ADB Server，允许所有网卡连接：
 # adb kill-server && adb -a nodaemon server start
 
 # 2. 启动 staff-mcp 并注入 ADB_SERVER_SOCKET 环境变量
-# Mac/Win 环境下：
+# Mac/Win 环境下，须另验主机名与本地 Docker 拓扑可达：
 node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest -D "-e ADB_SERVER_SOCKET=tcp:host.docker.internal:5037"
 
-# 原生 Linux 环境下（若不使用 host 网络，可指向虚拟桥接 IP）：
+# 原生 Linux 环境下使用实际可达的 bridge 地址（以下仅示例）：
 node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest -D "-e ADB_SERVER_SOCKET=tcp:172.17.0.1:5037"
 
-# 原生 Linux 的极简方案（直接与物理机共享网络栈）：
-node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest -D "--network host"
+# stdio 自动数据发布不支持 --network host。
 ```
 
 ---
