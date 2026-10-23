@@ -11,7 +11,7 @@ export function App() {
     const session = useRef<TerminalSession | undefined>(undefined);
     const terminal = useRef<Terminal | undefined>(undefined);
     const [visible, setVisible] = useState(
-        document.visibilityState === 'visible',
+        document.visibilityState === 'visible' && bridge.snapshot().visible,
     );
     const [view, setView] = useState<SessionView>({
         phase: 'idle',
@@ -50,37 +50,59 @@ export function App() {
             current.resize(cols, rows),
         );
 
-        const syncLifecycle = () => {
-            const state = bridge.snapshot();
-            // Synchronous fencing, independent of React's next render/effect.
-            current.setAvailability(
-                state.enabled && state.connected,
-                state.message,
-            );
-        };
-        const unsubscribe = bridge.subscribe(syncLifecycle);
-        current.setVisible(document.visibilityState === 'visible');
-        syncLifecycle();
-        const visibility = () => {
-            const isVisible = document.visibilityState === 'visible';
-            current.setVisible(isVisible);
-            setVisible(isVisible);
-            if (isVisible) scheduleFit();
-        };
-        const pagehide = () => current.setVisible(false);
-        const pageshow = () => visibility();
-        document.addEventListener('visibilitychange', visibility);
-        window.addEventListener('pagehide', pagehide);
-        window.addEventListener('pageshow', pageshow);
-
+        let pageHidden = false;
+        const isVisible = () =>
+            !pageHidden &&
+            document.visibilityState === 'visible' &&
+            bridge.snapshot().visible;
         let frame = 0;
         const scheduleFit = () => {
             cancelAnimationFrame(frame);
             frame = requestAnimationFrame(() => {
-                if (container.clientWidth > 0 && container.clientHeight > 0)
+                const state = bridge.snapshot();
+                if (
+                    isVisible() &&
+                    state.enabled &&
+                    state.connected &&
+                    container.clientWidth > 0 &&
+                    container.clientHeight > 0
+                ) {
                     fit.fit();
+                    // A view switch may need a remote resize even when the
+                    // fitted local dimensions did not change.
+                    current.resize(term.cols, term.rows);
+                }
             });
         };
+        const visibility = () => {
+            const visible = isVisible();
+            current.setVisible(visible);
+            setVisible(visible);
+            if (visible) scheduleFit();
+        };
+        const syncLifecycle = () => {
+            const state = bridge.snapshot();
+            const available = state.enabled && state.connected;
+            // Fence real loss before visibility can reopen a never-opened idle.
+            if (!available) current.setAvailability(false, state.message);
+            visibility();
+            if (available) current.setAvailability(true, state.message);
+        };
+        const unsubscribe = bridge.subscribe(syncLifecycle);
+        syncLifecycle();
+        const pagehide = (event: PageTransitionEvent) => {
+            pageHidden = true;
+            visibility();
+            if (!event.persisted) current.close();
+        };
+        const pageshow = () => {
+            pageHidden = false;
+            syncLifecycle();
+        };
+        document.addEventListener('visibilitychange', visibility);
+        window.addEventListener('pagehide', pagehide);
+        window.addEventListener('pageshow', pageshow);
+
         const theme = () => {
             const style = getComputedStyle(document.documentElement);
             const color = (name: string, fallback: string) =>
@@ -170,8 +192,11 @@ export function App() {
                         <>
                             <button
                                 type="button"
-                                disabled={view.phase !== 'running'}
+                                disabled={
+                                    view.phase !== 'running' || !available
+                                }
                                 onClick={() => {
+                                    if (!available) return;
                                     terminal.current?.clear();
                                     terminal.current?.focus();
                                 }}
@@ -209,7 +234,9 @@ export function App() {
                     className={`status-dot ${view.phase === 'running' ? 'connected' : ''}`}
                     aria-hidden="true"
                 />
-                {view.message}
+                {active && !visible && !view.error
+                    ? '终端已隐藏；暂停新输入，返回后继续当前会话；长时间冻结可能被回收。'
+                    : view.message}
             </div>
             <div className="terminal-surface" ref={mount} />
             <footer>回滚保留最近 2000 行 · 关闭不撤销已执行的操作</footer>

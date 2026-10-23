@@ -1,4 +1,5 @@
 import type { Terminal } from '@xterm/xterm';
+import { BridgeError } from '../../file-manager/ui/bridge';
 
 const INPUT_LIMIT = 32 * 1024;
 const QUEUE_LIMIT = 256 * 1024;
@@ -36,6 +37,8 @@ export interface SessionView {
 
 interface Instance {
     terminalId?: string;
+    // An open may wait for previous cleanup, but must not start while hidden.
+    opening: boolean;
     inputs: string[];
     inputBytes: number;
     sending: boolean;
@@ -109,7 +112,7 @@ export class TerminalSession {
             this.stop(detail || '宿主连接不可用；请重连终端。', true);
         } else if (!available && this.view.phase !== 'stopped') {
             this.publish({ ...this.view, message: detail || '等待宿主连接…' });
-        } else if (available && this.view.phase === 'idle') {
+        } else if (available && this.visible && this.view.phase === 'idle') {
             // Initial availability opens once. A stopped/failed PTY never retries itself.
             void this.open();
         }
@@ -117,10 +120,19 @@ export class TerminalSession {
 
     setVisible(visible: boolean) {
         this.visible = visible;
-        if (!visible && this.instance) {
-            this.stop('页面已隐藏；终端已停止续租，请重连。');
-        } else if (visible && this.available && this.view.phase === 'idle') {
-            void this.open();
+        const instance = this.instance;
+        this.terminal.options.disableStdin =
+            !visible ||
+            !instance?.terminalId ||
+            !!instance.ending ||
+            this.view.phase !== 'running';
+        if (!visible && instance) {
+            clearTimeout(instance.resizeTimer);
+            instance.size = undefined;
+        }
+        if (visible && this.available) {
+            if (instance && !instance.terminalId) void this.startOpen(instance);
+            else if (this.view.phase === 'idle') void this.open();
         }
     }
 
@@ -130,7 +142,7 @@ export class TerminalSession {
     }
 
     private current(instance: Instance): boolean {
-        return this.instance === instance && this.available && this.visible;
+        return this.instance === instance && this.available;
     }
 
     private cleanup(instance: Instance) {
@@ -139,6 +151,21 @@ export class TerminalSession {
         instance.inputs.length = 0;
         instance.inputBytes = 0;
         instance.size = undefined;
+    }
+
+    private waitForExit(instance: Instance) {
+        instance.ending = true;
+        this.terminal.options.disableStdin = true;
+        this.cleanup(instance);
+        const detail =
+            '进程已停止接收输入，正在等待尾部输出和退出状态；未提交的输入已丢弃，不会重放，输入回执不代表命令已执行。';
+        this.publish({
+            ...this.view,
+            message: instance.outputWarning
+                ? `${instance.outputWarning} ${detail}`
+                : detail,
+            error: !!instance.outputWarning,
+        });
     }
 
     private closeRemote(terminalId: string) {
@@ -179,6 +206,7 @@ export class TerminalSession {
     async open() {
         if (this.instance || !this.available || !this.visible) return;
         const instance: Instance = {
+            opening: false,
             inputs: [],
             inputBytes: 0,
             sending: false,
@@ -187,11 +215,18 @@ export class TerminalSession {
         this.instance = instance;
         this.terminal.options.disableStdin = true;
         this.publish({ phase: 'opening', message: '正在连接终端…' });
+        await this.startOpen(instance);
+    }
+
+    private async startOpen(instance: Instance) {
+        if (instance.opening || !this.current(instance) || !this.visible)
+            return;
+        instance.opening = true;
         try {
             // An explicit reopen waits for prior cleanup; it must not race the
             // host's one-terminal-per-instance ownership check. Never retry close.
             if (this.release) await this.release;
-            if (!this.current(instance)) return;
+            if (!this.current(instance) || !this.visible) return;
             const result = await this.bridge.request<OpenResult>(
                 'terminalOpen',
                 {
@@ -218,19 +253,21 @@ export class TerminalSession {
             await this.rendered;
             if (!this.current(instance)) return;
             this.terminal.reset();
-            this.terminal.options.disableStdin = false;
+            this.terminal.options.disableStdin = !this.visible;
             this.publish({
                 phase: 'running',
                 message: '已连接',
                 shell: result.shell,
                 path: result.path,
             });
-            this.terminal.focus();
+            if (this.visible) this.terminal.focus();
             this.resize(this.terminal.cols, this.terminal.rows);
             void this.read(instance);
         } catch (error) {
             if (this.current(instance))
                 this.stop(`打开失败：${message(error)} 请点击重连。`, true);
+        } finally {
+            instance.opening = false;
         }
     }
 
@@ -239,7 +276,9 @@ export class TerminalSession {
         if (
             !instance?.terminalId ||
             !this.current(instance) ||
+            !this.visible ||
             instance.ending ||
+            this.view.phase !== 'running' ||
             !data
         )
             return;
@@ -285,19 +324,33 @@ export class TerminalSession {
                 instance.inputs.length
             ) {
                 const data = instance.inputs.shift()!;
-                await this.bridge.request('terminalInput', {
-                    terminalId: instance.terminalId,
-                    data,
-                });
+                try {
+                    await this.bridge.request('terminalInput', {
+                        terminalId: instance.terminalId,
+                        data,
+                    });
+                } finally {
+                    // Drain/stop may have cleared the queue during this request.
+                    instance.inputBytes = Math.max(
+                        0,
+                        instance.inputBytes - encoder.encode(data).byteLength,
+                    );
+                }
                 if (!this.current(instance) || instance.ending) return;
-                instance.inputBytes -= encoder.encode(data).byteLength;
             }
         } catch (error) {
-            if (this.current(instance) && !instance.ending)
-                this.stop(
-                    `输入结果未确认：${message(error)} 不会自动重发。`,
-                    true,
-                );
+            if (this.current(instance)) {
+                if (
+                    error instanceof BridgeError &&
+                    error.code === 'TERMINAL_DRAINING'
+                )
+                    this.waitForExit(instance);
+                else
+                    this.stop(
+                        `输入结果未确认：${message(error)} 不会自动重发。`,
+                        true,
+                    );
+            }
         } finally {
             instance.sending = false;
         }
@@ -333,11 +386,13 @@ export class TerminalSession {
                     instance.outputWarning = result.error
                         ? `输出可能不完整（${result.error.code}: ${result.error.message}）。`
                         : '输出可能不完整。';
-                    this.publish({
-                        ...this.view,
-                        message: instance.outputWarning,
-                        error: true,
-                    });
+                    if (instance.ending) this.waitForExit(instance);
+                    else
+                        this.publish({
+                            ...this.view,
+                            message: instance.outputWarning,
+                            error: true,
+                        });
                 }
                 if (result.state !== 'running') {
                     // Freeze writes/renewal immediately, but retain this instance
@@ -376,7 +431,17 @@ export class TerminalSession {
 
     resize(cols: number, rows: number) {
         const instance = this.instance;
-        if (!instance?.terminalId || !this.current(instance) || instance.ending)
+        if (
+            !instance?.terminalId ||
+            !this.current(instance) ||
+            !this.visible ||
+            instance.ending ||
+            this.view.phase !== 'running' ||
+            !Number.isInteger(cols) ||
+            !Number.isInteger(rows) ||
+            cols < 2 ||
+            rows < 2
+        )
             return;
         instance.size = { cols, rows };
         clearTimeout(instance.resizeTimer);
@@ -387,12 +452,18 @@ export class TerminalSession {
     }
 
     private async sendResize(instance: Instance) {
-        if (!this.current(instance) || instance.ending || instance.resizing)
+        if (
+            !this.current(instance) ||
+            !this.visible ||
+            instance.ending ||
+            instance.resizing
+        )
             return;
         instance.resizing = true;
         try {
             while (
                 this.current(instance) &&
+                this.visible &&
                 !instance.ending &&
                 instance.size
             ) {
@@ -404,8 +475,15 @@ export class TerminalSession {
                 });
             }
         } catch (error) {
-            if (this.current(instance) && !instance.ending)
-                this.stop(`调整窗口失败：${message(error)} 请重连。`, true);
+            if (this.current(instance)) {
+                if (
+                    error instanceof BridgeError &&
+                    error.code === 'TERMINAL_DRAINING'
+                )
+                    this.waitForExit(instance);
+                else
+                    this.stop(`调整窗口失败：${message(error)} 请重连。`, true);
+            }
         } finally {
             instance.resizing = false;
         }

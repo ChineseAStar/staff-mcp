@@ -1,6 +1,7 @@
 export interface Lifecycle {
     enabled: boolean;
     connected: boolean;
+    visible: boolean;
     message?: string;
 }
 
@@ -157,6 +158,7 @@ class FileManagerBridge {
     private state: Lifecycle = {
         enabled: false,
         connected: false,
+        visible: false,
         message: '等待宿主建立安全连接…',
     };
     private readyTimer: ReturnType<typeof setInterval>;
@@ -200,11 +202,13 @@ class FileManagerBridge {
             this.setLifecycle({
                 connected: false,
                 enabled: false,
+                visible: false,
                 message: '安全通道异常；草稿仍保留，请在宿主重新打开应用。',
             });
         };
         this.port.start();
-        this.setLifecycle({ connected: true, enabled: true });
+        // Only the host lifecycle can make this instance interactive.
+        this.setLifecycle({ connected: true, enabled: true, visible: false });
     };
 
     private receive = (event: MessageEvent) => {
@@ -218,6 +222,7 @@ class FileManagerBridge {
             this.setLifecycle({
                 connected: data.connected === true,
                 enabled: data.enabled === true,
+                visible: data.visible === true,
                 message:
                     typeof data.message === 'string' ? data.message : undefined,
             });
@@ -264,11 +269,13 @@ class FileManagerBridge {
         for (const listener of this.listeners) listener();
     }
 
-    private pagehide = () => {
-        // Clear the idle read immediately, but leave the port usable for the
-        // terminal UI's existing pagehide handler to send terminalClose.
+    private pagehide = (event: PageTransitionEvent) => {
+        // BFCache preserves the reader and its consumption acknowledgements.
+        if (event.persisted) return;
+        // Leave the port usable for the terminal UI to send terminalClose.
         for (const [id, pending] of this.pending) {
             if (pending.method !== 'terminalRead') continue;
+            clearTimeout(pending.timer);
             this.pending.delete(id);
             pending.reject(new Error('页面已关闭；终端读取已取消。'));
         }
