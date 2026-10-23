@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
-import { accessSync, constants, write } from 'node:fs';
+import { accessSync, constants, statSync, write } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { IPty } from 'node-pty';
 import { extensionError } from '../extensions/protocol.js';
@@ -11,10 +11,10 @@ export interface TerminalRuntime {
     spawn(cwd: string, cols: number, rows: number): LinuxPty;
 }
 
-/** Loading native code is opt-in; ABI/libc or dependency failures never disable ordinary MCP. */
+/** Native loading is opt-in; the caller rejects explicit enablement when unavailable. */
 export function loadTerminalRuntime(
     enabled: boolean,
-    shell = '/bin/bash',
+    shell?: string,
 ): TerminalRuntime | undefined {
     if (!enabled) return undefined;
     if (process.platform !== 'linux') {
@@ -22,40 +22,54 @@ export function loadTerminalRuntime(
         return undefined;
     }
     try {
-        if (!path.isAbsolute(shell)) throw new Error('Shell must be absolute');
-        accessSync(shell, constants.X_OK);
+        const executable = (candidate: string) => {
+            if (!path.isAbsolute(candidate))
+                throw new Error('Shell must be absolute');
+            accessSync(candidate, constants.X_OK);
+            if (!statSync(candidate).isFile())
+                throw new Error('Shell must be a file');
+            return candidate;
+        };
+        if (shell === undefined) {
+            try {
+                shell = executable(process.env.SHELL ?? '');
+            } catch {
+                shell = '/bin/bash';
+            }
+        }
+        const selectedShell = executable(shell);
         const pty: typeof import('node-pty') = createRequire(import.meta.url)(
             'node-pty',
         );
         if (typeof pty.spawn !== 'function')
             throw new Error('Missing PTY implementation');
         return {
-            shell,
+            shell: selectedShell,
             spawn(cwd, cols, rows) {
-                const env: Record<string, string> = {
-                    PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
-                    TERM: 'xterm-256color',
-                    LANG: process.env.LANG ?? 'C.UTF-8',
-                    HISTFILE: '/dev/null',
-                    HISTSIZE: '0',
-                    HISTFILESIZE: '0',
-                };
-                // Do not pass connection tokens, proxy credentials, startup injection or arbitrary env.
-                for (const key of [
-                    'HOME',
-                    'USER',
-                    'LOGNAME',
-                    'LC_ALL',
-                    'LC_CTYPE',
-                    'TZ',
-                ]) {
-                    if (process.env[key]) env[key] = process.env[key]!;
+                const env: Record<string, string> = {};
+                // Exact staff/control variables only: preserve PATH, virtualenvs and user env.
+                const internal = new Set([
+                    'STAFF_GLOBAL_DIR',
+                    'STAFF_MCP_IS_DOCKER',
+                    'STAFF_MCP_DATA_BOOTSTRAP',
+                    'STAFF_MCP_DATA_HOST',
+                    'STAFF_MCP_DATA_PORT',
+                    'MCP_REVERSE_URL',
+                    'MCP_REVERSE_TOKEN',
+                    'MCP_REVERSE_NAME',
+                    'MCP_HTTP_TOKEN',
+                    'STAFF_MCP_HTTP_TOKEN',
+                    'STAFF_MCP_REVERSE_TOKEN',
+                ]);
+                for (const [key, value] of Object.entries(process.env)) {
+                    if (value !== undefined && !internal.has(key))
+                        env[key] = value;
                 }
-                const args =
-                    path.basename(shell) === 'bash'
-                        ? ['--noprofile', '--norc', '-i']
-                        : ['-i'];
-                const child = pty.spawn(shell, args, {
+                env.TERM ??= 'xterm-256color';
+                env.SHELL = selectedShell;
+                // Normal interactive startup files are intentionally honored. This is
+                // the staff user's shell, not a filesystem or environment sandbox.
+                const child = pty.spawn(selectedShell, ['-i'], {
                     cwd,
                     cols,
                     rows,

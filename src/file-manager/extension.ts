@@ -143,9 +143,8 @@ export class FileManagerSession {
     initialized = false;
     closed = false;
     private readonly negotiated = new Set<string>();
-    readonly subscriptions = new Set<string>();
     constructor(
-        private readonly core: FileCore,
+        core: FileCore,
         private readonly server: McpServer,
         runtimeDirectory: string,
         requireData: () => void,
@@ -154,7 +153,6 @@ export class FileManagerSession {
             this.requireExtension();
             requireData();
         });
-        core.listeners.add(this.notify);
     }
     initialize() {
         if (this.closed || this.initialized) return;
@@ -176,56 +174,29 @@ export class FileManagerSession {
                 'Extension version 1 is unavailable on this initialized session',
             );
     }
-    private notify = (rootId: string, changedPath: string) => {
-        if (this.closed || !this.initialized) return;
-        for (const uri of this.subscriptions) {
-            const entry = resource(uri);
-            if (entry.rootId !== rootId) continue;
-            if (
-                entry.file === changedPath ||
-                entry.file.startsWith(`${changedPath}/`) ||
-                entry.file === '' ||
-                changedPath.startsWith(`${entry.file}/`)
-            )
-                void this.server.server
-                    .sendResourceUpdated({ uri })
-                    .catch(() => {});
-        }
-    };
     async close() {
         if (this.closed) return;
         this.closed = true;
         this.initialized = false;
-        this.subscriptions.clear();
-        this.core.listeners.delete(this.notify);
         await this.transfers.close();
     }
 }
 
-export function registerFileManager(
+/** Standard MCP resources work without creating optional extension sessions. */
+export function registerFileResources(
     server: McpServer,
     core: FileCore,
-    runtimeDirectory: string,
-    terminalAvailable: () => boolean = () => false,
+    readApp?: (uri: string) => ReturnType<typeof readAppResource>,
 ) {
-    let session: FileManagerSession | undefined;
     const protocol = server.server;
+    const subscriptions = new Set<string>();
+    let closed = false;
+    let initialized = false;
     const previousInitialized = protocol.oninitialized;
     protocol.oninitialized = () => {
-        session?.initialize();
+        initialized = true;
         previousInitialized?.();
     };
-    function current() {
-        if (!session || session.closed)
-            fail(
-                'EXTENSION_NOT_NEGOTIATED',
-                'No initialized file-manager session',
-            );
-        return session;
-    }
-    function requireExtension(extension = FILES) {
-        current().requireExtension(extension);
-    }
     const guarded =
         <T, R>(handler: (request: T) => Promise<R>) =>
         async (request: T, extra?: { signal?: AbortSignal }) => {
@@ -237,6 +208,20 @@ export function registerFileManager(
                 throw rpc(e);
             }
         };
+    const notify = (rootId: string, changedPath: string) => {
+        if (closed || !initialized) return;
+        for (const uri of subscriptions) {
+            const entry = resource(uri);
+            if (entry.rootId !== rootId) continue;
+            if (
+                entry.file === changedPath ||
+                entry.file.startsWith(`${changedPath}/`) ||
+                entry.file === '' ||
+                changedPath.startsWith(`${entry.file}/`)
+            )
+                void server.server.sendResourceUpdated({ uri }).catch(() => {});
+        }
+    };
     protocol.setRequestHandler(
         ListResourcesRequestSchema,
         guarded(async (request) => {
@@ -328,11 +313,7 @@ export function registerFileManager(
         ReadResourceRequestSchema,
         guarded(async (request) => {
             const uri = request.params.uri;
-            const app = await readAppResource(
-                uri,
-                requireExtension,
-                terminalAvailable(),
-            );
+            const app = await readApp?.(uri);
             if (app) return app;
             const entry = resource(uri);
             const full = await core.resolve(entry.rootId, entry.file);
@@ -393,14 +374,13 @@ export function registerFileManager(
         SubscribeRequestSchema,
         guarded(async (request) => {
             const entry = resource(request.params.uri);
-            const active = current();
             await core.resolve(entry.rootId, entry.file);
-            if (active.closed)
+            if (closed)
                 fail(
                     'STALE_CONNECTION',
                     'Resource subscription connection closed',
                 );
-            active.subscriptions.add(request.params.uri);
+            subscriptions.add(request.params.uri);
             return {};
         }),
     );
@@ -408,10 +388,70 @@ export function registerFileManager(
         UnsubscribeRequestSchema,
         guarded(async (request) => {
             resource(request.params.uri);
-            current().subscriptions.delete(request.params.uri);
+            subscriptions.delete(request.params.uri);
             return {};
         }),
     );
+    const connect = server.connect.bind(server);
+    server.connect = async (transport) => {
+        closed = false;
+        initialized = false;
+        core.listeners.add(notify);
+        const cleanup = () => {
+            closed = true;
+            initialized = false;
+            subscriptions.clear();
+            core.listeners.delete(notify);
+        };
+        const previousClose = transport.onclose;
+        transport.onclose = () => {
+            cleanup();
+            previousClose?.();
+        };
+        try {
+            await connect(transport);
+        } catch (error) {
+            cleanup();
+            throw error;
+        }
+        if (server.server.transport !== transport) cleanup();
+    };
+}
+
+export function registerFileManager(
+    server: McpServer,
+    core: FileCore,
+    runtimeDirectory: string,
+) {
+    let session: FileManagerSession | undefined;
+    const protocol = server.server;
+    const previousInitialized = protocol.oninitialized;
+    protocol.oninitialized = () => {
+        session?.initialize();
+        previousInitialized?.();
+    };
+    function current() {
+        if (!session || session.closed)
+            fail(
+                'EXTENSION_NOT_NEGOTIATED',
+                'No initialized file-manager session',
+            );
+        return session;
+    }
+    function requireExtension(extension = FILES) {
+        current().requireExtension(extension);
+    }
+    const guarded =
+        <T, R>(handler: (request: T) => Promise<R>) =>
+        async (request: T, extra?: { signal?: AbortSignal }) => {
+            try {
+                if (extra?.signal?.aborted)
+                    fail('STALE_CONNECTION', 'Request connection closed');
+                return await handler(request);
+            } catch (e) {
+                throw rpc(e);
+            }
+        };
     async function extensionCall(method: keyof typeof params, input: unknown) {
         requireExtension();
         // Separate parse calls preserve the exact shape/types for every public method.

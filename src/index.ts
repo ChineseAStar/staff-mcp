@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command, InvalidArgumentError } from 'commander';
+import { Command, InvalidArgumentError, Option } from 'commander';
 import * as path from 'path';
 import * as os from 'os';
 import { createServerFactory } from './server.js';
@@ -22,6 +22,13 @@ import {
 } from './utils/paths.js';
 import { ensureRipgrep } from './utils/tool-utils.js';
 import { configureGlobalProxy } from './utils/proxy.js';
+import {
+    dockerPrivatePaths,
+    parseExtensions,
+    parseFileRoot,
+    resolveExtensionOptions,
+} from './extensions/config.js';
+import type { ExtensionOptions } from './extensions/config.js';
 
 // Global error handlers to prevent the MCP server from crashing due to unhandled child process errors
 process.on('uncaughtException', (err: any) => {
@@ -134,14 +141,47 @@ program
         false,
     )
     .option(
-        '--terminal',
-        'Enable Linux PTY on binary transports (host uid; cwd is not a sandbox)',
-        false,
+        '--extensions <features>',
+        'Enable files and/or terminal (comma-separated; all disabled by default)',
+        (value: string) => {
+            try {
+                return parseExtensions(value);
+            } catch (error) {
+                throw new InvalidArgumentError((error as Error).message);
+            }
+        },
     )
     .option(
-        '--terminal-shell <path>',
-        'Administrator-selected terminal shell',
-        '/bin/bash',
+        '--file-root <id=path>',
+        'Files root (repeatable; defaults to main=workspace; system=/ explicitly allows the full filesystem)',
+        (
+            value: string,
+            previous: NonNullable<ExtensionOptions['fileRoots']> = [],
+        ) => {
+            try {
+                const root = parseFileRoot(value);
+                if (previous.some((item) => item.rootId === root.rootId))
+                    throw new Error('Duplicate file root id');
+                return [...previous, root];
+            } catch (error) {
+                throw new InvalidArgumentError((error as Error).message);
+            }
+        },
+    )
+    .option(
+        '--shell <path>',
+        'Terminal shell (default: executable $SHELL or /bin/bash)',
+    )
+    .addOption(
+        new Option('--internal-file-private-path <path>')
+            .hideHelp()
+            .argParser((value: string, previous: string[] = []) => {
+                if (!path.posix.isAbsolute(value) || value.includes('\0'))
+                    throw new InvalidArgumentError(
+                        'Private path must be absolute',
+                    );
+                return [...previous, value];
+            }),
     )
     .option(
         '--docker <image>',
@@ -155,11 +195,26 @@ program
         '--proxy <url>',
         'HTTP(S) proxy for outbound requests (e.g. http://127.0.0.1:8080); defaults to honoring HTTP_PROXY/HTTPS_PROXY/NO_PROXY env vars',
     )
-    .allowUnknownOption()
     .action(async (options, command) => {
         if (options.transport === 'stdio') {
             redirectStdioLogsToStderr();
         }
+        let extensions: ReturnType<typeof resolveExtensionOptions>;
+        try {
+            extensions = resolveExtensionOptions(
+                {
+                    enabled: options.extensions,
+                    fileRoots: options.fileRoot,
+                    shell: options.shell,
+                },
+                path.resolve(options.workingDir),
+            );
+        } catch (error) {
+            command.error((error as Error).message);
+            return;
+        }
+        const dataAuto =
+            options.transport === 'stdio' && extensions.enabled.length > 0;
 
         if (options.transport === 'http') {
             try {
@@ -198,14 +253,19 @@ program
 
             const hostCwd = path.resolve(options.workingDir);
             const dockerArgs = ['run', '-i', '--rm'];
+            const binds: { source: string; target: string }[] = [];
+            const bind = (source: string, target: string, readOnly = false) => {
+                binds.push({ source, target });
+                dockerArgs.push(
+                    '-v',
+                    `${toDockerVolumePath(source)}:${target}${readOnly ? ':ro' : ''}`,
+                );
+            };
 
             // 3. Mount working directory and package source
-            dockerArgs.push('-v', `${toDockerVolumePath(hostCwd)}:/workspace`);
+            bind(hostCwd, '/workspace');
             dockerArgs.push('-w', '/workspace');
-            dockerArgs.push(
-                '-v',
-                `${toDockerVolumePath(pkgRoot)}:/opt/staff-mcp:ro`,
-            );
+            bind(pkgRoot, '/opt/staff-mcp', true);
 
             // 3.5 Check if we are nested inside a node_modules folder (npx/pnpm global scenario)
             // If yes, map the parent node_modules into the container as well so dependencies can be resolved
@@ -214,10 +274,7 @@ program
                 // By mapping the parent directory of staff-mcp's pkgRoot to /opt/node_modules,
                 // Node.js inside the container can look up and find shared dependencies.
                 const outerNodeModules = path.resolve(pkgRoot, '..');
-                dockerArgs.push(
-                    '-v',
-                    `${toDockerVolumePath(outerNodeModules)}:/opt/node_modules:ro`,
-                );
+                bind(outerNodeModules, '/opt/node_modules', true);
             }
 
             // 3.8 Mount Host User-Level Skills and Profiles
@@ -228,25 +285,26 @@ program
             // This avoids making any assumptions about the container's user or HOME directory
             const containerStaffDir = '/opt/.staff';
             dockerArgs.push('-e', `STAFF_GLOBAL_DIR=${containerStaffDir}`);
-            dockerArgs.push(
-                '-v',
-                `${toDockerVolumePath(STAFF_SKILLS_DIR)}:${containerStaffDir}/skills`,
-            );
-            dockerArgs.push(
-                '-v',
-                `${toDockerVolumePath(STAFF_PROFILES_DIR)}:${containerStaffDir}/profiles`,
-            );
+            bind(STAFF_SKILLS_DIR, `${containerStaffDir}/skills`);
+            bind(STAFF_PROFILES_DIR, `${containerStaffDir}/profiles`);
 
             // 4. Mount additional allowed directories
             if (options.allowedDir && options.allowedDir.length > 0) {
                 options.allowedDir.forEach((dir: string) => {
                     const absDir = path.resolve(dir);
-                    dockerArgs.push(
-                        '-v',
-                        `${toDockerVolumePath(absDir)}:${absDir}`,
-                    );
+                    bind(absDir, absDir);
                 });
             }
+
+            const dockerRoots = options.fileRoot?.map(
+                (root: { rootId: string; directory: string }) => {
+                    const directory = `/opt/staff-file-roots/${root.rootId}`;
+                    if (extensions.enabled.includes('files')) {
+                        bind(root.directory, directory);
+                    }
+                    return { rootId: root.rootId, directory };
+                },
+            );
 
             // 5. Handle HTTP port forwarding
             if (options.transport === 'http') {
@@ -274,7 +332,7 @@ program
                 try {
                     validateAdditionalDockerArgs(
                         additionalDockerArgs,
-                        options.transport === 'stdio',
+                        dataAuto,
                     );
                 } catch (error) {
                     const message =
@@ -287,6 +345,10 @@ program
 
                 dockerArgs.push(...additionalDockerArgs);
             }
+
+            // Only wrapper-owned mounts are known here, not arbitrary -D mounts.
+            // A bind of a staging descendant is protected in its entirety.
+            const privateAliases = dockerPrivatePaths(hostCwd, binds);
 
             // 7. Inject environment variable to detect docker proxy mode
             dockerArgs.push('-e', 'STAFF_MCP_IS_DOCKER=1');
@@ -335,6 +397,12 @@ program
             }
 
             dockerArgs.push('-w', '/workspace');
+            for (const privatePath of new Set([
+                ...(options.internalFilePrivatePath ?? []),
+                ...privateAliases,
+            ])) {
+                dockerArgs.push('--internal-file-private-path', privatePath);
+            }
 
             if (options.allowedDir && options.allowedDir.length > 0) {
                 options.allowedDir.forEach((dir: string) => {
@@ -346,12 +414,17 @@ program
             if (options.enableLsp) {
                 dockerArgs.push('--enable-lsp');
             }
-            if (options.terminal) {
+            if (extensions.enabled.length) {
+                dockerArgs.push('--extensions', extensions.enabled.join(','));
+            }
+            for (const root of dockerRoots ?? []) {
                 dockerArgs.push(
-                    '--terminal',
-                    '--terminal-shell',
-                    options.terminalShell,
+                    '--file-root',
+                    `${root.rootId}=${root.directory}`,
                 );
+            }
+            if (extensions.shell !== undefined) {
+                dockerArgs.push('--shell', extensions.shell);
             }
             // Forward an explicit --proxy so the containerized process uses it too.
             // (Env-var proxies reach the container through docker's own env injection
@@ -369,7 +442,7 @@ program
                 dockerArgs,
                 options.transport,
                 {
-                    dataAuto: options.transport === 'stdio',
+                    dataAuto,
                     nameHint: buildDockerNameHint({
                         workspaceDir: hostCwd,
                         transport: options.transport,
@@ -422,19 +495,23 @@ program
         const profile = options.profile;
         const maxMcpSessions = parseInt(options.maxMcpSessions, 10) || 5;
         const enableLsp = !!options.enableLsp;
-        const serverFactory = createServerFactory(
-            'staff-mcp',
-            STAFF_MCP_VERSION,
-            workingDir,
-            allowedDirs,
-            profile,
-            maxMcpSessions,
-            enableLsp,
-            {
-                terminal: options.terminal,
-                terminalShell: options.terminalShell,
-            },
-        );
+        let serverFactory: ReturnType<typeof createServerFactory>;
+        try {
+            serverFactory = createServerFactory(
+                'staff-mcp',
+                STAFF_MCP_VERSION,
+                workingDir,
+                allowedDirs,
+                profile,
+                maxMcpSessions,
+                enableLsp,
+                extensions,
+                options.internalFilePrivatePath,
+            );
+        } catch (error) {
+            command.error((error as Error).message);
+            return;
+        }
 
         if (options.transport === 'http') {
             await startHttpServer(

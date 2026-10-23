@@ -39,12 +39,11 @@ interface Instance {
     inputs: string[];
     inputBytes: number;
     sending: boolean;
-    renewing: boolean;
     resizing: boolean;
     ending?: boolean;
     outputWarning?: string;
     size?: { cols: number; rows: number };
-    renewTimer?: ReturnType<typeof setInterval>;
+    inputTimer?: ReturnType<typeof setTimeout>;
     resizeTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -92,7 +91,7 @@ export class TerminalSession {
     private release?: Promise<unknown>;
     private view: SessionView = {
         phase: 'idle',
-        message: '点击打开，宿主确认后启动终端。',
+        message: '等待连接终端…',
     };
 
     constructor(
@@ -107,21 +106,21 @@ export class TerminalSession {
     setAvailability(available: boolean, detail?: string) {
         this.available = available;
         if (!available && this.instance) {
-            this.stop(detail || '宿主连接不可用；请重新打开终端。', true);
+            this.stop(detail || '宿主连接不可用；请重连终端。', true);
         } else if (!available && this.view.phase !== 'stopped') {
             this.publish({ ...this.view, message: detail || '等待宿主连接…' });
-        } else if (this.view.phase === 'idle') {
-            this.publish({
-                phase: 'idle',
-                message: '点击打开，宿主确认后启动终端。',
-            });
+        } else if (available && this.view.phase === 'idle') {
+            // Initial availability opens once. A stopped/failed PTY never retries itself.
+            void this.open();
         }
     }
 
     setVisible(visible: boolean) {
         this.visible = visible;
         if (!visible && this.instance) {
-            this.stop('页面已隐藏；终端已停止续租，请重新打开。');
+            this.stop('页面已隐藏；终端已停止续租，请重连。');
+        } else if (visible && this.available && this.view.phase === 'idle') {
+            void this.open();
         }
     }
 
@@ -135,7 +134,7 @@ export class TerminalSession {
     }
 
     private cleanup(instance: Instance) {
-        clearInterval(instance.renewTimer);
+        clearTimeout(instance.inputTimer);
         clearTimeout(instance.resizeTimer);
         instance.inputs.length = 0;
         instance.inputBytes = 0;
@@ -183,12 +182,11 @@ export class TerminalSession {
             inputs: [],
             inputBytes: 0,
             sending: false,
-            renewing: false,
             resizing: false,
         };
         this.instance = instance;
         this.terminal.options.disableStdin = true;
-        this.publish({ phase: 'opening', message: '等待宿主确认并打开…' });
+        this.publish({ phase: 'opening', message: '正在连接终端…' });
         try {
             // An explicit reopen waits for prior cleanup; it must not race the
             // host's one-terminal-per-instance ownership check. Never retry close.
@@ -228,15 +226,11 @@ export class TerminalSession {
                 path: result.path,
             });
             this.terminal.focus();
-            instance.renewTimer = setInterval(
-                () => void this.renew(instance),
-                10_000,
-            );
             this.resize(this.terminal.cols, this.terminal.rows);
             void this.read(instance);
         } catch (error) {
             if (this.current(instance))
-                this.stop(`打开失败：${message(error)} 请点击重新打开。`, true);
+                this.stop(`打开失败：${message(error)} 请点击重连。`, true);
         }
     }
 
@@ -256,9 +250,26 @@ export class TerminalSession {
                     '输入积压超过 256 KiB，终端已停止；未发送的输入不会重放。',
                 );
             }
-            instance.inputs.push(...input.chunks);
+            for (const chunk of input.chunks) {
+                const last = instance.inputs.length - 1;
+                if (
+                    last >= 0 &&
+                    encoder.encode(instance.inputs[last]).byteLength +
+                        encoder.encode(chunk).byteLength <=
+                        INPUT_LIMIT
+                )
+                    instance.inputs[last] += chunk;
+                else instance.inputs.push(chunk);
+            }
             instance.inputBytes += input.bytes;
-            void this.send(instance);
+            if (!instance.sending && !instance.inputTimer) {
+                // A short bounded microbatch coalesces onData events without changing
+                // xterm's keyboard/composition handling or replaying uncertain input.
+                instance.inputTimer = setTimeout(() => {
+                    instance.inputTimer = undefined;
+                    void this.send(instance);
+                }, 4);
+            }
         } catch (error) {
             this.stop(message(error), true);
         }
@@ -346,36 +357,20 @@ export class TerminalSession {
                 if (result.state !== 'running') {
                     this.stop(
                         result.state === 'exited'
-                            ? `进程已退出${result.exitCode === undefined ? '' : `（${result.exitCode}）`}；可重新打开。`
-                            : '终端已关闭；可重新打开。',
+                            ? `进程已退出${result.exitCode === undefined ? '' : `（${result.exitCode}）`}；可重连。`
+                            : '终端已关闭；可重连。',
                     );
                     return;
                 }
-                // The host long-polls empty reads (up to 20 s); no fast timer,
-                // speculative concurrent read, or unbounded output queue here.
+                // The next internal bridge read is a render ACK. AppFrame maps
+                // it onto the same persistent HTTP stream, never an HTTP poll.
             }
         } catch (error) {
             if (this.current(instance))
                 this.stop(
-                    `读取中断：${message(error)} 输出完整性无法确认；请重新打开。`,
+                    `读取中断：${message(error)} 输出完整性无法确认；请重连。`,
                     true,
                 );
-        }
-    }
-
-    private async renew(instance: Instance) {
-        if (!this.current(instance) || instance.ending || instance.renewing)
-            return;
-        instance.renewing = true;
-        try {
-            await this.bridge.request('terminalRenew', {
-                terminalId: instance.terminalId,
-            });
-        } catch (error) {
-            if (this.current(instance) && !instance.ending)
-                this.stop(`续租失败：${message(error)} 请重新打开。`, true);
-        } finally {
-            instance.renewing = false;
         }
     }
 
@@ -410,7 +405,7 @@ export class TerminalSession {
             }
         } catch (error) {
             if (this.current(instance) && !instance.ending)
-                this.stop(`调整窗口失败：${message(error)} 请重新打开。`, true);
+                this.stop(`调整窗口失败：${message(error)} 请重连。`, true);
         } finally {
             instance.resizing = false;
         }

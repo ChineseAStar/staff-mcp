@@ -2,7 +2,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { McpError } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { HttpDataSession, DATA_OPEN_METHOD } from '../data/HttpDataSession.js';
+import { DATA_OPEN_METHOD } from '../data/HttpDataSession.js';
+import type { HttpDataSession } from '../data/HttpDataSession.js';
 import type {
     ChannelOpen,
     ChannelReceiver,
@@ -17,7 +18,8 @@ import {
     DATA,
     FILES,
     TERMINAL,
-    manifest,
+    APPS,
+    supports,
     extensionError,
     parse,
 } from './protocol.js';
@@ -51,14 +53,11 @@ export function configureExtensionData(
 /** Attach business lifecycle only. The official SDK receives the original transport unchanged. */
 export function installExtensions(
     server: McpServer,
-    core: FileCore,
+    core: FileCore | undefined,
     transferDirectory: string,
-    discovery: ReturnType<typeof manifest>,
+    workspaceCore: FileCore,
     terminalRuntime?: TerminalRuntime,
 ) {
-    let fileSession:
-        | ReturnType<ReturnType<typeof registerFileManager>>
-        | undefined;
     let terminalSession: TerminalSession | undefined;
     let openData:
         | ((params: unknown) => Promise<Record<string, unknown>>)
@@ -66,31 +65,36 @@ export function installExtensions(
     let configureData:
         | ((params: unknown) => Promise<Record<string, unknown>>)
         | undefined;
+    let initialized = false;
+    const enabled = new Set([
+        APPS,
+        DATA,
+        ...(core ? [FILES] : []),
+        ...(terminalRuntime ? [TERMINAL] : []),
+    ]);
+    const negotiated = (extension: string) =>
+        initialized && enabled.has(extension) && supports(server, extension);
     const requireExtension = (extension: string) => {
-        if (!fileSession)
-            extensionError('STALE_CONNECTION', 'No active extension session');
-        if (!fileSession.supports(extension))
+        if (!negotiated(extension))
             extensionError(
                 'CAPABILITY_UNAVAILABLE',
                 'Extension version 1 is unavailable on this initialized session',
             );
     };
-    const createFileSession = registerFileManager(
-        server,
-        core,
-        transferDirectory,
-        () => !!terminalSession,
-    );
-    registerApps(
-        server,
-        requireExtension,
-        () => !!terminalSession,
-        (extension) => fileSession?.supports(extension) ?? false,
-    );
-    registerTerminal(server, () => {
-        requireExtension(TERMINAL);
-        return terminalSession;
-    });
+    const createFileSession = core
+        ? registerFileManager(server, core, transferDirectory)
+        : undefined;
+    const previousInitialized = server.server.oninitialized;
+    server.server.oninitialized = () => {
+        initialized = true;
+        previousInitialized?.();
+    };
+    registerApps(server, requireExtension, () => !!terminalSession, negotiated);
+    if (terminalRuntime)
+        registerTerminal(server, () => {
+            requireExtension(TERMINAL);
+            return terminalSession;
+        });
     for (const method of ['cc.qqxing/data/v1/configure', DATA_OPEN_METHOD]) {
         server.server.setRequestHandler(
             z.object({
@@ -126,6 +130,7 @@ export function installExtensions(
     const connect = server.connect.bind(server);
     server.connect = async (transport: Transport) => {
         let closed = false;
+        initialized = false;
         const lifetime = new AbortController();
         let data: ExtensionDataBinding | undefined;
         const currentData = () => {
@@ -136,8 +141,8 @@ export function installExtensions(
                 );
             return data.session;
         };
-        const files = createFileSession(() => {
-            files.requireExtension(DATA);
+        const files = createFileSession?.(() => {
+            requireExtension(DATA);
             const session = currentData();
             if (
                 !session.supports(FILES, 'host-to-remote') ||
@@ -148,9 +153,8 @@ export function installExtensions(
                     'Files data session is unavailable',
                 );
         });
-        fileSession = files;
         const terminal = terminalRuntime
-            ? new TerminalSession(core, terminalRuntime, () => {
+            ? new TerminalSession(workspaceCore, terminalRuntime, () => {
                   requireExtension(TERMINAL);
                   requireExtension(DATA);
                   if (!currentData().supports(TERMINAL, 'duplex'))
@@ -161,15 +165,14 @@ export function installExtensions(
               })
             : undefined;
         terminalSession = terminal;
-        Object.assign(discovery, manifest(!!terminal));
         const accept = async (open: ChannelOpen, channel: DataChannel) => {
-            files.requireExtension(DATA);
-            if (open.purpose === FILES) {
-                files.requireExtension(FILES);
+            requireExtension(DATA);
+            if (open.purpose === FILES && files) {
+                requireExtension(FILES);
                 return files.transfers.acceptChannel(open, channel);
             }
             if (open.purpose === TERMINAL && terminal) {
-                files.requireExtension(TERMINAL);
+                requireExtension(TERMINAL);
                 return terminal.acceptChannel(open, channel);
             }
             return extensionError(
@@ -259,6 +262,21 @@ export function installExtensions(
                     'CAPABILITY_UNAVAILABLE',
                     'Data session has not been configured',
                 );
+            // Reject disabled/unnegotiated purposes before the data core allocates a channel.
+            const { open } = parse(
+                z
+                    .object({
+                        open: z.object({ purpose: z.string() }).passthrough(),
+                    })
+                    .passthrough(),
+                params,
+            );
+            if (open.purpose !== FILES && open.purpose !== TERMINAL)
+                extensionError(
+                    'CAPABILITY_UNAVAILABLE',
+                    'Unsupported data channel purpose',
+                );
+            requireExtension(open.purpose);
             return { ...(await data.session.acceptOpen(params)) };
         };
         configureData = configure;
@@ -266,13 +284,14 @@ export function installExtensions(
         const cleanup = () => {
             if (closed) return;
             closed = true;
+            initialized = false;
             lifetime.abort();
             if (openData === open) openData = undefined;
             if (configureData === configure) configureData = undefined;
             if (data) disposeData(data);
             terminal?.close();
             void files
-                .close()
+                ?.close()
                 .catch(() =>
                     console.error(
                         '[staff-mcp] Extension staging cleanup failed.',
@@ -295,4 +314,5 @@ export function installExtensions(
         }
         if (server.server.transport !== transport) cleanup();
     };
+    return requireExtension;
 }

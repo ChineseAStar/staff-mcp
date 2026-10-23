@@ -46,14 +46,15 @@ export function supports(server: McpServer, extension: string): boolean {
     );
 }
 
-export function manifest(terminal: boolean) {
+export function manifest(features: { files: boolean; terminal: boolean }) {
     return {
         version: 1,
         extensions: {
-            [APPS]: { versions: [1] },
-            [FILES]: { versions: [1] },
-            [DATA]: { versions: [1] },
-            ...(terminal ? { [TERMINAL]: { versions: [1] } } : {}),
+            ...(features.files || features.terminal
+                ? { [APPS]: { versions: [1] }, [DATA]: { versions: [1] } }
+                : {}),
+            ...(features.files ? { [FILES]: { versions: [1] } } : {}),
+            ...(features.terminal ? { [TERMINAL]: { versions: [1] } } : {}),
         },
     };
 }

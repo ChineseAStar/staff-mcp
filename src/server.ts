@@ -11,11 +11,11 @@ import { FileCore } from './file-manager/file-core.js';
 import { EXTENSIONS, manifest } from './extensions/protocol.js';
 import { installExtensions } from './extensions/runtime.js';
 import { loadTerminalRuntime } from './terminal/pty.js';
-
-export interface ExtensionOptions {
-    terminal?: boolean;
-    terminalShell?: string;
-}
+import { registerFileResources } from './file-manager/extension.js';
+import { readAppResource } from './extensions/apps.js';
+import { resolveExtensionOptions } from './extensions/config.js';
+import type { ExtensionOptions } from './extensions/config.js';
+export type { ExtensionOptions } from './extensions/config.js';
 
 /**
  * Creates and initializes a new McpServer with all functional tools.
@@ -37,7 +37,9 @@ export function createServerFactory(
     maxMcpSessions: number = 5,
     enableLsp: boolean = false,
     extensions: ExtensionOptions = {},
+    privateDirectoryAliases: string[] = [],
 ): () => McpServer {
+    const options = resolveExtensionOptions(extensions, workingDir);
     const security = new SecurityManager(workingDir, allowedDirs);
     const sandbox = security.getAllowedDirs();
     const runtimeDirectory = path.join(
@@ -46,7 +48,7 @@ export function createServerFactory(
         'file-manager',
     );
     // Shared across all sessions from this factory, including ordinary tool writes.
-    const core = new FileCore(
+    const standardCore = new FileCore(
         sandbox.map((directory, index) => ({
             rootId: index === 0 ? 'main' : `allowed-${index}`,
             name:
@@ -57,6 +59,8 @@ export function createServerFactory(
             directory,
         })),
         runtimeDirectory,
+        undefined,
+        privateDirectoryAliases,
     );
 
     // Generate instructions with system-specific details (OS, shell, etc.)
@@ -64,13 +68,29 @@ export function createServerFactory(
         enableLsp,
     });
 
-    const terminalRuntime = loadTerminalRuntime(
-        extensions.terminal === true,
-        extensions.terminalShell,
-    );
+    const filesCore = options.enabled.includes('files')
+        ? new FileCore(
+              options.fileRoots.map((root) => ({
+                  ...root,
+                  name: root.rootId === 'main' ? 'Workspace' : root.rootId,
+                  readOnly: false,
+              })),
+              runtimeDirectory,
+              standardCore,
+          )
+        : undefined;
+    const terminalRuntime = options.enabled.includes('terminal')
+        ? loadTerminalRuntime(true, options.shell)
+        : undefined;
+    if (options.enabled.includes('terminal') && !terminalRuntime) {
+        throw new Error(
+            'Terminal was explicitly enabled but is unavailable: Linux, an executable shell and a loadable node-pty are required.',
+        );
+    }
+    const features = { files: !!filesCore, terminal: !!terminalRuntime };
 
     return () => {
-        const discovery = manifest(false);
+        const discovery = manifest(features);
         const server = new McpServer(
             {
                 name,
@@ -81,15 +101,15 @@ export function createServerFactory(
                 instructions,
                 capabilities: {
                     resources: { subscribe: true },
-                    experimental: {
-                        [EXTENSIONS]: discovery,
-                    },
+                    ...(features.files || features.terminal
+                        ? { experimental: { [EXTENSIONS]: discovery } }
+                        : {}),
                 },
             },
         );
 
         // Register all functional tool modules
-        registerFileTools(server, security, core);
+        registerFileTools(server, security, standardCore);
         registerShellTools(server, security);
 
         if (enableLsp) {
@@ -99,12 +119,23 @@ export function createServerFactory(
         registerSkillTools(server, workingDir, security, profile);
         registerMcpClientTools(server, { maxSessions: maxMcpSessions });
 
-        installExtensions(
+        const requireExtension =
+            features.files || features.terminal
+                ? installExtensions(
+                      server,
+                      filesCore,
+                      path.join(runtimeDirectory, 'transfers'),
+                      standardCore,
+                      terminalRuntime,
+                  )
+                : undefined;
+        registerFileResources(
             server,
-            core,
-            path.join(runtimeDirectory, 'transfers'),
-            discovery,
-            terminalRuntime,
+            filesCore ?? standardCore,
+            requireExtension
+                ? (uri) =>
+                      readAppResource(uri, requireExtension, features.terminal)
+                : undefined,
         );
 
         return server;

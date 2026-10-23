@@ -148,7 +148,7 @@ class FileManagerBridge {
         {
             resolve: (value: unknown) => void;
             reject: (error: Error) => void;
-            timer: ReturnType<typeof setTimeout>;
+            timer?: ReturnType<typeof setTimeout>;
             method: string;
         }
     >();
@@ -165,6 +165,7 @@ class FileManagerBridge {
         // Install the listener before announcing readiness. Re-announcing also
         // tolerates the host installing its own load listener a little later.
         window.addEventListener('message', this.connect);
+        window.addEventListener('pagehide', this.pagehide);
         this.readyTimer = setInterval(() => this.ready(), 700);
         this.ready();
     }
@@ -263,6 +264,16 @@ class FileManagerBridge {
         for (const listener of this.listeners) listener();
     }
 
+    private pagehide = () => {
+        // Clear the idle read immediately, but leave the port usable for the
+        // terminal UI's existing pagehide handler to send terminalClose.
+        for (const [id, pending] of this.pending) {
+            if (pending.method !== 'terminalRead') continue;
+            this.pending.delete(id);
+            pending.reject(new Error('页面已关闭；终端读取已取消。'));
+        }
+    };
+
     snapshot = () => this.state;
 
     subscribe = (listener: () => void) => {
@@ -298,23 +309,36 @@ class FileManagerBridge {
                 new Error('应用当前不可操作；草稿仍保留在此页面。'),
             );
         }
+        if (
+            method === 'terminalRead' &&
+            [...this.pending.values()].some(
+                (pending) => pending.method === 'terminalRead',
+            )
+        ) {
+            return Promise.reject(new Error('终端只允许一个读取请求。'));
+        }
         const id = `file-ui-${++this.sequence}`;
         return new Promise<T>((resolve, reject) => {
-            const timer = setTimeout(
-                () => {
-                    this.pending.delete(id);
-                    reject(
-                        new Error(
-                            mutations.has(method)
-                                ? '请求超时，写入结果待核实。不要直接重放，请刷新或重新读取目标。'
-                                : '请求超时，请检查宿主连接后重试。',
-                        ),
-                    );
-                },
-                ['uploadStream', 'download'].includes(method)
-                    ? 15 * 60_000
-                    : 90_000,
-            );
+            // Sustained output waits for data, not an idle deadline. Lifecycle /
+            // pagehide still reject it, and the single-reader guard bounds pending.
+            const timer =
+                method === 'terminalRead'
+                    ? undefined
+                    : setTimeout(
+                          () => {
+                              this.pending.delete(id);
+                              reject(
+                                  new Error(
+                                      mutations.has(method)
+                                          ? '请求超时，写入结果待核实。不要直接重放，请刷新或重新读取目标。'
+                                          : '请求超时，请检查宿主连接后重试。',
+                                  ),
+                              );
+                          },
+                          ['uploadStream', 'download'].includes(method)
+                              ? 15 * 60_000
+                              : 90_000,
+                      );
             this.pending.set(id, {
                 resolve: (value) => resolve(value as T),
                 reject,

@@ -117,17 +117,33 @@ Optional CLI timeouts (milliseconds, forwarded in Docker mode):
 
 ## 🛠️ Core Capabilities
 
+Extensions are **all off by default**. Use `--extensions files`, `--extensions terminal`, or `--extensions files,terminal`; apps/data dependencies are added automatically, not selected separately. Disabled features advertise no manifest entry and register no corresponding UI Resource or business handler. With both off there is no extension manifest or application data listener/session; ordinary MCP tools and non-UI Resources remain. HTTP mode still opens its normal MCP listener.
+
+```bash
+# Files only, with the default main root at --working-dir
+node /path/to/staff-mcp/dist/src/index.js --extensions files -w /workspace
+# Terminal only; does not enable the file app
+node /path/to/staff-mcp/dist/src/index.js --extensions terminal --shell /bin/bash
+# Both apps, with explicit file roots replacing the default main root
+node /path/to/staff-mcp/dist/src/index.js --extensions files,terminal -w /workspace \
+  --file-root main=/workspace --file-root assets=/srv/assets
+# Explicit full-filesystem file access on a suitable Linux host (not a default)
+node /path/to/staff-mcp/dist/src/index.js --extensions files --file-root system=/
+```
+
+`--file-root id=path` may repeat; IDs must be unique lowercase letters/digits/hyphens, and relative paths resolve from the launching process cwd. Explicit roots replace, rather than append to, the default `main`. They affect the file app and its standard file Resources only when files is enabled, not the standard tools' `--working-dir` / `--allowed-dir` scope or terminal's default workspace cwd. Selecting `/` explicitly exposes the filesystem visible to the staff identity; it does not elevate privileges or create an OS security boundary. The library accepts [`ExtensionOptions`](src/extensions/config.ts): `{enabled?:('files'|'terminal')[],fileRoots?:{rootId:string,directory:string}[],shell?:string}`, with `enabled` defaulting to `[]`.
+
 ### Independent file workspace
 
-The file manager is discovered under `experimental["cc.qqxing/extensions"]` (apps/files/data v1), then `cc.qqxing/apps/v1/list`, independently of model Tools. File CRUD, drafts, attachments and explicit download saving retain their existing behavior. The app and `transfer_file` share files v1 and the same public HTTP dataSession used by terminal: `cc.qqxing/data/v1/configure {binding}`, then `open` binds a prepared resource. Local stdio lazily opens loopback, local Docker stdio maps it automatically, direct HTTP shares the MCP port, and reverse actively GETs/PUTs the host Web port. Raw binary and cumulative consumption ACKs use a 256 KiB sliding window, not Base64 or per-chunk stop-and-wait. Unsupported extensions leave ordinary tools/resources/prompts unchanged; no FTE fallback. See [File manager contract and UI build](docs/file-manager.md) for exact methods, lifecycle, limits and packaging.
+With `--extensions files`, the file manager is discovered under `experimental["cc.qqxing/extensions"]` (apps/files/data v1), then `cc.qqxing/apps/v1/list`, independently of model Tools. File CRUD, drafts, attachments and explicit download saving retain their existing behavior. The app and `transfer_file` share files v1 and the same public HTTP dataSession used by terminal: `cc.qqxing/data/v1/configure {binding}`, then `open` binds a prepared resource. Local stdio lazily opens loopback, local Docker stdio maps it automatically, direct HTTP shares the MCP port, and reverse actively GETs/PUTs the host Web port. Raw binary and cumulative consumption ACKs use a 256 KiB sliding window, not Base64 or per-chunk stop-and-wait. Clients that do not negotiate apps can still use ordinary tools and non-UI Resources. File roots do not broaden tool permissions; no FTE fallback. See [File manager contract and UI build](docs/file-manager.md) for exact methods, lifecycle, limits and packaging.
 
-### Human terminal (explicit high-risk opt-in)
+### Human terminal (explicit extension opt-in)
 
-`--terminal` is off by default. It needs Linux, a loadable optional `node-pty`, an administrator-selected executable shell (`--terminal-shell`, default `/bin/bash`) and negotiated terminal/data v1 with a usable duplex dataSession over local stdio/Docker, direct HTTP or reverse. Native loading failure leaves ordinary MCP available. chat-ai additionally requires the current chat's MCP grant, separate `allowTerminal:true` (default false), and same-origin browser requests. Terminal follows the host site's HTTP/HTTPS deployment policy without a terminal-specific TLS gate or origin allowlist. HTTPS is recommended for the entire site to protect login sessions, tool calls and terminal traffic; allowing HTTP does not encrypt those requests.
+`--extensions terminal` needs Linux, a loadable optional `node-pty`, an executable shell and negotiated terminal/data v1 with a usable duplex dataSession over local stdio/Docker, direct HTTP or reverse. Explicit terminal enablement fails startup if Linux/native PTY/shell requirements are unavailable; the default disabled state never loads the native PTY. `--shell` accepts an absolute executable path; otherwise a valid absolute executable `$SHELL` is used, falling back to `/bin/bash`. The interactive shell honors normal startup files and inherits staff's environment except exact internal control keys documented in the [terminal contract](docs/terminal.md). chat-ai uses the existing current-chat MCP grant and same-origin browser requests, with no extra terminal permission switch or high-risk confirmation. Terminal follows the host site's HTTP/HTTPS deployment policy without a terminal-specific TLS gate or origin allowlist. HTTPS is recommended for the entire site to protect login sessions, tool calls and terminal traffic; allowing HTTP does not encrypt those requests.
 
-The PTY runs as the staff process uid: its starting root/cwd is **not a sandbox** and shell filesystem/network effects are not restricted by file-tool path checks. Terminal bytes never enter model context or chat history. Browser long-poll/next-read ACK propagates backpressure; a separate 30-second presence/remote lease is not the file app's two-hour TTL. Hidden/disconnected UI stops input/renewal and requests cleanup, with no automatic resume; descendant cleanup is best effort, not rollback.
+The PTY starts at the staff workspace (`main`) by default, independently of file roots, and runs as the staff process uid: its starting root/cwd is **not a sandbox** and shell filesystem/network effects are not restricted by file-tool path checks. Terminal bytes never enter model context or chat history. A sustained browser HTTP output stream releases data credit only after xterm rendering is acknowledged. Only the browser host renews every 10 seconds; the 30-second presence/remote lease is not the file app's two-hour TTL. Opening the Shell App starts one PTY without another open button or confirmation. Exit, PTY failure or disconnection leaves the app shell available for manual reconnect; hidden/disconnected UI stops input and requests cleanup, with no automatic resume; descendant cleanup is best effort, not rollback.
 
-Backpressured PTY exit may have incomplete output. Current source reports remote `status.error:{code:"OUTPUT_INCOMPLETE",message:string}` and host read `outputIncomplete?:boolean` / `error?:{code:string,message:string}` for abnormal close/status, with UI warning handling. The boolean is a host read field, not a remote status field. These diagnostics detect possible loss; they do not recover missing bytes or guarantee lossless output, even with exit code 0 or EOF. See [Terminal UI contract](docs/terminal.md).
+Backpressured PTY exit may have incomplete output. Current source reports remote `status.error:{code:"OUTPUT_INCOMPLETE",message:string}` and host output frame `outputIncomplete?:boolean` / `error?:{code:string,message:string}` for abnormal close/status, with UI warning handling. The boolean is a host output-frame field, not a remote status field. These diagnostics detect possible loss; they do not recover missing bytes or guarantee lossless output, even with exit code 0 or EOF. See [Terminal UI contract](docs/terminal.md).
 
 ### 1. Seamless Containerization (`--docker`)
 Never pollute your host machine again. By simply appending `--docker <image>`, `staff-mcp`:
@@ -136,7 +152,9 @@ Never pollute your host machine again. By simply appending `--docker <image>`, `
 - Names containers after their launch context (e.g. `staff-mcp-myproj-3000-a1b2c3` = workspace `myproj`, HTTP port `3000`, random suffix `a1b2c3`), so multiple sessions are easy to tell apart in `docker ps`.
 - Allows `--docker-args` for compatible hardware/environment settings (e.g., ADB USB debugging or GPUs); stdio automatic data publication rejects host/container networking and overrides of its managed bootstrap/mapping.
 
-For **local Docker stdio**, the existing wrapper reserves a private container port published to a random **127.0.0.1** host port and inspects only its own cidfile container. A read-only mount of a host **0600 metadata file** supplies the reachable base URL without rewriting stdin/stdout or asking users to discover container IPs. Even clients that never opt in reserve this publication/forwarding resource; the container application listener remains lazy until `data/v1/configure`. Non-Docker stdio does not listen before opt-in. HTTP/reverse add no such publication.
+For **local Docker stdio with at least one extension enabled**, the existing wrapper reserves a private container port published to a random **127.0.0.1** host port and inspects only its own cidfile container. A read-only mount of a host **0600 metadata file** supplies the reachable base URL without rewriting stdin/stdout or asking users to discover container IPs. The application listener remains lazy until `data/v1/configure`. With all extensions off, `dataAuto` is false: no application-data port publication, metadata mount or bootstrap is created. Ordinary workspace/package mounts are unchanged. Non-Docker stdio also has no application listener before configure. HTTP/reverse add no such publication; disabled extensions create no dataSession, while HTTP retains its MCP listener.
+
+When files is enabled, each explicit Docker `--file-root id=path` bind-mounts that host path at `/opt/staff-file-roots/<id>`. Thus `--file-root system=/` explicitly binds the host root there, rather than referring only to the container root. This is a deliberate wide filesystem exposure, not automatic host privilege acquisition or a claim of support across all platforms; actual OS/container permissions and Docker topology still apply. Default file `main` and terminal cwd use the existing workspace mount.
 
 This path requires a local daemon and client/wrapper sharing reachable loopback, with a compatible bridge/publication topology. Remote/TCP/SSH Docker contexts and incompatible networking are rejected; arbitrary Docker Desktop, network-none or cross-SSH sidebands/tunnels are not claimed. Loopback publication is not isolation from hostile containers. Metadata must be readable by the container uid (0600 is not automatically relaxed), workspace access depends on actual uid/gid, and native PTY ABI/libc must match the image. The wrapper does not chown mounts or switch PTYs to browser-user identities. Exit, failure and startup timeout clean the owned container, publication and metadata; no cross-restart resource recovery is promised.
 
@@ -178,8 +196,8 @@ It will securely download, configure, and reload the skill without you lifting a
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
-| `-w, --working-dir` | Root directory for the sandbox | `process.cwd()` |
-| `-d, --allowed-dir` | Extra directories allowed for access | `[]` |
+| `-w, --working-dir` | Staff workspace and default file root / terminal cwd; not an OS sandbox | `process.cwd()` |
+| `-d, --allowed-dir` | Extra directories for standard tools; does not add file-app roots | `[]` |
 | `-r, --profile` | The active profile for skills (e.g., android-reverse) | `default` |
 | `--enable-lsp` | Enable LSP capabilities (disabled by default) | `false` |
 | `--docker` | Run inside a Docker container using this image | `undefined` |
@@ -191,8 +209,9 @@ It will securely download, configure, and reload the skill without you lifting a
 | `--ru, --reverse-url` | Explicit HTTP(S) Web `/api/mcp/reverse` base endpoint | `undefined` |
 | `--rt, --reverse-token` | Security token for Reverse MCP | `undefined` |
 | `--rn, --reverse-name` | Server name for Reverse MCP | `undefined` |
-| `--terminal` | Opt in to Linux PTY with a negotiated duplex dataSession (staff uid, cwd is not a sandbox) | `false` |
-| `--terminal-shell` | Administrator-selected absolute executable shell | `/bin/bash` |
+| `--extensions` | Comma-separated `files`, `terminal`, or both; apps/data dependencies are automatic | `[]` (all off) |
+| `--file-root` | Repeatable `id=path`; explicit file roots replace the default and apply only when files is enabled | `main=<working-dir>` |
+| `--shell` | Absolute executable PTY shell path | Valid absolute `$SHELL`, otherwise `/bin/bash` |
 | `--proxy` | HTTP(S) proxy for supported HTTP clients and reverse control/data HTTP requests | `undefined` |
 
 ### 🌐 Proxy Support (Corporate Networks)

@@ -59,6 +59,7 @@ export function App() {
             );
         };
         const unsubscribe = bridge.subscribe(syncLifecycle);
+        current.setVisible(document.visibilityState === 'visible');
         syncLifecycle();
         const visibility = () => {
             const isVisible = document.visibilityState === 'visible';
@@ -71,7 +72,6 @@ export function App() {
         document.addEventListener('visibilitychange', visibility);
         window.addEventListener('pagehide', pagehide);
         window.addEventListener('pageshow', pageshow);
-        current.setVisible(document.visibilityState === 'visible');
 
         let frame = 0;
         const scheduleFit = () => {
@@ -187,16 +187,16 @@ export function App() {
                                 关闭终端
                             </button>
                         </>
-                    ) : (
+                    ) : view.phase === 'stopped' ? (
                         <button
                             className="primary"
                             type="button"
                             disabled={!available}
                             onClick={() => void session.current?.open()}
                         >
-                            打开终端
+                            重连
                         </button>
-                    )}
+                    ) : null}
                 </div>
             </header>
             <div

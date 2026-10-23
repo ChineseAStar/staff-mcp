@@ -53,7 +53,6 @@ const terminal = {
     mimeType: 'text/html',
     bridgeVersion: 1,
     scope: 'chat',
-    highRisk: true,
     terminal: true,
     methods: [],
     requiredExtensions: { [TERMINAL]: 1, [DATA]: 1 },

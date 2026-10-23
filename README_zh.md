@@ -112,17 +112,33 @@ Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Ser
 
 ## 🛠️ 核心能力
 
+扩展**默认全关**。通过 `--extensions files`、`--extensions terminal` 或 `--extensions files,terminal` 启用；apps/data 依赖自动计算，无需单独选择。禁用能力不声明对应 manifest 条目、不注册对应 UI Resource 或业务 handler；全关时无扩展 manifest、应用数据 listener/session，普通 MCP 工具和非 UI Resources 保留。HTTP 模式仍监听原 MCP 服务。
+
+```bash
+# 仅文件应用，默认 main 根为 --working-dir
+node /path/to/staff-mcp/dist/src/index.js --extensions files -w /workspace
+# 仅终端，不隐式启用文件应用
+node /path/to/staff-mcp/dist/src/index.js --extensions terminal --shell /bin/bash
+# 两种应用，显式文件 roots 替代默认 main 根
+node /path/to/staff-mcp/dist/src/index.js --extensions files,terminal -w /workspace \
+  --file-root main=/workspace --file-root assets=/srv/assets
+# 在适用 Linux 宿主上明确开放全盘文件访问（不是默认值）
+node /path/to/staff-mcp/dist/src/index.js --extensions files --file-root system=/
+```
+
+`--file-root id=path` 可重复，id 须由小写字母/数字/连字符组成且唯一；相对路径按启动进程 cwd 解析。显式 roots **替代**而非追加默认 `main`，仅 files 启用时影响文件 App 及其标准文件 Resources，不改变标准工具的 `--working-dir` / `--allowed-dir` 范围或终端默认工作区 cwd。显式选择 `/` 开放的是 staff 身份实际可见的文件系统，不提权，也不是 OS 安全边界。库接口 [`ExtensionOptions`](src/extensions/config.ts) 为 `{enabled?:('files'|'terminal')[],fileRoots?:{rootId:string,directory:string}[],shell?:string}`，`enabled` 默认 `[]`。
+
 ### 独立文件工作区
 
-文件管理器通过 `experimental["cc.qqxing/extensions"]` 的 apps/files/data v1 发现，再调用 `cc.qqxing/apps/v1/list`，独立于模型 Tools。文件 CRUD、草稿、附件快照与显式下载保存行为保留；应用和 `transfer_file` 共用 files v1，与 terminal 使用当前连接同一公共 HTTP dataSession：先 `cc.qqxing/data/v1/configure {binding}`，再 open 绑定准备好的资源。本机 stdio lazy loopback、本地 Docker stdio 自动映射、direct HTTP 同 MCP 端口、reverse 主动 GET/PUT 同 Web 端口；raw binary 与累计消费 ACK 使用 256 KiB 滑动窗口，不走 Base64 或逐块 stop-and-wait。未实现扩展不影响普通 tools/resources/prompts，无 FTE 回退。真实方法、授权、生命周期、限额及打包见[文件管理合同与构建说明（英文）](docs/file-manager.md)。
+启用 `--extensions files` 后，文件管理器通过 `experimental["cc.qqxing/extensions"]` 的 apps/files/data v1 发现，再调用 `cc.qqxing/apps/v1/list`，独立于模型 Tools。文件 CRUD、草稿、附件快照与显式下载保存行为保留；应用和 `transfer_file` 共用 files v1，与 terminal 使用当前连接同一公共 HTTP dataSession：先 `cc.qqxing/data/v1/configure {binding}`，再 open 绑定准备好的资源。本机 stdio lazy loopback、本地 Docker stdio 自动映射、direct HTTP 同 MCP 端口、reverse 主动 GET/PUT 同 Web 端口；raw binary 与累计消费 ACK 使用 256 KiB 滑动窗口，不走 Base64 或逐块 stop-and-wait。客户端未协商 apps 时仍可用普通工具和非 UI Resources；文件 roots 不扩大工具权限，无 FTE 回退。真实方法、授权、生命周期、限额及打包见[文件管理合同与构建说明（英文）](docs/file-manager.md)。
 
-### 人工终端（独立高危授权）
+### 人工终端（显式启用扩展）
 
-`--terminal` 默认关闭，须 Linux、可加载的 optional `node-pty`、管理员指定的可执行 shell（`--terminal-shell` 默认 `/bin/bash`）及协商 terminal/data v1 后可用的 duplex dataSession，可经本机 stdio/本地 Docker、direct HTTP 或 reverse 接入。native 加载失败不影响普通 MCP。chat-ai 还须当前会话 MCP 授权、独立 `allowTerminal:true`（默认 false）及同源浏览器请求。终端遵循宿主站点统一的 HTTP/HTTPS 部署策略，不另设终端专用 TLS 门槛或 origin 白名单。建议全站使用 HTTPS 保护登录会话、工具调用及终端流量；允许 HTTP 不代表这些请求已加密。
+`--extensions terminal` 须 Linux、可加载的 optional `node-pty`、可执行 shell 及协商 terminal/data v1 后可用的 duplex dataSession，可经本机 stdio/本地 Docker、direct HTTP 或 reverse 接入。显式启用但 Linux/native PTY/shell 不可用时启动失败，不静默隐藏缺依赖；默认关闭时不加载原生 PTY。`--shell` 接受绝对可执行路径，缺省使用有效的绝对 `$SHELL`，否则回退 `/bin/bash`。交互 shell 读取正常启动配置，继承 staff 环境，仅排除[终端合同](docs/terminal.md)列出的精确内部控制 key。chat-ai 沿用当前会话 MCP 授权及同源浏览器请求，不另设终端权限开关或高危确认。终端遵循宿主站点统一的 HTTP/HTTPS 部署策略，不另设终端专用 TLS 门槛或 origin 白名单。建议全站使用 HTTPS 保护登录会话、工具调用及终端流量；允许 HTTP 不代表这些请求已加密。
 
-PTY 以 staff 的 OS uid 运行，root/cwd 只是起始目录，**不是 sandbox**；shell 的文件和网络副作用不受文件工具路径检查约束。终端输入输出不进入模型或聊天历史。浏览器 long-poll/下一 read ACK 传递背压，独立 30 秒 presence/远端租约不是文件应用的两小时 TTL。隐藏或失联 UI 停止输入/续租并请求清理，不自动恢复；后代回收 best effort，不撤销副作用。
+PTY 默认从 staff 工作区 `main` 启动，与文件 roots 独立，以 staff 的 OS uid 运行；root/cwd 只是起始目录，**不是 sandbox**；shell 的文件和网络副作用不受文件工具路径检查约束。终端输入输出不进入模型或聊天历史。浏览器持续 HTTP 输出流仅在 xterm 渲染消费 ACK 后释放数据信用；只由浏览器宿主每 10 秒续租，30 秒 presence/远端租约不是文件应用的两小时 TTL。点击 Shell App 自动启动一次 PTY，无额外打开按钮或确认；退出、PTY 错误或断链后保留 App 壳供手动重连。隐藏或失联时停止输入并请求清理，不自动恢复；后代回收 best effort，不撤销副作用。
 
-背压退出可能输出不完整，当前源码在远端 `status.error` 返回 `{code:"OUTPUT_INCOMPLETE",message:string}`，宿主 read 则以可选 `outputIncomplete:boolean` 与 `error:{code:string,message:string}` 接续异常 close/status 并提供 UI 警告；布尔字段属于宿主 read，不是远端 status 字段；这些字段用于检测和诊断可能的丢失，不恢复缺失字节，也不保证无损输出，即使收到 EOF 或 exit code 0。见[终端 UI 合同（英文）](docs/terminal.md)。
+背压退出可能输出不完整，当前源码在远端 `status.error` 返回 `{code:"OUTPUT_INCOMPLETE",message:string}`，宿主输出帧则以可选 `outputIncomplete:boolean` 与 `error:{code:string,message:string}` 接续异常 close/status 并提供 UI 警告；布尔字段属于宿主输出帧，不是远端 status 字段；这些字段用于检测和诊断可能的丢失，不恢复缺失字节，也不保证无损输出，即使收到 EOF 或 exit code 0。见[终端 UI 合同（英文）](docs/terminal.md)。
 
 ### 1. 无缝容器化支持 (`--docker`)
 告别污染宿主机的时代。只要加上 `--docker <image>`，`staff-mcp` 将会：
@@ -131,7 +147,9 @@ PTY 以 staff 的 OS uid 运行，root/cwd 只是起始目录，**不是 sandbox
 - 容器名自带启动上下文（例如 `staff-mcp-myproj-3000-a1b2c3` = 工作区 `myproj`、HTTP 端口 `3000`、随机后缀 `a1b2c3`），多个会话并存时在 `docker ps` 中一眼可辨。
 - 提供 `--docker-args` 配置兼容的硬件/环境参数（如 ADB USB 调试、GPU）；stdio 自动发布拒绝 host/container 网络与覆盖内部 bootstrap/映射参数。
 
-**本地 Docker stdio** 由原 wrapper 自动预留容器私有端口到 **127.0.0.1 随机宿主端口**，仅 inspect 自己 cidfile 的容器；只读挂载宿主 **0600 metadata 文件**提供可达 baseUrl，不改 stdin/stdout，不手找容器 IP。**未 opt-in 的普通 Docker stdio 也分配发布/转发资源，但容器应用 listener 等 `data/v1/configure` 才懒启动；非 Docker 未 opt-in 不监听。** HTTP/reverse 不增加这项额外发布。
+**本地 Docker stdio 仅在至少启用一种扩展时**，由原 wrapper 自动预留容器私有端口到 **127.0.0.1 随机宿主端口**，仅 inspect 自己 cidfile 的容器；只读挂载宿主 **0600 metadata 文件**提供可达 baseUrl，不改 stdin/stdout，不手找容器 IP，应用 listener 等 `data/v1/configure` 才懒启动。全关时 `dataAuto` 为 false，不分配应用数据发布端口、metadata 挂载或 bootstrap；普通工作区/程序包挂载不变。非 Docker stdio 也在 configure 前无应用 listener。HTTP/reverse 不增加这项发布；全关无 dataSession，HTTP 原 MCP listener 保留。
+
+files 启用时，每个显式 Docker `--file-root id=path` 将对应宿主目录 bind-mount 到 `/opt/staff-file-roots/<id>`。因此 `--file-root system=/` 是明确把宿主根挂到该目录，而不只是指容器根；这是主动扩大文件可见范围，不是自动获得宿主权限或全平台支持承诺，仍受实际 OS/容器权限与 Docker 拓扑约束。默认文件 `main` 与终端 cwd 沿用现有工作区挂载。
 
 此路径要求本地 daemon、客户端与 wrapper 共享可达 loopback、兼容 bridge/端口发布；拒绝 remote/TCP/SSH Docker context 和不兼容网络。不宣称任意 Docker Desktop、network-none、跨 SSH 或额外 sideband/隧道均可用，loopback 发布不是敌对容器隔离保证。容器 uid 须能读 0600 metadata，工作区权限取决于实际 uid/gid，原生 PTY ABI/libc 须匹配镜像；不自动 chown 挂载或按浏览器用户切换身份。退出、失败和启动超时收敛自有容器、映射和 metadata，不提供跨重启资源恢复。
 
@@ -174,8 +192,8 @@ node /path/to/staff-mcp/dist/src/index.js --profile android-reverse
 
 | 选项 | 描述 | 默认值 |
 | :--- | :--- | :--- |
-| `-w, --working-dir` | 沙盒的根目录 (工作区) | `process.cwd()` |
-| `-d, --allowed-dir` | 额外允许 AI 访问的宿主机目录 | `[]` |
+| `-w, --working-dir` | staff 工作区与默认文件 root / 终端 cwd；不是 OS 沙盒 | `process.cwd()` |
+| `-d, --allowed-dir` | 标准工具额外允许目录；不增加文件 App roots | `[]` |
 | `-r, --profile` | 当前激活的技能档案/工种 (如 android-reverse) | `default` |
 | `--enable-lsp` | 启用 LSP 语言服务器功能 (默认禁用) | `false` |
 | `--docker` | 在指定的 Docker 镜像内运行 AI | `undefined` |
@@ -187,8 +205,9 @@ node /path/to/staff-mcp/dist/src/index.js --profile android-reverse
 | `--ru, --reverse-url` | 显式 HTTP(S) Web `/api/mcp/reverse` 基址 | `undefined` |
 | `--rt, --reverse-token` | Reverse MCP 的安全认证令牌 | `undefined` |
 | `--rn, --reverse-name` | Reverse MCP 的服务注册名称 | `undefined` |
-| `--terminal` | 显式启用可用 duplex dataSession 上的 Linux PTY（staff uid，cwd 非 sandbox） | `false` |
-| `--terminal-shell` | 管理员指定的绝对可执行 shell 路径 | `/bin/bash` |
+| `--extensions` | 逗号分隔的 `files`、`terminal` 或两者；自动计算 apps/data 依赖 | `[]`（全关） |
+| `--file-root` | 可重复 `id=path`；显式 roots 替代默认值，仅 files 启用时生效 | `main=<working-dir>` |
+| `--shell` | PTY shell 的绝对可执行路径 | 有效的绝对 `$SHELL`，否则 `/bin/bash` |
 | `--proxy` | 支持的 HTTP 客户端及 reverse 控制/数据 HTTP 请求 的 HTTP(S) 代理 | `undefined` |
 
 ### 🌐 代理支持（企业内网）

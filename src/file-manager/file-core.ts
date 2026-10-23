@@ -152,15 +152,40 @@ export async function secureDirectory(directory: string): Promise<void> {
     }
 }
 export class FileCore {
-    readonly mutex = new Mutex();
-    private readonly publications = new Set<string>();
+    readonly mutex: Mutex;
+    private readonly changes: Set<(full: string) => void>;
+    private readonly publications: Set<string>;
+    private readonly privateDirectories: string[];
     readonly listeners = new Set<
         (rootId: string, changedPath: string) => void
     >();
     constructor(
         roots: Root[],
-        private readonly privateDirectory?: string,
+        privateDirectory?: string,
+        shared?: FileCore,
+        privateDirectoryAliases: string[] = [],
     ) {
+        // Standard resources/tools and files v1 have independent roots, but serialize
+        // writes and observe the same filesystem publications.
+        // Aliases only add restrictions. Never replace canonical staging, even
+        // when callers supply the internal Docker paths explicitly.
+        this.privateDirectories = [
+            ...new Set([
+                ...(shared?.privateDirectories ?? []),
+                ...(privateDirectory ? [path.resolve(privateDirectory)] : []),
+                ...privateDirectoryAliases.map((directory) => {
+                    if (!path.isAbsolute(directory) || directory.includes('\0'))
+                        throw new Error(
+                            'Private directory alias must be absolute',
+                        );
+                    return path.resolve(directory);
+                }),
+            ]),
+        ];
+        this.mutex = shared?.mutex ?? new Mutex();
+        this.publications = shared?.publications ?? new Set();
+        this.changes = shared?.changes ?? new Set();
+        this.changes.add((full) => this.notifyChanged(full));
         this.rootMap = new Map(
             roots.map((root) => [
                 root.rootId,
@@ -239,6 +264,9 @@ export class FileCore {
     }
     private changed(rootId: string, file: string) {
         const full = path.resolve(this.root(rootId).directory, file);
+        for (const notify of this.changes) notify(full);
+    }
+    private notifyChanged(full: string) {
         for (const root of this.rootMap.values()) {
             if (!inside(root.directory, full)) continue;
             const relative = path
@@ -255,7 +283,9 @@ export class FileCore {
         }
     }
     private checkPrivate(full: string) {
-        if (this.privateDirectory && inside(this.privateDirectory, full))
+        if (
+            this.privateDirectories.some((directory) => inside(directory, full))
+        )
             fail(
                 'OUTSIDE_ROOT',
                 'Private transfer staging is not a workspace file',
@@ -263,7 +293,9 @@ export class FileCore {
     }
     private protectRoots(full: string) {
         this.checkPrivate(full);
-        if (this.privateDirectory && inside(full, this.privateDirectory))
+        if (
+            this.privateDirectories.some((directory) => inside(full, directory))
+        )
             fail('ROOT_PROTECTED', 'Cannot remove private staging ancestry');
         for (const root of this.rootMap.values()) {
             if (inside(full, root.directory))
@@ -441,9 +473,8 @@ export class FileCore {
             .filter(
                 (name) =>
                     !name.startsWith('.staff-write-') &&
-                    !(
-                        this.privateDirectory &&
-                        inside(this.privateDirectory, path.join(full, name))
+                    !this.privateDirectories.some((directory) =>
+                        inside(directory, path.join(full, name)),
                     ),
             )
             .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
