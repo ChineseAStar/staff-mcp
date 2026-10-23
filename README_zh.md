@@ -118,7 +118,7 @@ Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Ser
 
 ### 人工终端（独立高危授权）
 
-`--terminal` 默认关闭，须 Linux、可加载的 optional `node-pty`、管理员指定的可执行 shell（`--terminal-shell` 默认 `/bin/bash`）及协商 terminal/data v1 后可用的 duplex dataSession，可经本机 stdio/本地 Docker、direct HTTP 或 reverse 接入。native 加载失败不影响普通 MCP。chat-ai 还须当前会话 MCP 授权、独立 `allowTerminal:true`（默认 false）及安全浏览器入口；公开 HTTPS origin 策略由宿主 `MCP_TERMINAL_HTTPS_ORIGIN` 配置，与 `MCP_REVERSE_URL` 无关。
+`--terminal` 默认关闭，须 Linux、可加载的 optional `node-pty`、管理员指定的可执行 shell（`--terminal-shell` 默认 `/bin/bash`）及协商 terminal/data v1 后可用的 duplex dataSession，可经本机 stdio/本地 Docker、direct HTTP 或 reverse 接入。native 加载失败不影响普通 MCP。chat-ai 还须当前会话 MCP 授权、独立 `allowTerminal:true`（默认 false）及同源浏览器请求。终端遵循宿主站点统一的 HTTP/HTTPS 部署策略，不另设终端专用 TLS 门槛或 origin 白名单。建议全站使用 HTTPS 保护登录会话、工具调用及终端流量；允许 HTTP 不代表这些请求已加密。
 
 PTY 以 staff 的 OS uid 运行，root/cwd 只是起始目录，**不是 sandbox**；shell 的文件和网络副作用不受文件工具路径检查约束。终端输入输出不进入模型或聊天历史。浏览器 long-poll/下一 read ACK 传递背压，独立 30 秒 presence/远端租约不是文件应用的两小时 TTL。隐藏或失联 UI 停止输入/续租并请求清理，不自动恢复；后代回收 best effort，不撤销副作用。
 
