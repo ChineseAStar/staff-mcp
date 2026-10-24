@@ -38,7 +38,8 @@ export type ExtensionDataFactory = (
         channel: DataChannel,
     ) => Promise<ChannelReceiver>,
     signal: AbortSignal,
-    origin?: string,
+    origin: string | undefined,
+    supportsPurpose: (purpose: string) => boolean,
 ) => ExtensionDataBinding | Promise<ExtensionDataBinding>;
 const dataFactories = new WeakMap<McpServer, ExtensionDataFactory>();
 
@@ -180,6 +181,11 @@ export function installExtensions(
                 'Unsupported data channel purpose',
             );
         };
+        const supportsPurpose = (purpose: string) =>
+            !closed &&
+            negotiated(DATA) &&
+            ((purpose === FILES && !!files && negotiated(FILES)) ||
+                (purpose === TERMINAL && !!terminal && negotiated(TERMINAL)));
         let configurationAttempted = false;
         const disposeData = (owned: ExtensionDataBinding) => {
             owned.session.close();
@@ -243,6 +249,7 @@ export function installExtensions(
                 accept,
                 lifetime.signal,
                 origin,
+                supportsPurpose,
             );
             if (closed) {
                 disposeData(owned);
@@ -271,7 +278,7 @@ export function installExtensions(
                     .passthrough(),
                 params,
             );
-            if (open.purpose !== FILES && open.purpose !== TERMINAL)
+            if (!supportsPurpose(open.purpose))
                 extensionError(
                     'CAPABILITY_UNAVAILABLE',
                     'Unsupported data channel purpose',

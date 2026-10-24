@@ -1,5 +1,6 @@
 /** Byte interfaces only. Resource authorization and lifetime belong to the caller. */
-export type ChannelPurpose = 'cc.qqxing/files' | 'cc.qqxing/terminal';
+/** Nonempty purpose identifier, bounded to 256 characters at the wire boundary. */
+export type ChannelPurpose = string;
 export type Direction = 'host-to-remote' | 'remote-to-host' | 'duplex';
 
 export interface ChannelOpen {
@@ -50,6 +51,8 @@ export interface HttpDataSessionOptions {
     endpoint?: string;
     /** Must enforce configured origin AND path; throw before any HTTP request. */
     validateEndpoint: (endpoint: URL) => void;
+    /** Business admission policy for the current negotiated connection. */
+    supportsPurpose: (purpose: string) => boolean;
     requestOpen?: (
         params: DataOpenParams,
         signal?: AbortSignal,

@@ -92,7 +92,7 @@ export async function startReverseServer(
                 activeServer = server;
                 configureExtensionData(
                     server,
-                    (binding, accept, signal, origin) => {
+                    (binding, accept, signal, origin, supportsPurpose) => {
                         if (origin !== undefined)
                             throw new Error(
                                 'Reverse data does not accept an advertised origin',
@@ -116,6 +116,7 @@ export async function startReverseServer(
                                 role: 'remote',
                                 binding,
                                 accept,
+                                supportsPurpose,
                                 fetch: http.fetch,
                                 validateEndpoint: (endpoint) => {
                                     if (

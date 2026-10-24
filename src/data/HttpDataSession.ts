@@ -36,11 +36,18 @@ function errorOf(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error));
 }
 
-function validOpen(value: unknown): ChannelOpen {
+function validPurpose(value: unknown): value is ChannelPurpose {
+    return typeof value === 'string' && value.length > 0 && value.length <= 256;
+}
+
+function validOpen(
+    value: unknown,
+    supportsPurpose: (purpose: string) => boolean,
+): ChannelOpen {
     const open = value as ChannelOpen | undefined;
     check(
         open &&
-            ['cc.qqxing/files', 'cc.qqxing/terminal'].includes(open.purpose) &&
+            validPurpose(open.purpose) &&
             typeof open.resourceId === 'string' &&
             open.resourceId.length > 0 &&
             open.resourceId.length <= 256 &&
@@ -49,6 +56,7 @@ function validOpen(value: unknown): ChannelOpen {
             ),
         'Invalid data channel metadata',
     );
+    check(supportsPurpose(open.purpose), 'Unsupported data channel purpose');
     return {
         purpose: open.purpose,
         resourceId: open.resourceId,
@@ -719,6 +727,10 @@ export class HttpDataSession {
                 /^[A-Za-z0-9_-]{16,256}$/.test(options.binding),
             'Invalid connection data binding',
         );
+        check(
+            typeof options.supportsPurpose === 'function',
+            'Purpose policy is required',
+        );
         this.maximum = options.maxChannels ?? 4;
         check(
             Number.isInteger(this.maximum) &&
@@ -743,7 +755,8 @@ export class HttpDataSession {
     supports(purpose: ChannelPurpose, direction: Direction): boolean {
         return (
             !this.stopped &&
-            ['cc.qqxing/files', 'cc.qqxing/terminal'].includes(purpose) &&
+            validPurpose(purpose) &&
+            this.options.supportsPurpose(purpose) &&
             ['host-to-remote', 'remote-to-host', 'duplex'].includes(direction)
         );
     }
@@ -769,7 +782,10 @@ export class HttpDataSession {
                 Number.isSafeInteger(link.expiresInMs) &&
                 link.expiresInMs > 0 &&
                 link.expiresInMs <= (this.options.openTimeoutMs ?? 15_000) &&
-                sameOpen(validOpen(link.open), open),
+                sameOpen(
+                    validOpen(link.open, this.options.supportsPurpose),
+                    open,
+                ),
             'Invalid data link',
         );
         this.options.validateEndpoint(endpointUrl(link.endpoint));
@@ -777,6 +793,7 @@ export class HttpDataSession {
     }
 
     private create(open: ChannelOpen, supplied?: DataLink): HttpChannel {
+        open = validOpen(open, this.options.supportsPurpose);
         this.admit();
         check(supplied || this.endpoint, 'No local HTTP data endpoint');
         const link: DataLink = supplied ?? {
@@ -818,7 +835,7 @@ export class HttpDataSession {
             this.options.role === 'host',
             'Only the host opens data channels',
         );
-        open = validOpen(open);
+        open = validOpen(open, this.options.supportsPurpose);
         let channel: HttpChannel | undefined;
         try {
             if (link) {
@@ -917,7 +934,7 @@ export class HttpDataSession {
             params && params.binding === this.options.binding,
             'Data/open connection binding mismatch',
         );
-        const open = validOpen(params.open);
+        const open = validOpen(params.open, this.options.supportsPurpose);
         const link = params.link
             ? this.validateLink(params.link, open)
             : undefined;

@@ -136,7 +136,9 @@ node /path/to/staff-mcp/dist/src/index.js --extensions files --file-root system=
 
 `--extensions terminal` 须 Linux、可加载的 optional `node-pty`、可执行 shell 及协商 terminal/data v1 后可用的 duplex dataSession，可经本机 stdio/本地 Docker、direct HTTP 或 reverse 接入。显式启用但 Linux/native PTY/shell 不可用时启动失败，不静默隐藏缺依赖；默认关闭时不加载原生 PTY。`--shell` 接受绝对可执行路径，缺省使用有效的绝对 `$SHELL`，否则回退 `/bin/bash`。交互 shell 读取正常启动配置，继承 staff 环境，仅排除[终端合同](docs/terminal.md)列出的精确内部控制 key。chat-ai 沿用当前会话 MCP 授权及同源浏览器请求，不另设终端权限开关或高危确认。终端遵循宿主站点统一的 HTTP/HTTPS 部署策略，不另设终端专用 TLS 门槛或 origin 白名单。建议全站使用 HTTPS 保护登录会话、工具调用及终端流量；允许 HTTP 不代表这些请求已加密。
 
-PTY 默认从 staff 工作区 `main` 启动，与文件 roots 独立，以 staff 的 OS uid 运行；root/cwd 只是起始目录，**不是 sandbox**；shell 的文件和网络副作用不受文件工具路径检查约束。终端输入输出不进入模型或聊天历史。浏览器持续 HTTP 输出流仅在 xterm 渲染消费 ACK 后释放数据信用；只由浏览器宿主每 10 秒续租，30 秒 presence/远端租约不是文件应用的两小时 TTL。点击 Shell App 自动启动一次 PTY，无额外打开按钮或确认；退出、PTY 错误或断链后保留 App 壳供手动重连。隐藏或失联时停止输入并请求清理，不自动恢复；后代回收 best effort，不撤销副作用。
+PTY 默认从 staff 工作区 `main` 启动，与文件 roots 独立，以 staff 的 OS uid 运行；root/cwd 只是起始目录，**不是 sandbox**；shell 的文件和网络副作用不受文件工具路径检查约束。终端输入输出不进入模型或聊天历史。每个 PTY 的浏览器到 chat-ai 交互使用一条同源 WebSocket，输入、输出、resize、presence 和真实 xterm 消费 ACK 共用连接，后端仍是公共 HTTP dataSession。浏览器每 10 秒刷新独立的 120 秒 host presence；host 终端适配器按远端每次返回的租约调度续租，staff 默认 30 秒。点击 Shell App 自动启动一次 PTY，无额外打开按钮或确认；退出、PTY 错误或真实断链后保留 App 壳供手动重连。普通隐藏视图保留 read/ACK/presence，但拒绝新输入和 resize；真正离页、关闭、撤权或到期才清理，后代回收 best effort，不撤销副作用。
+
+当前描述符和 iframe 资源使用 **bridge v2**：文件显式 `scope:"workspace"`，终端 `scope:"chat"`。须匹配宿主与 UI 资源并重新打开 App，不维护 bridge-v1 回退。files-v1 新增自己的 `stat` 用于 force 复制版本检查，不再依赖文件管理 App；chat-ai 的本地字节预算不代表远端业务上限。详见[宿主/桥接边界](docs/file-manager.md#host-boundary-and-bridge-v2)。
 
 背压退出可能输出不完整，当前源码在远端 `status.error` 返回 `{code:"OUTPUT_INCOMPLETE",message:string}`，宿主输出帧则以可选 `outputIncomplete:boolean` 与 `error:{code:string,message:string}` 接续异常 close/status 并提供 UI 警告；布尔字段属于宿主输出帧，不是远端 status 字段；这些字段用于检测和诊断可能的丢失，不恢复缺失字节，也不保证无损输出，即使收到 EOF 或 exit code 0。见[终端 UI 合同（英文）](docs/terminal.md)。
 

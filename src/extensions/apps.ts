@@ -16,11 +16,12 @@ export const FILE_MANAGER = 'cc.qqxing/file-manager';
 
 const files = {
     id: 'files',
+    scope: 'workspace',
     title: '文件管理器',
     icon: 'folder',
     resourceUri: FILE_UI_URI,
     mimeType: 'text/html',
-    bridgeVersion: 1,
+    bridgeVersion: 2,
     requiredExtensions: { [FILES]: 1, [DATA]: 1 },
     methods: [
         'roots',
@@ -51,7 +52,7 @@ const terminal = {
     icon: 'terminal',
     resourceUri: TERMINAL_UI_URI,
     mimeType: 'text/html',
-    bridgeVersion: 1,
+    bridgeVersion: 2,
     scope: 'chat',
     terminal: true,
     methods: [],

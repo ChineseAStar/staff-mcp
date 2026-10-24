@@ -14,7 +14,7 @@ export function redirectStdioLogsToStderr(): void {
 }
 
 export async function startStdioServer(server: McpServer) {
-    configureExtensionData(server, async (binding, accept, signal, origin) => {
+    configureExtensionData(server, async (binding, accept, signal, origin, supportsPurpose) => {
         if (origin !== undefined)
             extensionError(
                 'INVALID_PARAMS',
@@ -63,6 +63,7 @@ export async function startStdioServer(server: McpServer) {
                 binding,
                 endpoint,
                 accept,
+                supportsPurpose,
                 // Listener mode must never follow a peer-supplied outbound descriptor.
                 fetch: async () => {
                     throw new Error(

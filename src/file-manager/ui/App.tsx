@@ -112,10 +112,26 @@ function affected(tab: FileTab, rootId: string, path: string) {
     return tab.rootId === rootId && withinPath(tab.path, path);
 }
 
+// Only inert raster formats become img data URLs. SVG/HTML remain text or binary.
+const rasterMimeTypes = new Map([
+    ['png', 'image/png'],
+    ['jpg', 'image/jpeg'],
+    ['jpeg', 'image/jpeg'],
+    ['gif', 'image/gif'],
+    ['webp', 'image/webp'],
+    ['avif', 'image/avif'],
+    ['bmp', 'image/bmp'],
+    ['ico', 'image/x-icon'],
+]);
+
 function entryIcon(entry: Pick<Entry, 'type' | 'name'>): IconName {
     if (entry.type === 'directory') return 'folder';
     if (entry.type === 'symlink') return 'link';
-    if (/\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i.test(entry.name))
+    if (
+        rasterMimeTypes.has(
+            /\.([a-z0-9]+)$/i.exec(entry.name)?.[1].toLowerCase() ?? '',
+        )
+    )
         return 'image';
     if (/\.(json|md|html?|svg|[jt]sx?|css|xml)$/i.test(entry.name))
         return 'code';
@@ -414,7 +430,9 @@ export function App() {
             if (entry?.type === 'symlink') {
                 throw new Error('符号链接仅供识别；不允许跟随链接。');
             }
-            const image = /\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i.test(path);
+            const imageMimeType = rasterMimeTypes.get(
+                /\.([a-z0-9]+)$/i.exec(path)?.[1].toLowerCase() ?? '',
+            );
             const tab: FileTab = {
                 id: `tab-${++tabSequence.current}`,
                 rootId: targetRoot,
@@ -430,7 +448,7 @@ export function App() {
                     ?.readOnly,
                 revision: 0,
             };
-            if (!image && (entry?.size ?? 0) <= 2 * 1024 * 1024) {
+            if (!imageMimeType && (entry?.size ?? 0) <= 2 * 1024 * 1024) {
                 try {
                     const result = await bridge.request<TextResult>(
                         'readText',
@@ -460,29 +478,18 @@ export function App() {
                         tab.error = errorMessage(error);
                     } else throw error;
                 }
-            } else if (image) {
+            } else if (imageMimeType) {
                 tab.kind = 'image';
                 try {
-                    const result = await bridge.request<{
-                        mimeType: string;
-                        data: string;
-                    }>('preview', { rootId: targetRoot, path });
-                    if (
-                        ![
-                            'image/png',
-                            'image/jpeg',
-                            'image/gif',
-                            'image/webp',
-                            'image/avif',
-                            'image/bmp',
-                            'image/x-icon',
-                        ].includes(result.mimeType)
-                    ) {
-                        throw new Error(
-                            '该图片类型不支持安全预览，请下载查看。',
-                        );
-                    }
-                    tab.image = `data:${result.mimeType};base64,${result.data}`;
+                    const result = await bridge.request<{ data: string }>(
+                        'readBytes',
+                        {
+                            rootId: targetRoot,
+                            path,
+                            maxBytes: 2 * 1024 * 1024,
+                        },
+                    );
+                    tab.image = `data:${imageMimeType};base64,${result.data}`;
                 } catch (error) {
                     tab.error = errorMessage(error);
                 }

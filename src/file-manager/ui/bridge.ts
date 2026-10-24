@@ -185,7 +185,7 @@ class FileManagerBridge {
             event.source !== window.parent ||
             window.parent === window ||
             data?.type !== 'mcp-app-connect' ||
-            data.version !== 1 ||
+            data.version !== 2 ||
             typeof data.nonce !== 'string' ||
             !data.nonce ||
             typeof data.instanceId !== 'string' ||
@@ -235,7 +235,7 @@ class FileManagerBridge {
             for (const listener of this.progressListeners) listener(data);
             return;
         }
-        if (data.version !== 1 || typeof data.id !== 'string') return;
+        if (data.version !== 2 || typeof data.id !== 'string') return;
         const pending = this.pending.get(data.id);
         if (!pending) return;
         clearTimeout(pending.timer);
@@ -355,7 +355,7 @@ class FileManagerBridge {
             try {
                 this.port!.postMessage(
                     {
-                        version: 1,
+                        version: 2,
                         id,
                         method: fileMethods.has(method) ? 'rpc' : method,
                         params: fileMethods.has(method)

@@ -516,6 +516,12 @@ export function registerFileManager(
     const transferParams = {
         roots: z.object({}).strict(),
         resolve: z.object({ uri: z.string().min(1).max(8192) }).strict(),
+        stat: z
+            .object({
+                rootId: z.string().min(1),
+                path: z.string().min(1),
+            })
+            .strict(),
         prepare: z
             .object({
                 operationId,
@@ -607,6 +613,16 @@ export function registerFileManager(
                                 request.params,
                             ).uri,
                         );
+                    case 'stat': {
+                        const p = parseExtension(
+                            transferParams.stat,
+                            request.params,
+                        );
+                        const stat = await core.stat(p.rootId, p.path, true);
+                        if (!stat.operations.read || stat.version === undefined)
+                            fail('NOT_FILE', 'Expected a regular file');
+                        return { version: stat.version };
+                    }
                     case 'prepare':
                         return transfers.prepare(
                             parseExtension(

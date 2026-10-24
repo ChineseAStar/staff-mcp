@@ -118,7 +118,7 @@ export async function startHttpServer(
             sessions.delete(newSessionId);
         };
 
-        configureExtensionData(server, (binding, accept, signal, origin) => {
+        configureExtensionData(server, (binding, accept, signal, origin, supportsPurpose) => {
             signal.throwIfAborted();
             if (dataSessions.has(binding))
                 throw new Error('Data binding already exists.');
@@ -134,6 +134,7 @@ export async function startHttpServer(
                 binding,
                 endpoint,
                 accept,
+                supportsPurpose,
                 // This transport only serves bytes; reverse injects its own outbound binding.
                 fetch: async () => {
                     throw new Error(
