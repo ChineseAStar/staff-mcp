@@ -143,7 +143,7 @@ With `--extensions files`, the file manager is discovered under `experimental["c
 
 The PTY starts at the staff workspace (`main`) by default, independently of file roots, and runs as the staff process uid: its starting root/cwd is **not a sandbox** and shell filesystem/network effects are not restricted by file-tool path checks. Terminal bytes never enter model context or chat history. Each PTY uses one same-origin browser-to-chat-ai WebSocket for input, output, resize, presence and real xterm consumption ACKs. The backend remains the shared HTTP dataSession. Browser presence refreshes every 10 seconds with a separate 120-second host deadline; the host terminal adapter schedules remote renewal from each returned lease (staff defaults to 30 seconds). Opening the Shell App starts one PTY without another open button or confirmation. Exit, PTY failure or disconnection leaves the app shell for manual reconnect; ordinary hidden views keep read/ACK/presence but reject new input and resize. Actual page exit, close, revocation or expiry cleans up; descendant cleanup is best effort, not rollback.
 
-Current descriptors and iframe assets use **bridge v2** with explicit `scope:"workspace"` for files and `scope:"chat"` for terminal. Update host and assets together and reopen Apps; there is no bridge-v1 fallback. Files-v1 adds its own `stat` for force-copy version checks, independent of the file-manager App; byte budgets owned by chat-ai are not remote business limits. See the [host/bridge boundary](docs/file-manager.md#host-boundary-and-bridge-v2).
+Current descriptors and iframe assets keep **bridge v1** with explicit `scope:"workspace"` for files and `scope:"chat"` for terminal. The development contract is updated in place without compatibility branches; deploy matching host/descriptors/assets together and reopen Apps. Files-v1 adds its own `stat` for force-copy version checks, independent of the file-manager App; byte budgets owned by chat-ai are not remote business limits. See the [host/bridge boundary](docs/file-manager.md#host-boundary-and-bridge-v1).
 
 Backpressured PTY exit may have incomplete output. Current source reports remote `status.error:{code:"OUTPUT_INCOMPLETE",message:string}` and host output frame `outputIncomplete?:boolean` / `error?:{code:string,message:string}` for abnormal close/status, with UI warning handling. The boolean is a host output-frame field, not a remote status field. These diagnostics detect possible loss; they do not recover missing bytes or guarantee lossless output, even with exit code 0 or EOF. See [Terminal UI contract](docs/terminal.md).
 
@@ -180,6 +180,10 @@ Switch roles on the fly:
 node /path/to/staff-mcp/dist/src/index.js --profile default
 node /path/to/staff-mcp/dist/src/index.js --profile android-reverse
 ```
+
+### Managed child MCP sessions
+
+`manage_mcp_session` reserves its session ID and capacity before asynchronous startup. A starting session can be stopped; late connection completion cannot restore it. Stopping attempts owned HTTP process-group cleanup even when SDK close fails, and reports incomplete cleanup as an error while retaining the session for retry. Connection/process exits no longer leave a ready session. These sessions expose standard nested tools, not a transparent Apps/data proxy or per-chat OS sandbox.
 
 ### 3. Built-in `skill-manager`
 Out of the box, the AI assistant knows how to manage its own skills! You can simply ask it to:

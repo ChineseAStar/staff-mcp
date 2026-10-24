@@ -21,7 +21,7 @@ const files = {
     icon: 'folder',
     resourceUri: FILE_UI_URI,
     mimeType: 'text/html',
-    bridgeVersion: 2,
+    bridgeVersion: 1,
     requiredExtensions: { [FILES]: 1, [DATA]: 1 },
     methods: [
         'roots',
@@ -52,7 +52,7 @@ const terminal = {
     icon: 'terminal',
     resourceUri: TERMINAL_UI_URI,
     mimeType: 'text/html',
-    bridgeVersion: 2,
+    bridgeVersion: 1,
     scope: 'chat',
     terminal: true,
     methods: [],

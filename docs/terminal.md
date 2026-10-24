@@ -16,7 +16,7 @@ Hiding the browser page or switching/collapsing app views within the same chat k
 
 ## Host bridge contract
 
-The app uses the existing file-manager UI bridge. It announces `mcp-app-ready` and accepts the parent `mcp-app-connect` v2 handshake with nonce, instance ID, and one MessagePort. Theme snapshots and `{type:'lifecycle', enabled, connected, visible, message?}` use that authenticated port. No browser-direct network, CDN, clipboard API, web-link addon, iframe sandbox relaxation, or extra permission is required. OSC 52 clipboard sequences and OSC 8 hyperlinks are consumed without clipboard access or link activation.
+The app uses the existing file-manager UI bridge. It announces `mcp-app-ready` and accepts the parent `mcp-app-connect` v1 handshake with nonce, instance ID, and one MessagePort. Theme snapshots and `{type:'lifecycle', enabled, connected, visible, message?}` use that authenticated port. No browser-direct network, CDN, clipboard API, web-link addon, iframe sandbox relaxation, or extra permission is required. OSC 52 clipboard sequences and OSC 8 hyperlinks are consumed without clipboard access or link activation.
 
 The following are iframe bridge methods, not ordinary app `rpc` calls:
 
@@ -58,4 +58,4 @@ For a terminal-only UI check without compiling the server, use `node scripts/bui
 
 ## Host adapter boundary
 
-The terminal descriptor uses `bridgeVersion:2` and generic `scope:"chat"`; this scope also works for nonterminal Apps. All iframe handshake/message envelopes use version 2 and require matching host assets. PTY state, actual lease and process cleanup remain server-owned. The host terminal adapter follows each returned positive leaseMs rather than requiring a 30-second maximum; staff retains its own 30-second default. Host browser presence and render-buffer budgets remain independent and do not extend the server's resource without a real renew request. No entrypoint, reverse transport or raw data framing changed with this boundary refactor.
+The terminal descriptor uses `bridgeVersion:1` and generic `scope:"chat"`; this scope also works for nonterminal Apps. All iframe handshake/message envelopes retain version 1; the development contract changes in place and requires matching host assets. PTY state, actual lease and process cleanup remain server-owned. The host terminal adapter follows each returned positive leaseMs rather than requiring a 30-second maximum; staff retains its own 30-second default. Host browser presence and render-buffer budgets remain independent and do not extend the server's resource without a real renew request. No entrypoint, reverse transport or raw data framing changed with this boundary refactor.

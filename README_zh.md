@@ -138,7 +138,7 @@ node /path/to/staff-mcp/dist/src/index.js --extensions files --file-root system=
 
 PTY 默认从 staff 工作区 `main` 启动，与文件 roots 独立，以 staff 的 OS uid 运行；root/cwd 只是起始目录，**不是 sandbox**；shell 的文件和网络副作用不受文件工具路径检查约束。终端输入输出不进入模型或聊天历史。每个 PTY 的浏览器到 chat-ai 交互使用一条同源 WebSocket，输入、输出、resize、presence 和真实 xterm 消费 ACK 共用连接，后端仍是公共 HTTP dataSession。浏览器每 10 秒刷新独立的 120 秒 host presence；host 终端适配器按远端每次返回的租约调度续租，staff 默认 30 秒。点击 Shell App 自动启动一次 PTY，无额外打开按钮或确认；退出、PTY 错误或真实断链后保留 App 壳供手动重连。普通隐藏视图保留 read/ACK/presence，但拒绝新输入和 resize；真正离页、关闭、撤权或到期才清理，后代回收 best effort，不撤销副作用。
 
-当前描述符和 iframe 资源使用 **bridge v2**：文件显式 `scope:"workspace"`，终端 `scope:"chat"`。须匹配宿主与 UI 资源并重新打开 App，不维护 bridge-v1 回退。files-v1 新增自己的 `stat` 用于 force 复制版本检查，不再依赖文件管理 App；chat-ai 的本地字节预算不代表远端业务上限。详见[宿主/桥接边界](docs/file-manager.md#host-boundary-and-bridge-v2)。
+当前描述符和 iframe 资源保持 **bridge v1**：文件显式 `scope:"workspace"`，终端 `scope:"chat"`。开发阶段直接修改合同、不保留中间实现兼容分支；宿主、描述符与 UI 资源须配套部署并重新打开 App。files-v1 新增自己的 `stat` 用于 force 复制版本检查，不再依赖文件管理 App；chat-ai 的本地字节预算不代表远端业务上限。详见[宿主/桥接边界](docs/file-manager.md#host-boundary-and-bridge-v1)。
 
 背压退出可能输出不完整，当前源码在远端 `status.error` 返回 `{code:"OUTPUT_INCOMPLETE",message:string}`，宿主输出帧则以可选 `outputIncomplete:boolean` 与 `error:{code:string,message:string}` 接续异常 close/status 并提供 UI 警告；布尔字段属于宿主输出帧，不是远端 status 字段；这些字段用于检测和诊断可能的丢失，不恢复缺失字节，也不保证无损输出，即使收到 EOF 或 exit code 0。见[终端 UI 合同（英文）](docs/terminal.md)。
 
@@ -176,6 +176,10 @@ node /path/to/staff-mcp/dist/src/index.js --profile default
 node /path/to/staff-mcp/dist/src/index.js --profile android-reverse
 ```
 
+
+### 受管子 MCP 会话
+
+`manage_mcp_session` 在异步启动前占用会话 ID 和名额。启动中的会话可以停止，迟到的连接完成不能将其恢复为 ready。停止时即使 SDK close 失败，仍尝试清理自有 HTTP 进程组；清理未完成会明确报错并保留会话供重试，不伪报成功。连接或进程退出后不再保留 ready 状态。这些会话提供标准嵌套工具，不是 Apps/data 透明代理，也不是每个 chat 独立的 OS 沙箱。
 
 ### 3. 聪明的“技能管家” (`skill-manager`)
 系统内置了基础设施技能，AI 助手生来就知道如何管理自己！你可以直接对它说：
