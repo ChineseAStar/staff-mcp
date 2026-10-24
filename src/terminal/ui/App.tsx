@@ -51,6 +51,8 @@ export function App() {
         );
 
         let pageHidden = false;
+        let disposed = false;
+        let fontsReady = false;
         const isVisible = () =>
             !pageHidden &&
             document.visibilityState === 'visible' &&
@@ -61,16 +63,26 @@ export function App() {
             frame = requestAnimationFrame(() => {
                 const state = bridge.snapshot();
                 if (
+                    fontsReady &&
                     isVisible() &&
                     state.enabled &&
                     state.connected &&
                     container.clientWidth > 0 &&
                     container.clientHeight > 0
                 ) {
+                    const dimensions = fit.proposeDimensions();
+                    if (
+                        !dimensions ||
+                        !(dimensions.cols >= 2 && dimensions.rows >= 2)
+                    )
+                        return;
                     fit.fit();
                     // A view switch may need a remote resize even when the
                     // fitted local dimensions did not change.
                     current.resize(term.cols, term.rows);
+                    // Availability opens the initial PTY. Fit first so the shell
+                    // never prints its first prompt using xterm's default 80x24.
+                    current.setAvailability(true, state.message);
                 }
             });
         };
@@ -85,8 +97,9 @@ export function App() {
             const available = state.enabled && state.connected;
             // Fence real loss before visibility can reopen a never-opened idle.
             if (!available) current.setAvailability(false, state.message);
+            // A usable bridge alone is not enough to start a shell: the next
+            // visible fit enables the session with the measured viewport size.
             visibility();
-            if (available) current.setAvailability(true, state.message);
         };
         const unsubscribe = bridge.subscribe(syncLifecycle);
         syncLifecycle();
@@ -151,8 +164,14 @@ export function App() {
             attributeFilter: ['class', 'style'],
         });
         theme();
+        void document.fonts.ready.then(() => {
+            if (disposed) return;
+            fontsReady = true;
+            scheduleFit();
+        });
 
         return () => {
+            disposed = true;
             unsubscribe();
             document.removeEventListener('visibilitychange', visibility);
             window.removeEventListener('pagehide', pagehide);
