@@ -17,7 +17,7 @@
 无需进行 Chat8/schema9/format7/分享 protocol2 数据迁移。
 
 1. 结束在途操作，备份正常配置；无需转换数据。
-2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.1，并协调 reverse 连接的停机窗口。
+2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.2，并协调 reverse 连接的停机窗口。
 3. 重新连接 MCP、重新打开 App，仅显式启用需要的扩展。
 
 发布摘要见 [CHANGELOG](CHANGELOG.md)。
@@ -28,13 +28,13 @@
 
 Linux 与 Linux 宿主＋本地 Docker Engine 是主要完整扩展环境，仍须满足下述前提。Windows 原生标准 MCP（stdio、HTTP）与 Windows Docker 标准 MCP 已验证，不代表完整扩展支持。非 Linux Docker launcher 禁用可选扩展。**macOS 未实测**，路径转换能力不等于平台支持承诺。
 
-可指定版本运行 staff-mcp 2.0.1：
+可指定版本运行 staff-mcp 2.0.2：
 
 ```bash
-npx --yes staff-mcp@2.0.1 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.0.2 --working-dir /path/to/your/project
 ```
 
-从 staff-mcp 2.0.1 源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口：
+从 staff-mcp 2.0.2 源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口：
 
 ```bash
 npm ci
@@ -136,7 +136,7 @@ Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Ser
 
 ## 🛠️ 核心能力
 
-以下运行时默认值描述当前未发布源码；已发布 2.0.1 的行为与历史发布记录保持不变。
+以下运行时默认值适用于 staff-mcp 2.0.2。
 
 扩展**默认全关**。通过 `--extensions files`、`--extensions terminal` 或 `--extensions files,terminal` 启用；apps/data 依赖及 terminal 对 streams v1 的声明自动计算，无需单独选择。禁用能力不声明对应 manifest 条目、不注册对应 UI Resource 或业务 handler；全关时无扩展 manifest、应用数据 listener/session，普通 MCP 工具和非 UI Resources 保留。HTTP 模式仍监听原 MCP 服务。
 

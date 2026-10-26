@@ -17,7 +17,7 @@ Standard stdio/Streamable HTTP tools, resources and prompts remain supported. Ex
 No Chat8/schema9/format7/share protocol2 data migration is required.
 
 1. Finish in-flight operations and back up your normal configuration; no data conversion is needed.
-2. Upgrade the matching chat-ai host first, then staff-mcp 2.0.1, coordinating downtime for reverse connections.
+2. Upgrade the matching chat-ai host first, then staff-mcp 2.0.2, coordinating downtime for reverse connections.
 3. Reconnect MCP, reopen Apps and explicitly enable only the extensions you want.
 
 See [CHANGELOG](CHANGELOG.md) for the release summary.
@@ -28,13 +28,13 @@ Requires **Node.js 22.22.2 or newer**, including inside Docker images.
 
 Linux and Linux-host local Docker Engine are the primary full-extension environments, subject to the prerequisites below. Windows native standard MCP (stdio and HTTP) and Windows Docker standard MCP have been validated, not full extensions. Non-Linux Docker launchers disable optional extensions. **macOS has not been tested**; path translation is not a claim of platform support.
 
-Run staff-mcp 2.0.1 with an explicit package version:
+Run staff-mcp 2.0.2 with an explicit package version:
 
 ```bash
-npx --yes staff-mcp@2.0.1 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.0.2 --working-dir /path/to/your/project
 ```
 
-For a source checkout of staff-mcp 2.0.1, install dependencies and build before using the absolute entrypoint in the examples:
+For a source checkout of staff-mcp 2.0.2, install dependencies and build before using the absolute entrypoint in the examples:
 
 ```bash
 npm ci
@@ -141,7 +141,7 @@ The two reverse transport sources (`src/reverse/SseTransport.ts` and chat-ai's `
 
 ## 🛠️ Core Capabilities
 
-The runtime defaults below describe the current unreleased source; published 2.0.1 behavior and release notes are unchanged.
+The runtime defaults below apply to staff-mcp 2.0.2.
 
 Extensions are **all off by default**. Use `--extensions files`, `--extensions terminal`, or `--extensions files,terminal`; apps/data dependencies and terminal's streams v1 manifest are added automatically, not selected separately. Disabled features advertise no manifest entry and register no corresponding UI Resource or business handler. With both off there is no extension manifest or application data listener/session; ordinary MCP tools and non-UI Resources remain. HTTP mode still opens its normal MCP listener.
 

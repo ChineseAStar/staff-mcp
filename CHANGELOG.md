@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.0.2 — 2026-10-26
 
 - Report reverse control closure with fixed reasons, POST status/byte count/duration and bounded network error codes, without logging payloads, credentials or URLs. No retry/replay behavior changes.
 - Reuse workspace (`main`) and deduplicated allowed directories (`extra1`, `extra2`, …) for the optional file UI; explicit `-d` grants now appear there, with no automatic system-root authorization or separate Docker file-root mounts. Path, symlink, protected staging and write safety checks remain unchanged.
