@@ -787,6 +787,7 @@ export class HttpDataSession {
         const link = raw as DataLink;
         check(
             link &&
+                typeof link.endpoint === 'string' &&
                 link.version === 1 &&
                 typeof link.channel === 'string' &&
                 /^[a-f0-9]{48}$/.test(link.channel) &&
@@ -802,8 +803,11 @@ export class HttpDataSession {
                 ),
             'Invalid data link',
         );
-        this.options.validateEndpoint(endpointUrl(link.endpoint));
-        return { ...link, open };
+        const endpoint = this.options.resolveEndpoint
+            ? endpointUrl(this.options.resolveEndpoint(link.endpoint).href)
+            : endpointUrl(link.endpoint);
+        this.options.validateEndpoint(endpoint);
+        return { ...link, endpoint: endpoint.href, open };
     }
 
     private create(open: ChannelOpen, supplied?: DataLink): HttpChannel {

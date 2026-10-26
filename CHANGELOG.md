@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.1 (unreleased)
+
+- Resolve reverse data paths using the configured reverse origin, without requiring a public URL setting on chat-ai. Upgrade chat-ai and staff-mcp together; extension protocol versions remain v1.
+- Preserve exact-session, same-origin, ticket and binding checks; HTTP/stdio endpoint behavior is unchanged.
+- Require release tags to reference commits already contained in `master` before npm publishing.
+
 ## 2.0.0 — 2026-10-26
 
 ### Features

@@ -18,6 +18,12 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=2048
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify release commit is on master
+        run: |
+          git fetch --no-tags origin refs/heads/master:refs/remotes/origin/master
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/master
       - uses: actions/setup-node@v4
         with:
           node-version: "24"

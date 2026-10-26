@@ -8,16 +8,16 @@ It provides secure file management, shell execution, LSP-powered code intelligen
 
 ---
 
-## 2.0.0 compatibility and upgrade
+## Compatibility and coordinated upgrades
 
-**Breaking release:** reverse connections and optional extensions require a matching chat-ai host: commit `66461d16090456d6f1fee21ce19088dceefd6658` or a later compatible version. Upgrade the host, staff-mcp, descriptors and UI assets together.
+**Breaking release:** reverse connections and optional extensions require a matching chat-ai host: the host must implement reverse v1 and the session-relative data paths described below. Upgrade the host, staff-mcp, descriptors and UI assets together.
 
 Standard stdio/Streamable HTTP tools, resources and prompts remain supported. Extensions are **all off by default**; unavailable or incompatible optional capabilities must not break an otherwise healthy standard MCP connection. The old reverse handshake itself is incompatible, even with extensions disabled: extension degradation cannot replace the paired reverse upgrade. There is no old-protocol compatibility mode, automatic transfer resumption or input replay after disconnect.
 
 No Chat8/schema9/format7/share protocol2 data migration is required.
 
 1. Finish in-flight operations and back up your normal configuration; no data conversion is needed.
-2. Upgrade the matching chat-ai host first, then staff-mcp 2.0.0, coordinating downtime for reverse connections.
+2. Upgrade the matching chat-ai host first, then staff-mcp 2.0.1, coordinating downtime for reverse connections.
 3. Reconnect MCP, reopen Apps and explicitly enable only the extensions you want.
 
 See [CHANGELOG](CHANGELOG.md) for the release summary.
@@ -28,13 +28,13 @@ Requires **Node.js 22.22.2 or newer**, including inside Docker images.
 
 Linux and Linux-host local Docker Engine are the primary full-extension environments, subject to the prerequisites below. Windows native standard MCP (stdio and HTTP) and Windows Docker standard MCP have been validated, not full extensions. Non-Linux Docker launchers disable optional extensions. **macOS has not been tested**; path translation is not a claim of platform support.
 
-Run the published package directly with an explicit version:
+Version **2.0.1 is a release candidate, not yet published**. Use a built source checkout until it is released from `master`. After release, run the package with an explicit version:
 
 ```bash
-npx --yes staff-mcp@2.0.0 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.0.1 --working-dir /path/to/your/project
 ```
 
-For a source checkout of staff-mcp 2.0.0, install dependencies and build before using the absolute entrypoint in the examples:
+For a source checkout of staff-mcp 2.0.1, install dependencies and build before using the absolute entrypoint in the examples:
 
 ```bash
 npm ci
@@ -79,7 +79,7 @@ Add the following to your `claude_desktop_config.json`:
 ```
 
 ### 4. Reverse MCP Mode (Intranet Penetration)
-Connect outward from behind NAT/firewalls to chat-ai's existing Web entrypoint, without an inbound listener on staff. Control uses SSE + POST; remote-initiated raw HTTP GET/PUT carries file/terminal bytes on that same Web port. The administrator explicitly configures `MCP_REVERSE_URL` on chat-ai; it is not guessed from a private port. Reconnect creates fresh sessions and never replays tool calls, transfer handles or terminal input.
+Connect outward from behind NAT/firewalls to chat-ai's existing Web entrypoint, without an inbound listener on staff. Control uses SSE + POST; remote-initiated raw HTTP GET/PUT carries file/terminal bytes on that same Web port. chat-ai provides the current session data path, which staff resolves against the existing `--ru` origin; `MCP_REVERSE_URL` is only an optional connection hint on chat-ai, not a data-channel prerequisite. Reconnect creates fresh sessions and never replays tool calls, transfer handles or terminal input.
 
 ```bash
 node /path/to/staff-mcp/dist/src/index.js -t reverse \
@@ -87,6 +87,8 @@ node /path/to/staff-mcp/dist/src/index.js -t reverse \
   --rt your_secure_token_here \
   --rn my-workstation
 ```
+
+The reverse client resolves the exact session data path against its existing `--ru` origin; chat-ai does not need `MCP_REVERSE_URL` to enable Apps. Only that session path or the already-supported exact absolute URL is accepted, before any data request or business admission; ticket, binding, authorization and redirect restrictions remain unchanged. HTTP and stdio still use absolute data endpoints. Upgrade chat-ai and staff-mcp together for this fix; no version-specific compatibility layer or extra negotiation flag is added.
 
 ### 5. Authenticated HTTP Mode
 
@@ -299,6 +301,10 @@ node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest 
 ```
 
 ---
+
+## Release workflow
+
+Merge the verified release changes into `master` first. From an up-to-date `master` checkout, confirm that `package.json`, the root package-lock versions and the release tag agree; finalize the changelog, then create and push the new version tag. The npm workflow rejects a tag whose commit is not contained in remote `master`. Do not publish from a development branch or move an existing release tag. Merging code alone does not publish to npm.
 
 ## 📄 License
 

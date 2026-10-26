@@ -115,6 +115,17 @@ export async function startReverseServer(
                                 accept,
                                 supportsPurpose,
                                 fetch: http.fetch,
+                                resolveEndpoint: (endpoint) => {
+                                    // Match before URL parsing can normalize an unsafe spelling.
+                                    if (
+                                        endpoint !== expected.pathname &&
+                                        endpoint !== expected.href
+                                    )
+                                        throw new Error(
+                                            'Reverse data endpoint rejected',
+                                        );
+                                    return new URL(endpoint, url);
+                                },
                                 validateEndpoint: (endpoint) => {
                                     if (
                                         endpoint.origin !== expected.origin ||

@@ -49,6 +49,8 @@ export interface HttpDataSessionOptions {
     fetch: typeof fetch;
     /** Already mounted HTTP/Next route. This module never starts a listener. */
     endpoint?: string;
+    /** Optional transport-specific resolution; absent means canonical absolute URLs only. */
+    resolveEndpoint?: (endpoint: string) => URL;
     /** Must enforce configured origin AND path; throw before any HTTP request. */
     validateEndpoint: (endpoint: URL) => void;
     /** Business admission policy for the current negotiated connection. */

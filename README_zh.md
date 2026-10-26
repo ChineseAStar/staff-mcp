@@ -8,16 +8,16 @@
 
 ---
 
-## 2.0.0 兼容性与升级
+## 兼容性与配套升级
 
-**破坏性升级：** reverse 连接与可选扩展需要配套 chat-ai 宿主：commit `66461d16090456d6f1fee21ce19088dceefd6658` 或后续兼容版本。宿主、staff-mcp、描述符和 UI 资源须配套升级。
+**破坏性升级：** reverse 连接与可选扩展需要配套 chat-ai 宿主：宿主须实现 reverse v1 与下文的会话相对数据路径合同。宿主、staff-mcp、描述符和 UI 资源须配套升级。
 
 标准 stdio/Streamable HTTP 的工具、资源和提示词继续保留。扩展**默认全关**；可选能力不可用或版本不匹配，不得拖垮健康的标准 MCP 连接。旧 reverse 握手本身不兼容，即使关闭所有扩展也不能解决，必须配套升级两端；不提供旧协议兼容模式，也不在断线后自动续传或重放输入。
 
 无需进行 Chat8/schema9/format7/分享 protocol2 数据迁移。
 
 1. 结束在途操作，备份正常配置；无需转换数据。
-2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.0，并协调 reverse 连接的停机窗口。
+2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.1，并协调 reverse 连接的停机窗口。
 3. 重新连接 MCP、重新打开 App，仅显式启用需要的扩展。
 
 发布摘要见 [CHANGELOG](CHANGELOG.md)。
@@ -28,13 +28,13 @@
 
 Linux 与 Linux 宿主＋本地 Docker Engine 是主要完整扩展环境，仍须满足下述前提。Windows 原生标准 MCP（stdio、HTTP）与 Windows Docker 标准 MCP 已验证，不代表完整扩展支持。非 Linux Docker launcher 禁用可选扩展。**macOS 未实测**，路径转换能力不等于平台支持承诺。
 
-可指定版本直接运行已发布包：
+**2.0.1 当前是候选版本，尚未发布**。从 `master` 发版前请使用构建后的源码；正式发布后可指定版本运行：
 
 ```bash
-npx --yes staff-mcp@2.0.0 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.0.1 --working-dir /path/to/your/project
 ```
 
-从 staff-mcp 2.0.0 源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口：
+从 staff-mcp 2.0.1 源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口：
 
 ```bash
 npm ci
@@ -79,7 +79,7 @@ node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest 
 ```
 
 ### 4. Reverse MCP 模式 (内网穿透)
-staff 从 NAT/防火墙后主动连接 chat-ai 现有 Web 入口，无需本地入站 listener。控制使用 SSE + POST，文件/终端通过 remote 主动 raw HTTP GET/PUT 走同一 Web 端口。管理员在 chat-ai 显式配置 `MCP_REVERSE_URL`，不从私有端口猜公开地址。断线使用新 session，不重放工具调用、文件句柄或终端输入。
+staff 从 NAT/防火墙后主动连接 chat-ai 现有 Web 入口，无需本地入站 listener。控制使用 SSE + POST，文件/终端通过 remote 主动 raw HTTP GET/PUT 走同一 Web 端口。chat-ai 提供当前会话的数据路径，staff 用已有 `--ru` 的 origin 解析；chat-ai 的 `MCP_REVERSE_URL` 只作为可选连接指引，不是数据通道前提。断线使用新 session，不重放工具调用、文件句柄或终端输入。
 
 ```bash
 node /path/to/staff-mcp/dist/src/index.js -t reverse \
@@ -87,6 +87,8 @@ node /path/to/staff-mcp/dist/src/index.js -t reverse \
   --rt your_secure_token_here \
   --rn my-workstation
 ```
+
+reverse 客户端用已有 `--ru` 的 origin 解析当前会话的精确数据路径，chat-ai 不再需要通过 `MCP_REVERSE_URL` 配置公网地址来启用 Apps。只接受该会话的精确路径或原本支持的精确绝对 URL，在请求数据、业务准入前完成校验。票据、binding、权限和禁止重定向的约束保持不变。HTTP/stdio 仍使用绝对数据地址。此修复按 chat-ai/staff-mcp 两端配套升级交付，不增加版本兼容分支、额外能力标记或探测。
 
 ### 5. 带身份验证的 HTTP 模式
 
@@ -295,6 +297,10 @@ node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest 
 ```
 
 ---
+
+## 发版流程
+
+先将已验收的发布改动合入 `master`，再从已同步的 `master` checkout 核对 `package.json`、package-lock 根版本与目标标签一致，补齐 CHANGELOG 发布日期后创建并推送新版本标签。npm 工作流拒绝发布尚未包含于远端 `master` 的提交。禁止从开发分支发版或移动已发布标签；合并代码本身不会发布 npm。
 
 ## 📄 License
 
