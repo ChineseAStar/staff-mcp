@@ -1,7 +1,6 @@
 import { HttpDataSession } from '../data/HttpDataSession.js';
 import { handleNodeRequest } from '../data/node.js';
 import { configureExtensionData } from '../extensions/runtime.js';
-import { hasServerActivity } from '../utils/server-activity.js';
 import express from 'express';
 import cors from 'cors';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -24,34 +23,10 @@ export function getHttpAuthToken(token?: string): string | undefined {
 }
 
 export const HTTP_MAX_SESSIONS = 64;
-export const HTTP_SESSION_IDLE_MS = 30 * 60 * 1000;
-
-export interface HttpSessionPolicy {
-    maxSessions?: number;
-    idleTimeoutMs?: number;
-}
-
-export function resolveHttpSessionPolicy(policy: HttpSessionPolicy = {}) {
-    const maxSessions = policy.maxSessions ?? HTTP_MAX_SESSIONS;
-    const idleTimeoutMs = policy.idleTimeoutMs ?? HTTP_SESSION_IDLE_MS;
-    if (!Number.isSafeInteger(maxSessions) || maxSessions <= 0)
-        throw new Error('HTTP max sessions must be a positive safe integer.');
-    if (
-        !Number.isInteger(idleTimeoutMs) ||
-        idleTimeoutMs <= 0 ||
-        idleTimeoutMs > 2_147_483_647
-    )
-        throw new Error('HTTP session idle timeout must be 1..2147483647 ms.');
-    return { maxSessions, idleTimeoutMs };
-}
-
 interface HttpSession {
     server: McpServer;
     transport: StreamableHTTPServerTransport;
     closing?: Promise<void>;
-    initializing: boolean;
-    /** Undefined while active; the next idle observation starts a full grace interval. */
-    idleSince?: number;
 }
 
 export async function startHttpServer(
@@ -59,9 +34,7 @@ export async function startHttpServer(
     port: number,
     host: string = '0.0.0.0',
     token?: string,
-    policy: HttpSessionPolicy = {},
 ) {
-    const { maxSessions, idleTimeoutMs } = resolveHttpSessionPolicy(policy);
     const authToken = getHttpAuthToken(token);
     const app = express();
     let stopping = false;
@@ -80,20 +53,6 @@ export async function startHttpServer(
         void closeSession(id, session).catch(() =>
             console.error('[staff-mcp] HTTP session cleanup failed.'),
         );
-    };
-    const sweepIdle = () => {
-        const now = performance.now();
-        for (const [id, session] of sessions) {
-            if (session.closing) continue;
-            if (session.initializing || hasServerActivity(session.server)) {
-                session.idleSince = undefined;
-            } else if (session.idleSince === undefined) {
-                session.idleSince = now;
-            } else if (now - session.idleSince >= idleTimeoutMs) {
-                // Fence synchronously; cleanup keeps its slot until it succeeds.
-                observeClose(id, session);
-            }
-        }
     };
     const reject = (res: express.Response, status: number, message: string) => {
         if (!res.headersSent && !res.destroyed) {
@@ -195,8 +154,7 @@ export async function startHttpServer(
         }
         // JSON body parsing can finish after shutdown has started.
         if (stopping) return reject(res, 503, 'Server is stopping');
-        sweepIdle();
-        if (sessions.size >= maxSessions)
+        if (sessions.size >= HTTP_MAX_SESSIONS)
             return reject(res, 429, 'HTTP session capacity reached');
 
         const id = randomUUID();
@@ -210,13 +168,8 @@ export async function startHttpServer(
                 sessionIdGenerator: () => id,
                 enableJsonResponse: true,
             });
-            session = { server, transport, initializing: true };
+            session = { server, transport };
             const owned = session;
-            // The SDK calls this only after parsing/validating the control message.
-            // Neither an idle GET SSE stream nor invalid HTTP/data traffic renews it.
-            transport.onmessage = () => {
-                owned.idleSince = undefined;
-            };
             // Include starting sessions in shutdown ownership before the first await.
             sessions.set(id, session);
             transport.onclose = () => observeClose(id, owned);
@@ -287,10 +240,6 @@ export async function startHttpServer(
             console.error('[staff-mcp] HTTP initialization failed.');
             reject(res, 500, 'Internal Server Error');
         } finally {
-            if (session) {
-                session.initializing = false;
-                session.idleSince = undefined;
-            }
             res.removeListener('close', disconnected);
         }
     };
@@ -311,16 +260,12 @@ export async function startHttpServer(
     console.error(
         `[MCP HTTP] Server listening on http://${host}:${address.port}/mcp`,
     );
-    // One bounded sweep per listener; no per-session timers or resource lease changes.
-    const idleTimer = setInterval(sweepIdle, Math.min(idleTimeoutMs, 60_000));
-    idleTimer.unref();
     let stopped: Promise<void> | undefined;
     return {
         port: address.port,
         stop: () => {
             if (stopped) return stopped;
             stopping = true;
-            clearInterval(idleTimer);
             // Stop accepting first, but keep the listener alive until owned cleanup settles.
             const listenerClosed = new Promise<void>((resolve, reject) => {
                 listener.close((error) => (error ? reject(error) : resolve()));

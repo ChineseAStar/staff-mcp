@@ -26,7 +26,6 @@ import {
 } from './protocol.js';
 import { registerApps } from './apps.js';
 import { registerServerCleanup } from '../utils/server-lifecycle.js';
-import { registerServerActivity } from '../utils/server-activity.js';
 
 export interface ExtensionDataBinding {
     session: HttpDataSession;
@@ -191,14 +190,6 @@ export function installExtensions(
                 (purpose === TERMINAL && !!terminal && negotiated(STREAMS)));
         let configurationAttempted = false;
         let configuration: Promise<ExtensionDataBinding> | undefined;
-        registerServerActivity(
-            server,
-            () =>
-                configuration !== undefined ||
-                !!files?.transfers.hasActivity() ||
-                !!terminal?.hasActivity() ||
-                !!data?.session.hasActivity(),
-        );
         let dataCleanup: Promise<void> | undefined;
         const disposeData = (owned: ExtensionDataBinding) => {
             dataCleanup ??= (async () => {

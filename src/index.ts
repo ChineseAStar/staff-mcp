@@ -14,13 +14,7 @@ import {
     redirectStdioLogsToStderr,
     startStdioServer,
 } from './transports/stdio.js';
-import {
-    getHttpAuthToken,
-    startHttpServer,
-    resolveHttpSessionPolicy,
-    HTTP_MAX_SESSIONS,
-    HTTP_SESSION_IDLE_MS,
-} from './transports/http.js';
+import { getHttpAuthToken, startHttpServer } from './transports/http.js';
 import { startReverseServer } from './transports/reverse.js';
 import {
     ensureStaffDirs,
@@ -33,10 +27,8 @@ import { configureGlobalProxy } from './utils/proxy.js';
 import {
     dockerPrivatePaths,
     parseExtensions,
-    parseFileRoot,
     resolveExtensionOptions,
 } from './extensions/config.js';
-import type { ExtensionOptions } from './extensions/config.js';
 
 // Global error handlers to prevent the MCP server from crashing due to unhandled child process errors
 process.on('uncaughtException', (err: any) => {
@@ -138,25 +130,6 @@ program
         'Optional bearer token for HTTP transport',
     )
     .option(
-        '--http-max-sessions <count>',
-        'Maximum HTTP sessions per listener, including startup and cleanup',
-        (value) => {
-            const count = Number(value);
-            if (!Number.isSafeInteger(count) || count <= 0)
-                throw new InvalidArgumentError(
-                    'Expected a positive safe integer.',
-                );
-            return count;
-        },
-        HTTP_MAX_SESSIONS,
-    )
-    .option(
-        '--http-session-idle-ms <ms>',
-        'HTTP session idle timeout; active operations and resources prevent eviction',
-        (value) => milliseconds(value),
-        HTTP_SESSION_IDLE_MS,
-    )
-    .option(
         '--ru, --reverse-url <url>',
         'HTTP(S) Web reverse endpoint (e.g. https://web.example/api/mcp/reverse)',
     )
@@ -222,27 +195,6 @@ program
             }
         },
     )
-    .option(
-        '--file-root <id=path>',
-        'Files root (repeatable; defaults to main=workspace; system=/ explicitly allows the full filesystem)',
-        (
-            value: string,
-            previous: NonNullable<ExtensionOptions['fileRoots']> = [],
-        ) => {
-            try {
-                const root = parseFileRoot(value);
-                if (previous.some((item) => item.rootId === root.rootId))
-                    throw new Error('Duplicate file root id');
-                return [...previous, root];
-            } catch (error) {
-                throw new InvalidArgumentError((error as Error).message);
-            }
-        },
-    )
-    .option(
-        '--shell <path>',
-        'Terminal shell (default: executable $SHELL or /bin/bash)',
-    )
     .addOption(
         new Option('--internal-file-private-path <path>')
             .hideHelp()
@@ -272,14 +224,9 @@ program
         }
         let extensions: ReturnType<typeof resolveExtensionOptions>;
         try {
-            extensions = resolveExtensionOptions(
-                {
-                    enabled: options.extensions,
-                    fileRoots: options.fileRoot,
-                    shell: options.shell,
-                },
-                path.resolve(options.workingDir),
-            );
+            extensions = resolveExtensionOptions({
+                enabled: options.extensions,
+            });
         } catch (error) {
             command.error((error as Error).message);
             return;
@@ -287,10 +234,6 @@ program
         if (options.transport === 'http') {
             try {
                 getHttpAuthToken(options.httpToken);
-                resolveHttpSessionPolicy({
-                    maxSessions: options.httpMaxSessions,
-                    idleTimeoutMs: options.httpSessionIdleMs,
-                });
             } catch (error) {
                 console.error(
                     `[staff-mcp] ${error instanceof Error ? error.message : String(error)}`,
@@ -396,23 +339,20 @@ program
             bind(STAFF_SKILLS_DIR, `${containerStaffDir}/skills`);
             bind(STAFF_PROFILES_DIR, `${containerStaffDir}/profiles`);
 
-            // 4. Mount additional allowed directories
-            if (options.allowedDir && options.allowedDir.length > 0) {
-                options.allowedDir.forEach((dir: string) => {
-                    const absDir = path.resolve(dir);
-                    bind(absDir, absDir);
-                });
-            }
-
-            const dockerRoots = options.fileRoot?.map(
-                (root: { rootId: string; directory: string }) => {
-                    const directory = `/opt/staff-file-roots/${root.rootId}`;
-                    if (extensions.enabled.includes('files')) {
-                        bind(root.directory, directory);
-                    }
-                    return { rootId: root.rootId, directory };
+            // 4. Reuse allowed-directory mounts for both tools and files. Docker
+            // forbids mounting onto container /, so a host filesystem root gets
+            // a dedicated target; ordinary directories keep their existing paths.
+            const allowedMounts = options.allowedDir.map(
+                (dir: string, index: number) => {
+                    const source = path.resolve(dir);
+                    const target =
+                        source === path.parse(source).root
+                            ? `/opt/staff-allowed/root-${index}`
+                            : source;
+                    return { source, target };
                 },
             );
+            for (const mount of allowedMounts) bind(mount.source, mount.target);
 
             // 5. Handle HTTP port forwarding
             if (options.transport === 'http') {
@@ -464,14 +404,6 @@ program
                 // Inside container, we must listen on all interfaces for HTTP to be exposed
                 if (options.transport === 'http') {
                     dockerArgs.push('-h', '0.0.0.0');
-                    dockerArgs.push(
-                        '--http-max-sessions',
-                        String(options.httpMaxSessions),
-                    );
-                    dockerArgs.push(
-                        '--http-session-idle-ms',
-                        String(options.httpSessionIdleMs),
-                    );
                     if (options.httpToken !== undefined) {
                         dockerArgs.push('--http-token', options.httpToken);
                     }
@@ -488,10 +420,8 @@ program
                 dockerArgs.push('--internal-file-private-path', privatePath);
             }
 
-            if (options.allowedDir && options.allowedDir.length > 0) {
-                options.allowedDir.forEach((dir: string) => {
-                    dockerArgs.push('-d', path.resolve(dir)); // paths inside container match host
-                });
+            for (const mount of allowedMounts) {
+                dockerArgs.push('-d', mount.target);
             }
             dockerArgs.push('-r', options.profile);
             dockerArgs.push('-m', String(options.maxMcpSessions));
@@ -500,15 +430,6 @@ program
             }
             if (extensions.enabled.length) {
                 dockerArgs.push('--extensions', extensions.enabled.join(','));
-            }
-            for (const root of dockerRoots ?? []) {
-                dockerArgs.push(
-                    '--file-root',
-                    `${root.rootId}=${root.directory}`,
-                );
-            }
-            if (extensions.shell !== undefined) {
-                dockerArgs.push('--shell', extensions.shell);
             }
             // Forward an explicit --proxy so the containerized process uses it too.
             // (Env-var proxies reach the container through docker's own env injection
@@ -589,10 +510,6 @@ program
                         parseInt(options.port, 10),
                         options.host,
                         options.httpToken,
-                        {
-                            maxSessions: options.httpMaxSessions,
-                            idleTimeoutMs: options.httpSessionIdleMs,
-                        },
                     ),
                 process.env.STAFF_MCP_IS_DOCKER === '1',
             );

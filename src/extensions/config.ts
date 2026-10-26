@@ -5,8 +5,6 @@ export type ExtensionFeature = 'files' | 'terminal';
 
 export interface ExtensionOptions {
     enabled?: ExtensionFeature[];
-    fileRoots?: { rootId: string; directory: string }[];
-    shell?: string;
 }
 
 export function parseExtensions(value: string): ExtensionFeature[] {
@@ -22,60 +20,13 @@ export function parseExtensions(value: string): ExtensionFeature[] {
     return [...new Set(features)] as ExtensionFeature[];
 }
 
-export function parseFileRoot(value: string): {
-    rootId: string;
-    directory: string;
-} {
-    const separator = value.indexOf('=');
-    const rootId = value.slice(0, separator);
-    const directory = value.slice(separator + 1);
-    if (
-        separator < 1 ||
-        !/^[a-z0-9-]+$/.test(rootId) ||
-        !directory ||
-        directory.includes('\0')
-    )
-        throw new Error(
-            'Expected --file-root <id=path>, with a lowercase root id',
-        );
-    return { rootId, directory: path.resolve(directory) };
-}
-
-export function resolveExtensionOptions(
-    options: ExtensionOptions,
-    workingDir: string,
-) {
+export function resolveExtensionOptions(options: ExtensionOptions) {
     const enabled = options.enabled ?? [];
     if (
         enabled.some((feature) => feature !== 'files' && feature !== 'terminal')
     )
         throw new Error('Unknown extension feature');
-    const fileRoots = options.fileRoots ?? [
-        { rootId: 'main', directory: workingDir },
-    ];
-    const ids = new Set<string>();
-    if (!fileRoots.length)
-        throw new Error('At least one file root is required');
-    for (const root of fileRoots) {
-        if (!/^[a-z0-9-]+$/.test(root.rootId) || ids.has(root.rootId))
-            throw new Error('File root ids must be unique lowercase ids');
-        if (!root.directory || root.directory.includes('\0'))
-            throw new Error('File root directory must not be empty');
-        ids.add(root.rootId);
-    }
-    if (
-        options.shell !== undefined &&
-        (!path.isAbsolute(options.shell) || options.shell.includes('\0'))
-    )
-        throw new Error('Shell must be an absolute executable path');
-    return {
-        enabled: [...new Set(enabled)],
-        fileRoots: fileRoots.map((root) => ({
-            ...root,
-            directory: path.resolve(root.directory),
-        })),
-        shell: options.shell,
-    };
+    return { enabled: [...new Set(enabled)] };
 }
 
 /** Internal Docker protection only. Does not expand any file/tool root. */

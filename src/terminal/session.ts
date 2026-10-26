@@ -73,27 +73,6 @@ export class TerminalSession {
         this.timer.unref();
     }
 
-    /** PTY ownership and output draining remain active even with no new bytes. */
-    hasActivity(): boolean {
-        const now = performance.now();
-        for (const item of this.operations.values()) {
-            if (
-                item.job ||
-                item.resolveExit ||
-                item.pumping ||
-                item.state === 'starting' ||
-                item.state === 'running' ||
-                item.state === 'closing' ||
-                (item.state === 'closed' &&
-                    item.bound &&
-                    !item.fenced &&
-                    item.expires > now)
-            )
-                return true;
-        }
-        return false;
-    }
-
     private sweep() {
         const now = performance.now();
         for (const [operationId, item] of this.operations) {

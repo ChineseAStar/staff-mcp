@@ -79,7 +79,7 @@ node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest 
 ```
 
 ### 4. Reverse MCP 模式 (内网穿透)
-staff 从 NAT/防火墙后主动连接 chat-ai 现有 Web 入口，无需本地入站 listener。控制使用 SSE + POST，文件/终端通过 remote 主动 raw HTTP GET/PUT 走同一 Web 端口。chat-ai 提供当前会话的数据路径，staff 用已有 `--ru` 的 origin 解析；chat-ai 的 `MCP_REVERSE_URL` 只作为可选连接指引，不是数据通道前提。断线使用新 session，不重放工具调用、文件句柄或终端输入。
+staff 从 NAT/防火墙后主动连接 chat-ai 现有 Web 入口，无需本地入站 listener。控制使用 SSE + POST，文件/终端通过 remote 主动 raw HTTP GET/PUT 走同一 Web 端口。chat-ai 提供当前会话的数据路径，staff 用已有 `--ru` 的 origin 解析；chat-ai 无需配置公网地址环境变量。断线使用新 session，不重放工具调用、文件句柄或终端输入。
 
 ```bash
 node /path/to/staff-mcp/dist/src/index.js -t reverse \
@@ -136,21 +136,25 @@ Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Ser
 
 ## 🛠️ 核心能力
 
+以下运行时默认值描述当前未发布源码；已发布 2.0.1 的行为与历史发布记录保持不变。
+
 扩展**默认全关**。通过 `--extensions files`、`--extensions terminal` 或 `--extensions files,terminal` 启用；apps/data 依赖及 terminal 对 streams v1 的声明自动计算，无需单独选择。禁用能力不声明对应 manifest 条目、不注册对应 UI Resource 或业务 handler；全关时无扩展 manifest、应用数据 listener/session，普通 MCP 工具和非 UI Resources 保留。HTTP 模式仍监听原 MCP 服务。
 
 ```bash
 # 仅文件应用，默认 main 根为 --working-dir
 node /path/to/staff-mcp/dist/src/index.js --extensions files -w /workspace
 # 仅终端，不隐式启用文件应用
-node /path/to/staff-mcp/dist/src/index.js --extensions terminal --shell /bin/bash
-# 两种应用，显式文件 roots 替代默认 main 根
+node /path/to/staff-mcp/dist/src/index.js --extensions terminal
+# 两种应用；显式授权 assets，工具与文件应用共用
 node /path/to/staff-mcp/dist/src/index.js --extensions files,terminal -w /workspace \
-  --file-root main=/workspace --file-root assets=/srv/assets
-# 在适用 Linux 宿主上明确开放全盘文件访问（不是默认值）
-node /path/to/staff-mcp/dist/src/index.js --extensions files --file-root system=/
+  -d /srv/assets
+# 在适用 Linux 宿主上明确向工具和文件应用授权全盘（不是默认值）
+node /path/to/staff-mcp/dist/src/index.js --extensions files -d /
 ```
 
-`--file-root id=path` 可重复，id 须由小写字母/数字/连字符组成且唯一；相对路径按启动进程 cwd 解析。显式 roots **替代**而非追加默认 `main`，仅 files 启用时影响文件 App 及其标准文件 Resources，不改变标准工具的 `--working-dir` / `--allowed-dir` 范围或终端默认工作区 cwd。显式选择 `/` 开放的是 staff 身份实际可见的文件系统，不提权，也不是 OS 安全边界。库接口 [`ExtensionOptions`](src/extensions/config.ts) 为 `{enabled?:('files'|'terminal')[],fileRoots?:{rootId:string,directory:string}[],shell?:string}`，`enabled` 默认 `[]`。
+files 启用时直接复用标准工具目录授权：`main` 是 `--working-dir`，其后按解析、去重后的 `--allowed-dir` 顺序生成 `extra1`、`extra2` 等根。显式 `-d` 授权因此也在文件 UI 可见，不自动添加系统根。相对目录按启动进程 cwd 解析。`-d /` 是向工具及文件应用显式授权 staff 身份可见的文件系统，仍受 OS 权限约束，不提权，也不是 shell 沙箱。库接口 [`ExtensionOptions`](src/extensions/config.ts) 为 `{enabled?:('files'|'terminal')[]}`，默认 `[]`。
+
+`--file-root`、`--shell`、`--http-max-sessions`、`--http-session-idle-ms` 已删除，传入时明确报 unknown option。请从启动配置移除，文件目录改用 `-w` / `-d`，shell 使用正常的 `SHELL` 环境变量；不提供兼容回退。
 
 ### 独立文件工作区
 
@@ -160,7 +164,7 @@ node /path/to/staff-mcp/dist/src/index.js --extensions files --file-root system=
 
 ### 人工终端（显式启用扩展）
 
-`--extensions terminal` 须 Linux、可加载的 optional `node-pty`、可执行 shell 及协商 streams/data v1 后可用的 duplex dataSession，可经本机 stdio/本地 Docker、direct HTTP 或 reverse 接入。Linux/native PTY/shell 不可用时通过 stderr 明确警告，只禁用 terminal/streams，不让整个 MCP 启动失败；标准工具与可用的 files 扩展保留。默认关闭时不加载原生 PTY。`--shell` 接受绝对可执行路径，缺省使用有效的绝对 `$SHELL`，否则回退 `/bin/bash`。交互 shell 读取正常启动配置，继承 staff 环境，仅排除[终端合同](docs/terminal.md)列出的精确内部控制 key。chat-ai 沿用当前会话 MCP 授权及同源浏览器请求，不另设终端权限开关或高危确认。终端遵循宿主站点统一的 HTTP/HTTPS 部署策略，不另设终端专用 TLS 门槛或 origin 白名单。建议全站使用 HTTPS 保护登录会话、工具调用及终端流量；允许 HTTP 不代表这些请求已加密。
+`--extensions terminal` 须 Linux、可加载的 optional `node-pty`、可执行 shell 及协商 streams/data v1 后可用的 duplex dataSession，可经本机 stdio/本地 Docker、direct HTTP 或 reverse 接入。Linux/native PTY/shell 不可用时通过 stderr 明确警告，只禁用 terminal/streams，不让整个 MCP 启动失败；标准工具与可用的 files 扩展保留。默认关闭时不加载原生 PTY。自动使用有效的绝对可执行 `$SHELL`，否则使用 `/bin/bash`；若仍不可用，警告并禁用终端，不再尝试其他 shell。交互 shell 读取正常启动配置，继承 staff 环境（包括正常的 `HOME`），仅排除[终端合同](docs/terminal.md)列出的精确内部控制 key。chat-ai 沿用当前会话 MCP 授权及同源浏览器请求，不另设终端权限开关或高危确认。终端遵循宿主站点统一的 HTTP/HTTPS 部署策略，不另设终端专用 TLS 门槛或 origin 白名单。建议全站使用 HTTPS 保护登录会话、工具调用及终端流量；允许 HTTP 不代表这些请求已加密。
 
 PTY 默认从 staff 工作区 `main` 启动，与文件 roots 独立，以 staff 的 OS uid 运行；root/cwd 只是起始目录，**不是 sandbox**；shell 的文件和网络副作用不受文件工具路径检查约束。终端输入输出不进入模型或聊天历史。每个 stream 的浏览器到 chat-ai 交互使用一条同源 WebSocket（`/api/mcp/app-stream`，`chat-app-stream-v1`），输入、输出、resize、presence 和真实 xterm 消费 ACK 共用连接，后端仍是公共 HTTP dataSession。浏览器每 10 秒刷新独立的 120 秒 host presence；host 通用 streams 模块按远端每次返回的租约调度续租，staff 默认 30 秒。点击 Shell App 自动启动一次 PTY，无额外打开按钮或确认；退出、PTY 错误或真实断链后保留 App 壳供手动重连。普通隐藏视图保留 read/ACK/presence，但拒绝新输入和 resize；真正离页、关闭、撤权或到期才清理，后代回收 best effort，不撤销副作用。
 
@@ -178,7 +182,9 @@ PTY 默认从 staff 工作区 `main` 启动，与文件 roots 独立，以 staff
 
 **受支持的 Linux 本地 Docker stdio 仅在至少实际启用一种扩展时**，由原 wrapper 自动预留容器私有端口到 **127.0.0.1 随机宿主端口**，仅 inspect 自己 cidfile 的容器；只读挂载宿主 **0600 metadata 文件**提供可达 baseUrl，不改 stdin/stdout，不手找容器 IP，应用 listener 等 `data/v1/configure` 才懒启动。全关时 `dataAuto` 为 false，不分配应用数据发布端口、metadata 挂载或 bootstrap；普通工作区/程序包挂载不变。非 Docker stdio 也在 configure 前无应用 listener。HTTP/reverse 不增加这项发布；全关无 dataSession，HTTP 原 MCP listener 保留。
 
-files 启用时，每个显式 Docker `--file-root id=path` 将对应宿主目录 bind-mount 到 `/opt/staff-file-roots/<id>`。因此 `--file-root system=/` 是明确把宿主根挂到该目录，而不只是指容器根；这是主动扩大文件可见范围，不是自动获得宿主权限或全平台支持承诺，仍受实际 OS/容器权限与 Docker 拓扑约束。默认文件 `main` 与终端 cwd 沿用现有工作区挂载。
+Docker 文件根仅复用已有工作区（`/workspace`，`main`）与 allowed-directory 挂载，不创建第二套 file-root 挂载。显式 `-d /` 会通过已有授权目录映射主动扩大宿主文件访问范围，仍受 Docker/OS 权限与拓扑约束。终端 cwd 始终为 `/workspace`，不受额外文件根影响。
+
+Docker 中普通工具与文件应用复用允许目录挂载。宿主文件系统根（如 `/`）会映射到 `/opt/staff-allowed/root-N`，因为 Docker 禁止挂载到容器 `/`；容器内 `-d` 和受保护暂存别名同时使用映射路径。
 
 此应用数据路径要求本地 daemon、宿主客户端与 wrapper 共享可达 loopback、兼容 bridge/端口发布。非 Linux Docker launcher，以及 stdio 的 remote/TCP/SSH daemon 或 host/container 网络等不匹配情况，会明确警告并禁用可选扩展；只要 Docker 自身能正常启动，基础 MCP 连接和工具仍保留。HTTP/reverse 不需要这项 stdio 映射。数据 bootstrap 或 configure 失败不得终止健康的 MCP 控制连接，依赖数据通道的 App 不开放，不回退旧字节协议、不重放操作。loopback 发布不是敌对容器隔离保证；metadata 保持 0600，容器 uid 须能读取，工作区/全局目录权限与 PTY ABI/libc 仍须匹配。不自动 chown、放宽权限或切换浏览器用户身份。正常退出及信号仍清理自有容器、映射和 metadata，不提供跨重启资源恢复。
 
@@ -210,27 +216,17 @@ node /path/to/staff-mcp/dist/src/index.js --profile android-reverse
 ```
 
 
-### HTTP 会话容量与空闲回收
+### HTTP 会话容量与生命周期
 
-每个 HTTP 监听器默认最多 **64 个会话**。初始化中、清理未完成或清理失败的会话都计入名额。满额时新初始化返回 **429**，不驱逐已有会话；清理成功后才释放名额。使用 `--http-max-sessions <正整数>` 配置。它与限制受管子 MCP 的 `--max-mcp-sessions` 独立。
+每个 HTTP 监听器固定最多 **64 个会话**，为内部常量。初始化中、清理未完成或清理失败的会话都计入名额。满额时新初始化返回 **429**，不驱逐已有会话；清理成功后才释放名额。它与限制受管子 MCP 的 `--max-mcp-sessions` 独立，子 MCP 显式 start/stop 不变。
 
-HTTP 会话在观察到空闲 **30 分钟**后可被回收（`--http-session-idle-ms <毫秒>`，1..2147483647）。每个监听器仅一个扫描定时器，间隔最多一分钟，配置更短时使用该短间隔。有效的入站 MCP 控制消息重新开始空闲宽限期；单纯 GET/SSE 长连接、服务端通知、无效 HTTP 请求和未认证的数据请求不保活。
-
-未完成的请求 handler（即使 HTTP 断开或收到取消）、文件准备/有效租约/在途写入或提交、数据配置/通道，以及自有 PTY、输出排空或退出等待都会阻止空闲回收。判断从各资源已有状态派生，不续业务租约，不把取消视为执行已完成。活动结束后，下一次观察到空闲时重新给予完整宽限期。已结束的结果记录和没有通道的已配置数据会话本身不保活。
-
-过期会话 ID 返回 **404**，即使请求体是 initialize 也一样。需不带旧 ID 显式重连，不重放工具、文件提交或终端输入。仅保留 App iframe 或未保存浏览器草稿不会保活服务端连接；草稿仍归客户端，但过期后服务端操作需要新连接/App。该策略仅作用于 HTTP 监听器会话，不回收 stdio/reverse；Docker HTTP 会转发两个参数。它不等于进程级后台命令、受管子 MCP 或 LSP 的全局配额，真正未完成的工作或清理失败仍可能持续占用名额。
-
-```bash
-node /path/to/staff-mcp/dist/src/index.js -t http -p 3000 \
-  --http-token your_secure_token_here \
-  --http-max-sessions 64 --http-session-idle-ms 1800000
-```
+HTTP 会话**不按空闲超时回收**。显式 DELETE/SDK close、初始化失败、传输关闭或监听器 shutdown 才清理会话；客户端应主动关闭不再使用的连接。遗留会话可能持续占用名额，直到关闭或 shutdown。文件/终端租约、数据消费期限及资源清理仍独立生效，不因 MCP 空闲而主动关闭整个会话。未知或已关闭 ID 返回 **404**，需不带旧 ID 显式重连，不重放工具、文件提交或终端输入。此容量不是后台命令、受管子 MCP 或 LSP 的全局配额。
 
 ### 会话关闭
 
 正常 SDK close、stdio EOF 及 CLI SIGINT/SIGTERM/SIGHUP 都先清理会话资源，再退出进程；Docker 宿主管道 EOF 走同一路径。清理立即拒绝新操作，关闭 skills 监听器及防抖定时器，并等待文件暂存、已受理提交、数据监听器和自有 PTY 退出。重复 close 等待同一清理过程，失败明确报告，不伪报成功。异步清理结束前保留同步 exit 兜底。SIGKILL、崩溃和 daemonize 后代不保证清理，未兑现的底层操作也可能延迟正常退出。
 
-新 HTTP 会话只能由不带 MCP session ID 的 POST initialize 创建。未知或已关闭 ID 返回 404；GET/DELETE/无效请求不会创建替代会话。初始化失败会释放资源，监听器停止时等待活动及初始化中的会话。reverse 重连等待旧会话清理后创建新 server，不复用已关闭的监听器、不重放操作。HTTP 监听器容量与空闲回收遵循上节规则，stdio/reverse 不按空闲回收。
+新 HTTP 会话只能由不带 MCP session ID 的 POST initialize 创建。未知或已关闭 ID 返回 404；GET/DELETE/无效请求不会创建替代会话。初始化失败会释放资源，监听器停止时等待活动及初始化中的会话。reverse 重连等待旧会话清理后创建新 server，不复用已关闭的监听器、不重放操作。HTTP 监听器容量与生命周期遵循上节规则，不再按空闲回收。
 
 ### 受管子 MCP 会话
 
@@ -254,7 +250,7 @@ node /path/to/staff-mcp/dist/src/index.js -t http -p 3000 \
 | 选项 | 描述 | 默认值 |
 | :--- | :--- | :--- |
 | `-w, --working-dir` | staff 工作区与默认文件 root / 终端 cwd；不是 OS 沙盒 | `process.cwd()` |
-| `-d, --allowed-dir` | 标准工具额外允许目录；不增加文件 App roots | `[]` |
+| `-d, --allowed-dir` | 工具及已启用文件 App 共用的额外授权目录 | `[]` |
 | `-r, --profile` | 当前激活的技能档案/工种 (如 android-reverse) | `default` |
 | `--enable-lsp` | 启用 LSP 语言服务器功能 (默认禁用) | `false` |
 | `--docker` | 在指定的 Docker 镜像内运行 AI | `undefined` |
@@ -267,8 +263,6 @@ node /path/to/staff-mcp/dist/src/index.js -t http -p 3000 \
 | `--rt, --reverse-token` | Reverse MCP 的安全认证令牌 | `undefined` |
 | `--rn, --reverse-name` | Reverse MCP 的服务注册名称 | `undefined` |
 | `--extensions` | 逗号分隔的 `files`、`terminal` 或两者；自动计算 apps/data 依赖 | `[]`（全关） |
-| `--file-root` | 可重复 `id=path`；显式 roots 替代默认值，仅 files 启用时生效 | `main=<working-dir>` |
-| `--shell` | PTY shell 的绝对可执行路径 | 有效的绝对 `$SHELL`，否则 `/bin/bash` |
 | `--proxy` | 支持的 HTTP 客户端及 reverse 控制/数据 HTTP 请求 的 HTTP(S) 代理 | `undefined` |
 
 ### 🌐 代理支持（企业内网）

@@ -11,7 +11,6 @@ import { accessSync, constants, statSync } from 'node:fs';
 import { FileCore } from './file-manager/file-core.js';
 import { EXTENSIONS, manifest } from './extensions/protocol.js';
 import { installExtensions } from './extensions/runtime.js';
-import { installRequestActivity } from './utils/server-activity.js';
 import { loadTerminalRuntime } from './terminal/pty.js';
 import { registerFileResources } from './file-manager/extension.js';
 import { readAppResource } from './extensions/apps.js';
@@ -41,7 +40,7 @@ export function createServerFactory(
     extensions: ExtensionOptions = {},
     privateDirectoryAliases: string[] = [],
 ): () => McpServer {
-    const options = resolveExtensionOptions(extensions, workingDir);
+    const options = resolveExtensionOptions(extensions);
     const security = new SecurityManager(workingDir, allowedDirs);
     const sandbox = security.getAllowedDirs();
     const runtimeDirectory = path.join(
@@ -73,7 +72,11 @@ export function createServerFactory(
     let filesCore: FileCore | undefined;
     if (options.enabled.includes('files')) {
         let rootsAvailable = true;
-        for (const root of options.fileRoots) {
+        const fileRoots = sandbox.map((directory, index) => ({
+            rootId: index === 0 ? 'main' : `extra${index}`,
+            directory,
+        }));
+        for (const root of fileRoots) {
             try {
                 if (!statSync(root.directory).isDirectory()) {
                     console.error(
@@ -97,7 +100,7 @@ export function createServerFactory(
         }
         if (rootsAvailable)
             filesCore = new FileCore(
-                options.fileRoots.map((root) => ({
+                fileRoots.map((root) => ({
                     ...root,
                     name: root.rootId === 'main' ? 'Workspace' : root.rootId,
                     readOnly: false,
@@ -107,7 +110,7 @@ export function createServerFactory(
             );
     }
     const terminalRuntime = options.enabled.includes('terminal')
-        ? loadTerminalRuntime(true, options.shell)
+        ? loadTerminalRuntime(true)
         : undefined;
     const features = { files: !!filesCore, terminal: !!terminalRuntime };
 
@@ -129,8 +132,6 @@ export function createServerFactory(
                 },
             },
         );
-
-        installRequestActivity(server);
 
         // Register all functional tool modules
         registerFileTools(server, security, standardCore);

@@ -99,23 +99,6 @@ export class TransferManager {
         this.timer.unref();
     }
 
-    /** Read-only activity, not record retention or a lease renewal. */
-    hasActivity(): boolean {
-        const now = performance.now();
-        for (const item of this.operations.values()) {
-            if (
-                item.job ||
-                item.cleanup ||
-                item.commit ||
-                item.state === 'preparing' ||
-                item.state === 'committing' ||
-                (!this.disposed && !terminal(item.state) && item.expires > now)
-            )
-                return true;
-        }
-        return false;
-    }
-
     private sweep() {
         const now = performance.now();
         for (const [id, item] of this.operations) {

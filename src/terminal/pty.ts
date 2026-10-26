@@ -14,7 +14,6 @@ export interface TerminalRuntime {
 /** Native loading is opt-in; unavailable runtimes leave standard MCP usable. */
 export function loadTerminalRuntime(
     enabled: boolean,
-    shell?: string,
 ): TerminalRuntime | undefined {
     if (!enabled) return undefined;
     if (process.platform !== 'linux') {
@@ -32,14 +31,12 @@ export function loadTerminalRuntime(
                 throw new Error('Shell must be a file');
             return candidate;
         };
-        if (shell === undefined) {
-            try {
-                shell = executable(process.env.SHELL ?? '');
-            } catch {
-                shell = '/bin/bash';
-            }
+        let selectedShell: string;
+        try {
+            selectedShell = executable(process.env.SHELL ?? '');
+        } catch {
+            selectedShell = executable('/bin/bash');
         }
-        const selectedShell = executable(shell);
         const pty: typeof import('node-pty') = createRequire(import.meta.url)(
             'node-pty',
         );

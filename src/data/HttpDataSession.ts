@@ -616,7 +616,9 @@ class HttpChannel implements DataChannel {
                 this.acknowledgmentsRead = this.request('ack', 'GET').then(
                     (response) => this.readAcks(response.body),
                 );
-                void this.acknowledgmentsRead.catch((error) => this.fail(errorOf(error)));
+                void this.acknowledgmentsRead.catch((error) =>
+                    this.fail(errorOf(error)),
+                );
                 this.upload = this.request('put', 'PUT', this.outgoing).then(
                     async (response) => {
                         await response.body?.cancel();
@@ -760,10 +762,6 @@ export class HttpDataSession {
             );
         }
         if (options.endpoint) this.endpoint = endpointUrl(options.endpoint);
-    }
-
-    hasActivity(): boolean {
-        return this.pendingOpens.size > 0 || this.channels.size > 0;
     }
 
     supports(purpose: ChannelPurpose, direction: Direction): boolean {

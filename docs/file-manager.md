@@ -1,6 +1,6 @@
 # Independent file manager extension
 
-This document describes the staff-mcp 2.0.1 file extension. Reverse and extensions require a matching chat-ai host implementing reverse v1 and session-relative data paths, with matching host/descriptors/UI assets. The authoritative protocol is `chat-ai/docs/protocol/README.md` at that compatible host version; both endpoints implement it themselves, with no required extension SDK. Standard stdio/Streamable HTTP tools/resources/prompts remain supported. No Chat8/schema9/format7/share protocol2 data migration is required. See [compatibility and upgrade](../README.md#compatibility-and-coordinated-upgrades).
+This document describes the current file extension, including unreleased runtime simplifications after 2.0.1; published release notes remain unchanged. Reverse and extensions require a matching chat-ai host implementing reverse v1 and session-relative data paths, with matching host/descriptors/UI assets. The authoritative protocol is `chat-ai/docs/protocol/README.md` at that compatible host version; both endpoints implement it themselves, with no required extension SDK. Standard stdio/Streamable HTTP tools/resources/prompts remain supported. No Chat8/schema9/format7/share protocol2 data migration is required. See [compatibility and upgrade](../README.md#compatibility-and-coordinated-upgrades).
 
 Extensions are off by default. Unsupported versions, unavailable optional features or failed data setup leave an otherwise healthy standard MCP connection usable, without enabling the affected App. This does not make the old reverse handshake compatible: reverse requires a paired upgrade even when extensions are disabled, with no old-protocol fallback or automatic transfer resumption.
 
@@ -73,9 +73,11 @@ If any open tab for that file has unsaved changes, adding is blocked with an exp
 
 ## Roots, paths, and concurrent edits
 
-Files is enabled by `--extensions files` (or `--extensions files,terminal`). Its default root is `main=<working-dir>`. Repeatable `--file-root id=path` options replace the entire default root list; include `main` explicitly if it should remain. Root IDs must be unique lowercase letters/digits/hyphens, and relative directories resolve from the launching process cwd. The programmatic `ExtensionOptions.fileRoots` equivalent is `{rootId,directory}[]`; see [CLI/API examples](../README.md). These roots apply to the file app, files v1 and its standard file Resources, not standard tools' `--allowed-dir` permissions or terminal's default workspace cwd. With files disabled, file-root configuration does not alter standard Resources.
+Files is enabled by `--extensions files` (or `--extensions files,terminal`). File roots reuse standard tool authorization: `main` is the workspace, followed by resolved, deduplicated `--allowed-dir` directories in order as `extra1`, `extra2`, etc. Explicit `-d` authorization is visible in the UI; relative directories resolve from the launching process cwd. The `rootId` RPC interface is unchanged; IDs are derived from the current ordered configuration, not user-selected or portable permissions. The programmatic `ExtensionOptions` now contains only `enabled`; there is no independent `fileRoots` option.
 
-Explicit `--file-root system=/` selects the filesystem visible to staff, subject to actual OS access. In Docker, explicit host roots are bind-mounted at `/opt/staff-file-roots/<id>`: `system=/` deliberately exposes the host root there. It does not grant new OS privileges or imply support for every Docker/platform topology. File roots and protected-path checks are not a machine-wide security boundary against an arbitrary shell running as the same account.
+No system root is authorized automatically. Explicit `-d /` authorizes the filesystem visible to staff for both tools and files, subject to OS permissions. Docker reuses only the existing workspace and allowed-directory mounts, not separate file-root mounts; explicit host-root authorization is deliberately broad and remains subject to Docker topology and permissions. Terminal still starts at the workspace. File/path guards are not a machine-wide boundary against an arbitrary same-user shell. Removed CLI options fail as unknown options; see [CLI changes](../README.md).
+
+Docker uses the same allowed-directory mounts for tools and files. Host filesystem roots map to `/opt/staff-allowed/root-N`, never container `/`; inner allowed directories and protected staging aliases follow that mapping.
 
 Public paths are root-relative literal names, not host absolute paths or URL-encoded paths. Traversal, symlink traversal, protected roots, and private staging access are checked by the file core. Percent signs in RPC paths are literal filename characters; only the resource URI boundary decodes each component once. Root IDs are session/configuration context, not portable filesystem permissions.
 
@@ -83,7 +85,7 @@ Text reads and edits are capped at **2 MiB**. `saveText` requires the version re
 
 `stat` returns metadata without reading/hashing file content by default. Call `stat` with `includeVersion: true` only when a mutation needs a content version; `readText` returns the version along with text. File selection/opening must not hash a large binary merely to display its name. Atomic replacements preserve the target permission bits, including executable bits. Upload copy and download snapshot/hash happen outside the shared write mutex; bounded final source/destination checks remain coordinated. External writers are detected through the documented version/identity checks, not locked out by this service.
 
-Private staging is under the workspace's `.staff/file-manager/`; supported file tools and extension browsing exclude/protect that area. The Docker wrapper also derives its aliases from the bind mounts it creates, including overlapping file roots: aliases cannot be read, written, listed, moved or deleted through file APIs, and their ancestors cannot be moved or deleted. A root mounted from within staging is protected in its entirety. This is a path guard for wrapper-owned mounts, not a general bind-mount or OS isolation mechanism; arbitrary extra `-D` mounts and same-user shell access are outside that guarantee. Do not treat staging files or transfer handles as user attachments or ordinary Resources.
+Private staging is under the workspace's `.staff/file-manager/`; supported file tools and extension browsing exclude/protect that area. The Docker wrapper also derives its aliases from the bind mounts it creates, including overlapping allowed directories: aliases cannot be read, written, listed, moved or deleted through file APIs, and their ancestors cannot be moved or deleted. A root mounted from within staging is protected in its entirety. This is a path guard for wrapper-owned mounts, not a general bind-mount or OS isolation mechanism; arbitrary extra `-D` mounts and same-user shell access are outside that guarantee. Do not treat staging files or transfer handles as user attachments or ordinary Resources.
 
 ## Standard file Resources and attachments
 
@@ -165,10 +167,9 @@ The independent files-v1 contract adds `stat {rootId,path}->{version}` for opaqu
 
 The HTTP data kernel accepts structurally valid purposes only through an explicit outer capability gate. The staff built-in runtime registers only enabled/negotiated files and terminal resources. The host admits negotiated files plus the purposes in current parsed streams-capable Apps, read lazily after discovery. Accepting new purpose syntax does not grant unknown business access.
 
-### HTTP idle policy
+### HTTP session lifetime
 
-HTTP listener idle expiry reads existing resource activity: preparation, a valid transfer lease, queued byte I/O, cleanup and an admitted commit keep the session alive. Expired resources with no pending I/O and finished operation receipts do not. A control cancellation/HTTP disconnect is not proof that a write or commit has stopped. The policy never renews a file lease or changes published/unknown outcomes. A browser draft alone is not a server lease; reconnect and reopen the App before new operations after HTTP session expiry. See the README for listener capacity, defaults and configuration.
-
+The HTTP listener has a fixed 64-session capacity and no MCP idle-expiry timer. Explicit session close, failed initialization and shutdown still wait for owned staging, in-flight I/O and admitted commits; cancellation/disconnect is not proof that a write stopped. File leases and final-record retention remain independent, without changing published/unknown outcomes. Clients should close unused MCP sessions; see the README for capacity and cleanup.
 
 ### Capability composition and streams
 

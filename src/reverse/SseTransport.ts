@@ -5,6 +5,45 @@ import { JSONRPCMessageSchema } from '@modelcontextprotocol/sdk/types.js';
 const MESSAGE_LIMIT = 4 * 1024 * 1024;
 const QUEUE_LIMIT = 8 * 1024 * 1024;
 
+export interface ReverseControlFailure {
+    reason:
+        | 'connect-timeout'
+        | 'read-timeout'
+        | 'sse-rejected'
+        | 'sse-ended'
+        | 'sse-read-failed'
+        | 'sse-too-large'
+        | 'sse-invalid-event'
+        | 'control-queue-exceeded'
+        | 'message-post-rejected'
+        | 'message-post-failed';
+    status?: number;
+    bytes?: number;
+    elapsedMs?: number;
+    networkCode?: string;
+}
+
+/** Only fixed diagnostics, never remote bodies, URLs, headers or exception text. */
+class ControlFailure extends Error {
+    constructor(readonly detail: ReverseControlFailure) {
+        super(`Reverse control failed: ${detail.reason}`);
+    }
+}
+
+function networkCode(error: unknown): string | undefined {
+    const cause = error as {
+        code?: unknown;
+        cause?: { code?: unknown };
+    } | null;
+    const code = cause?.cause?.code ?? cause?.code;
+    return typeof code === 'string' &&
+        /^(?:ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EPIPE|UND_ERR_(?:CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT|SOCKET|ABORTED))$/.test(
+            code,
+        )
+        ? code
+        : undefined;
+}
+
 /** Outbound-only reverse control: SSE receives JSON-RPC, POST sends JSON-RPC. No resume/replay. */
 export class ReverseSseTransport implements Transport {
     onclose?: () => void;
@@ -12,6 +51,7 @@ export class ReverseSseTransport implements Transport {
     onmessage?: Transport['onmessage'];
     readonly closed: Promise<void>;
     sessionId?: string;
+    failure?: ReverseControlFailure;
     private resolveClosed!: () => void;
     private readonly abort = new AbortController();
     private stopped = false;
@@ -46,10 +86,22 @@ export class ReverseSseTransport implements Transport {
         });
         const timer =
             this.connectTimeout > 0
-                ? setTimeout(() => this.fail(), this.connectTimeout)
+                ? setTimeout(
+                      () => this.fail({ reason: 'connect-timeout' }),
+                      this.connectTimeout,
+                  )
                 : undefined;
         timer?.unref();
-        void this.read().catch(() => this.fail());
+        void this.read().catch((error) =>
+            this.fail(
+                error instanceof ControlFailure
+                    ? error.detail
+                    : {
+                          reason: 'sse-read-failed',
+                          networkCode: networkCode(error),
+                      },
+            ),
+        );
         try {
             await ready;
         } finally {
@@ -74,7 +126,10 @@ export class ReverseSseTransport implements Transport {
             !response.body
         ) {
             await response.body?.cancel();
-            throw new Error('Reverse SSE rejected');
+            throw new ControlFailure({
+                reason: 'sse-rejected',
+                status: response.status,
+            });
         }
         this.reader = response.body.getReader();
         const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -85,7 +140,15 @@ export class ReverseSseTransport implements Transport {
         let afterCR = false;
         const completeLine = () => {
             if (line === '') {
-                if (data.length) this.event(event, data.join('\n'));
+                if (data.length) {
+                    try {
+                        this.event(event, data.join('\n'));
+                    } catch {
+                        throw new ControlFailure({
+                            reason: 'sse-invalid-event',
+                        });
+                    }
+                }
                 event = 'message';
                 data = [];
                 blockBytes = 0;
@@ -102,7 +165,7 @@ export class ReverseSseTransport implements Transport {
         while (!this.stopped) {
             this.armReadTimeout();
             const part = await this.reader.read();
-            if (part.done) throw new Error('Reverse SSE ended');
+            if (part.done) throw new ControlFailure({ reason: 'sse-ended' });
             const text = decoder.decode(part.value, { stream: true });
             // Bound complete and partial events before they can grow an unbounded JSON buffer.
             for (const character of text) {
@@ -113,7 +176,10 @@ export class ReverseSseTransport implements Transport {
                 afterCR = character === '\r';
                 blockBytes += Buffer.byteLength(character);
                 if (blockBytes > MESSAGE_LIMIT + 1024)
-                    throw new Error('Reverse SSE event too large');
+                    throw new ControlFailure({
+                        reason: 'sse-too-large',
+                        bytes: blockBytes,
+                    });
                 if (character === '\r' || character === '\n') completeLine();
                 else line += character;
             }
@@ -155,27 +221,52 @@ export class ReverseSseTransport implements Transport {
         const body = JSON.stringify(message);
         const bytes = Buffer.byteLength(body);
         if (bytes > MESSAGE_LIMIT || this.queuedBytes + bytes > QUEUE_LIMIT) {
-            this.fail();
+            this.fail({ reason: 'control-queue-exceeded', bytes });
             throw new Error('Reverse control queue exceeded');
         }
         this.queuedBytes += bytes;
         const operation = this.queue.then(async () => {
             if (this.stopped) throw new Error('Reverse transport closed');
-            const response = await this.fetch(this.endpoint!, {
-                method: 'POST',
-                headers: {
-                    ...this.headers,
-                    'Content-Type': 'application/json',
-                },
-                body,
-                signal: this.abort.signal,
-                redirect: 'manual',
-            });
-            const accepted = response.status === 202;
-            await response.body?.cancel();
-            if (!accepted) throw new Error('Reverse POST rejected');
+            const startedAt = performance.now();
+            try {
+                const response = await this.fetch(this.endpoint!, {
+                    method: 'POST',
+                    headers: {
+                        ...this.headers,
+                        'Content-Type': 'application/json',
+                    },
+                    body,
+                    signal: this.abort.signal,
+                    redirect: 'manual',
+                });
+                const status = response.status;
+                await response.body?.cancel();
+                if (status !== 202) {
+                    throw new ControlFailure({
+                        reason: 'message-post-rejected',
+                        status,
+                        bytes,
+                        elapsedMs: Math.round(performance.now() - startedAt),
+                    });
+                }
+            } catch (error) {
+                throw error instanceof ControlFailure
+                    ? error
+                    : new ControlFailure({
+                          reason: 'message-post-failed',
+                          bytes,
+                          elapsedMs: Math.round(performance.now() - startedAt),
+                          networkCode: networkCode(error),
+                      });
+            }
         });
-        this.queue = operation.catch(() => this.fail());
+        this.queue = operation.catch((error) =>
+            this.fail(
+                error instanceof ControlFailure
+                    ? error.detail
+                    : { reason: 'message-post-failed' },
+            ),
+        );
         try {
             await operation;
         } finally {
@@ -186,15 +277,19 @@ export class ReverseSseTransport implements Transport {
     private armReadTimeout(): void {
         clearTimeout(this.readTimer);
         if (this.readTimeout > 0) {
-            this.readTimer = setTimeout(() => this.fail(), this.readTimeout);
+            this.readTimer = setTimeout(
+                () => this.fail({ reason: 'read-timeout' }),
+                this.readTimeout,
+            );
             this.readTimer.unref();
         }
     }
 
-    private fail(): void {
+    private fail(detail: ReverseControlFailure): void {
         if (this.stopped) return;
+        this.failure = detail;
         try {
-            this.onerror?.(new Error('Reverse control connection failed'));
+            this.onerror?.(new ControlFailure(detail));
         } finally {
             void this.close();
         }

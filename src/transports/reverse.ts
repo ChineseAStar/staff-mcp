@@ -155,6 +155,9 @@ export async function startReverseServer(
                 // start() completes once the SSE endpoint is admitted; only then start the initialization deadline.
                 if (initializedAt === undefined) {
                     initializationTimer = setTimeout(() => {
+                        log.warn(
+                            'Control connection closed: initialization-timeout.',
+                        );
                         void transport.close();
                     }, options.initializationTimeout ?? 15000);
                     initializationTimer.unref();
@@ -166,6 +169,11 @@ export async function startReverseServer(
                         'Connection attempt ended before readiness or control connection closed.',
                     );
             } finally {
+                if (transport.failure) {
+                    log.warn(
+                        `Control connection closed: ${JSON.stringify(transport.failure)}`,
+                    );
+                }
                 clearTimeout(initializationTimer);
                 await transport.close().catch(() => {});
                 attempt.abort();

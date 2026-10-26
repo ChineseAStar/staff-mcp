@@ -79,7 +79,7 @@ Add the following to your `claude_desktop_config.json`:
 ```
 
 ### 4. Reverse MCP Mode (Intranet Penetration)
-Connect outward from behind NAT/firewalls to chat-ai's existing Web entrypoint, without an inbound listener on staff. Control uses SSE + POST; remote-initiated raw HTTP GET/PUT carries file/terminal bytes on that same Web port. chat-ai provides the current session data path, which staff resolves against the existing `--ru` origin; `MCP_REVERSE_URL` is only an optional connection hint on chat-ai, not a data-channel prerequisite. Reconnect creates fresh sessions and never replays tool calls, transfer handles or terminal input.
+Connect outward from behind NAT/firewalls to chat-ai's existing Web entrypoint, without an inbound listener on staff. Control uses SSE + POST; remote-initiated raw HTTP GET/PUT carries file/terminal bytes on that same Web port. chat-ai provides the current session data path, which staff resolves against the existing `--ru` origin; no public-origin environment variable on chat-ai is required. Reconnect creates fresh sessions and never replays tool calls, transfer handles or terminal input.
 
 ```bash
 node /path/to/staff-mcp/dist/src/index.js -t reverse \
@@ -141,21 +141,25 @@ The two reverse transport sources (`src/reverse/SseTransport.ts` and chat-ai's `
 
 ## 🛠️ Core Capabilities
 
+The runtime defaults below describe the current unreleased source; published 2.0.1 behavior and release notes are unchanged.
+
 Extensions are **all off by default**. Use `--extensions files`, `--extensions terminal`, or `--extensions files,terminal`; apps/data dependencies and terminal's streams v1 manifest are added automatically, not selected separately. Disabled features advertise no manifest entry and register no corresponding UI Resource or business handler. With both off there is no extension manifest or application data listener/session; ordinary MCP tools and non-UI Resources remain. HTTP mode still opens its normal MCP listener.
 
 ```bash
 # Files only, with the default main root at --working-dir
 node /path/to/staff-mcp/dist/src/index.js --extensions files -w /workspace
 # Terminal only; does not enable the file app
-node /path/to/staff-mcp/dist/src/index.js --extensions terminal --shell /bin/bash
-# Both apps, with explicit file roots replacing the default main root
+node /path/to/staff-mcp/dist/src/index.js --extensions terminal
+# Both apps; explicitly authorize assets for tools and the file app
 node /path/to/staff-mcp/dist/src/index.js --extensions files,terminal -w /workspace \
-  --file-root main=/workspace --file-root assets=/srv/assets
-# Explicit full-filesystem file access on a suitable Linux host (not a default)
-node /path/to/staff-mcp/dist/src/index.js --extensions files --file-root system=/
+  -d /srv/assets
+# Explicit full-filesystem authorization for tools and files on a suitable Linux host (not a default)
+node /path/to/staff-mcp/dist/src/index.js --extensions files -d /
 ```
 
-`--file-root id=path` may repeat; IDs must be unique lowercase letters/digits/hyphens, and relative paths resolve from the launching process cwd. Explicit roots replace, rather than append to, the default `main`. They affect the file app and its standard file Resources only when files is enabled, not the standard tools' `--working-dir` / `--allowed-dir` scope or terminal's default workspace cwd. Selecting `/` explicitly exposes the filesystem visible to the staff identity; it does not elevate privileges or create an OS security boundary. The library accepts [`ExtensionOptions`](src/extensions/config.ts): `{enabled?:('files'|'terminal')[],fileRoots?:{rootId:string,directory:string}[],shell?:string}`, with `enabled` defaulting to `[]`.
+With files enabled, roots reuse the standard tool authorization: `main` is `--working-dir`, followed by the resolved, deduplicated `--allowed-dir` directories in order as `extra1`, `extra2`, etc. Explicit `-d` authorization is therefore visible in the file UI as well as tools; no system root is added automatically. Relative directories resolve from the launching process cwd. `-d /` explicitly authorizes the filesystem visible to staff for both tools and files, subject to OS permissions; it grants no OS privileges or shell sandbox. The library accepts [`ExtensionOptions`](src/extensions/config.ts): `{enabled?:('files'|'terminal')[]}`, with `enabled` defaulting to `[]`.
+
+`--file-root`, `--shell`, `--http-max-sessions` and `--http-session-idle-ms` have been removed and now fail as unknown options. Remove them from launch configurations; use `-w` / `-d` for file authorization and the normal `SHELL` environment for shell selection. There is no compatibility fallback.
 
 ### Independent file workspace
 
@@ -165,7 +169,7 @@ New Apps reusing supported RPC/Resources, files or streams need only their own d
 
 ### Human terminal (explicit extension opt-in)
 
-`--extensions terminal` needs Linux, a loadable optional `node-pty`, an executable shell and negotiated streams/data v1 with a usable duplex dataSession over local stdio/Docker, direct HTTP or reverse. If Linux/native PTY/shell requirements are unavailable, staff warns on stderr and omits terminal/streams from discovery; standard MCP and an available files extension remain usable. The default disabled state never loads the native PTY. `--shell` accepts an absolute executable path; otherwise a valid absolute executable `$SHELL` is used, falling back to `/bin/bash`. The interactive shell honors normal startup files and inherits staff's environment except exact internal control keys documented in the [terminal contract](docs/terminal.md). chat-ai uses the existing current-chat MCP grant and same-origin browser requests, with no extra terminal permission switch or high-risk confirmation. Terminal follows the host site's HTTP/HTTPS deployment policy without a terminal-specific TLS gate or origin allowlist. HTTPS is recommended for the entire site to protect login sessions, tool calls and terminal traffic; allowing HTTP does not encrypt those requests.
+`--extensions terminal` needs Linux, a loadable optional `node-pty`, an executable shell and negotiated streams/data v1 with a usable duplex dataSession over local stdio/Docker, direct HTTP or reverse. If Linux/native PTY/shell requirements are unavailable, staff warns on stderr and omits terminal/streams from discovery; standard MCP and an available files extension remain usable. The default disabled state never loads the native PTY. A valid absolute executable `$SHELL` is used, otherwise `/bin/bash`; if that is unavailable, terminal is disabled with a warning, without another shell fallback. The interactive shell honors normal startup files and inherits staff's environment, including normal `HOME`, except exact internal control keys documented in the [terminal contract](docs/terminal.md). chat-ai uses the existing current-chat MCP grant and same-origin browser requests, with no extra terminal permission switch or high-risk confirmation. Terminal follows the host site's HTTP/HTTPS deployment policy without a terminal-specific TLS gate or origin allowlist. HTTPS is recommended for the entire site to protect login sessions, tool calls and terminal traffic; allowing HTTP does not encrypt those requests.
 
 The PTY starts at the staff workspace (`main`) by default, independently of file roots, and runs as the staff process uid: its starting root/cwd is **not a sandbox** and shell filesystem/network effects are not restricted by file-tool path checks. Terminal bytes never enter model context or chat history. Each stream uses one same-origin browser-to-chat-ai WebSocket at `/api/mcp/app-stream` (`chat-app-stream-v1`) for input, output, resize, presence and real xterm consumption ACKs. The backend remains the shared HTTP dataSession. Browser presence refreshes every 10 seconds with a separate 120-second host deadline; the host generic stream module schedules remote renewal from each returned lease (staff defaults to 30 seconds). Opening the Shell App starts one PTY without another open button or confirmation. Exit, PTY failure or disconnection leaves the app shell for manual reconnect; ordinary hidden views keep read/ACK/presence but reject new input and resize. Actual page exit, close, revocation or expiry cleans up; descendant cleanup is best effort, not rollback.
 
@@ -183,7 +187,9 @@ Never pollute your host machine again. By simply appending `--docker <image>`, `
 
 For **supported Linux local Docker stdio with at least one effective extension enabled**, the existing wrapper reserves a private container port published to a random **127.0.0.1** host port and inspects only its own cidfile container. A read-only mount of a host **0600 metadata file** supplies the reachable base URL without rewriting stdin/stdout or asking users to discover container IPs. The application listener remains lazy until `data/v1/configure`. With all extensions off, `dataAuto` is false: no application-data port publication, metadata mount or bootstrap is created. Ordinary workspace/package mounts are unchanged. Non-Docker stdio also has no application listener before configure. HTTP/reverse add no such publication; disabled extensions create no dataSession, while HTTP retains its MCP listener.
 
-When files is enabled, each explicit Docker `--file-root id=path` bind-mounts that host path at `/opt/staff-file-roots/<id>`. Thus `--file-root system=/` explicitly binds the host root there, rather than referring only to the container root. This is a deliberate wide filesystem exposure, not automatic host privilege acquisition or a claim of support across all platforms; actual OS/container permissions and Docker topology still apply. Default file `main` and terminal cwd use the existing workspace mount.
+Docker files reuse only the existing workspace (`/workspace`, root `main`) and allowed-directory bind mounts; no separate file-root mounts are created. Explicit `-d /` is deliberately broad host access through the allowed-directory mapping, subject to Docker/OS permissions and topology. Terminal cwd stays `/workspace`, independent of extra roots.
+
+Docker reuses the allowed-directory mounts for both tools and the file UI. A host filesystem root such as `/` is mapped to `/opt/staff-allowed/root-N` because Docker forbids mounting onto container `/`; the inner `-d` and protected staging aliases use the mapped path.
 
 This application-data path requires a local daemon and the host client/wrapper sharing reachable loopback, with compatible bridge/port publication. Non-Linux Docker launchers and incompatible stdio data topologies (remote/TCP/SSH daemon or host/container networking) warn and omit optional extensions; they retain ordinary MCP control/tools when Docker itself can start. HTTP/reverse do not need this stdio mapping. A failed data bootstrap or unavailable data configuration must not terminate an otherwise healthy MCP connection: data-dependent Apps stay unavailable, with no legacy byte fallback or operation replay. Loopback publication is not isolation from hostile containers. Metadata stays 0600 and must be readable by the container uid; workspace/global-directory permissions and PTY ABI/libc still apply. No automatic chown, permission relaxation or browser-user identity switch is performed. Normal exit/signals still clean the owned container, publication and metadata; no cross-restart resource recovery is promised.
 
@@ -214,27 +220,17 @@ node /path/to/staff-mcp/dist/src/index.js --profile default
 node /path/to/staff-mcp/dist/src/index.js --profile android-reverse
 ```
 
-### HTTP session capacity and idle expiry
+### HTTP session capacity and lifetime
 
-Each HTTP listener admits at most **64 sessions** by default. Starting sessions and sessions whose cleanup is still pending or failed count toward that limit. A full listener returns HTTP **429** for new initialization without evicting an existing session; successful cleanup frees the slot. Use `--http-max-sessions <positive integer>` to configure it. This is independent of `--max-mcp-sessions`, which limits managed child MCP servers.
+Each HTTP listener admits at most **64 sessions**, a fixed internal limit. Starting sessions and sessions whose cleanup is still pending or failed count toward that limit. A full listener returns HTTP **429** for new initialization without evicting an existing session; successful cleanup frees the slot. This is independent of `--max-mcp-sessions`, which still limits managed child MCP servers and retains explicit start/stop.
 
-An HTTP session becomes eligible for cleanup after **30 minutes of observed inactivity** (`--http-session-idle-ms <milliseconds>`, 1..2147483647). A single sweep runs at most once per minute (or at the shorter configured timeout). A valid incoming MCP control message restarts the idle grace. Idle GET/SSE connections, server notifications, invalid HTTP requests and unauthenticated data attempts do not keep a session alive.
-
-Running request handlers (even after HTTP disconnect/cancellation), file preparation/valid leases/in-flight writes or commits, pending data setup/open channels, and owned PTYs or output/exit draining prevent idle eviction. These facts come from their existing owners; the idle policy does not renew business leases or equate cancellation with completion. After activity settles, the next idle observation starts a full grace interval. Completed result records and an empty configured data session alone do not pin the connection.
-
-An expired session ID returns HTTP **404**, including with an initialize body. Reconnect explicitly without the old ID; no tool, file commit or terminal input is replayed. Keeping an App iframe or an unsaved browser draft open does not pin an otherwise inactive server connection. The draft stays client-owned, but server operations require a new connection/App after expiry. This timeout applies only to HTTP listener sessions, not stdio or reverse. Docker HTTP forwards both flags. It is not a global quota for process-owned background commands, nested MCP sessions or LSP servers, and genuinely unsettled work/failed cleanup can continue occupying a slot.
-
-```bash
-node /path/to/staff-mcp/dist/src/index.js -t http -p 3000 \
-  --http-token your_secure_token_here \
-  --http-max-sessions 64 --http-session-idle-ms 1800000
-```
+HTTP sessions have **no idle-expiry timer**. They remain until explicit DELETE/SDK close, failed initialization, transport closure or listener shutdown; clients should explicitly close unused sessions. An abandoned session can retain a capacity slot until closed or shutdown. File/terminal leases, data-consumption deadlines and resource cleanup still apply independently and do not close the MCP session merely because it is idle. Unknown or closed session IDs return HTTP **404**; reconnect explicitly without the old ID, with no replay of tools, file commits or terminal input. This is not a global quota for background commands, nested MCP sessions or LSP servers.
 
 ### Session shutdown
 
 Normal SDK close, stdio EOF, and CLI SIGINT/SIGTERM/SIGHUP close session resources before process exit. Docker host-pipe EOF follows the same path. Cleanup fences new work immediately, closes skills watchers and debounce timers, and waits for file staging, accepted commits, data listeners and owned PTY exit. Repeated close waits the same cleanup; failures are reported rather than called successful. Synchronous exit cleanup remains a fallback until asynchronous cleanup finishes. SIGKILL/crashes and daemonized descendants are not guaranteed cleanups, and an unsettled underlying operation can delay graceful exit.
 
-A new HTTP session requires a POST initialize request without an MCP session ID. Unknown or closed IDs return HTTP 404; GET/DELETE/malformed requests do not create replacement sessions. Failed initialization releases its resources. Listener shutdown closes active and initializing sessions. Reverse reconnect creates a fresh server after the previous session cleanup completes; it never reuses closed watchers or replays operations. HTTP listener capacity and idle expiry follow the policy above; stdio and reverse are not idle-evicted.
+A new HTTP session requires a POST initialize request without an MCP session ID. Unknown or closed IDs return HTTP 404; GET/DELETE/malformed requests do not create replacement sessions. Failed initialization releases its resources. Listener shutdown closes active and initializing sessions. Reverse reconnect creates a fresh server after the previous session cleanup completes; it never reuses closed watchers or replays operations. HTTP listener capacity and lifetime follow the policy above; there is no listener idle eviction.
 
 ### Managed child MCP sessions
 
@@ -258,7 +254,7 @@ It will securely download, configure, and reload the skill without you lifting a
 | Option | Description | Default |
 | :--- | :--- | :--- |
 | `-w, --working-dir` | Staff workspace and default file root / terminal cwd; not an OS sandbox | `process.cwd()` |
-| `-d, --allowed-dir` | Extra directories for standard tools; does not add file-app roots | `[]` |
+| `-d, --allowed-dir` | Extra directories authorized for tools and, when enabled, file-app roots | `[]` |
 | `-r, --profile` | The active profile for skills (e.g., android-reverse) | `default` |
 | `--enable-lsp` | Enable LSP capabilities (disabled by default) | `false` |
 | `--docker` | Run inside a Docker container using this image | `undefined` |
@@ -271,8 +267,6 @@ It will securely download, configure, and reload the skill without you lifting a
 | `--rt, --reverse-token` | Security token for Reverse MCP | `undefined` |
 | `--rn, --reverse-name` | Server name for Reverse MCP | `undefined` |
 | `--extensions` | Comma-separated `files`, `terminal`, or both; apps/data dependencies are automatic | `[]` (all off) |
-| `--file-root` | Repeatable `id=path`; explicit file roots replace the default and apply only when files is enabled | `main=<working-dir>` |
-| `--shell` | Absolute executable PTY shell path | Valid absolute `$SHELL`, otherwise `/bin/bash` |
 | `--proxy` | HTTP(S) proxy for supported HTTP clients and reverse control/data HTTP requests | `undefined` |
 
 ### 🌐 Proxy Support (Corporate Networks)

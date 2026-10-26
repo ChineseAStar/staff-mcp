@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Report reverse control closure with fixed reasons, POST status/byte count/duration and bounded network error codes, without logging payloads, credentials or URLs. No retry/replay behavior changes.
+- Reuse workspace (`main`) and deduplicated allowed directories (`extra1`, `extra2`, …) for the optional file UI; explicit `-d` grants now appear there, with no automatic system-root authorization or separate Docker file-root mounts. Path, symlink, protected staging and write safety checks remain unchanged.
+- Remove `--file-root` / `ExtensionOptions.fileRoots` and `--shell` / `ExtensionOptions.shell`. PTY selects an executable absolute `$SHELL`, otherwise `/bin/bash`, preserving normal HOME and workspace cwd. Removed flags fail as unknown options; update launch configurations without a compatibility fallback.
+- Fix HTTP capacity internally at 64 sessions and remove MCP idle expiry, activity probes and `--http-max-sessions` / `--http-session-idle-ms` configuration. Pending startup and failed/pending cleanup still occupy capacity; DELETE, initialization failure, shutdown and data-session cleanup remain. Clients must close unused sessions. Child MCP limits/start/stop and reverse timeout defaults are unchanged.
+
 ## 2.0.1 — 2026-10-26
 
 - Resolve reverse data paths using the configured reverse origin, without requiring a public URL setting on chat-ai. Upgrade chat-ai and staff-mcp together; extension protocol versions remain v1.
