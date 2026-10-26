@@ -11,6 +11,7 @@ import {
     failDockerDataBootstrap,
 } from './data-stdio-docker.js';
 import type { ExtensionFeature } from './extensions/config.js';
+import { terminalStartupError } from './terminal/pty.js';
 
 const HANDLED_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 20_000;
@@ -299,22 +300,32 @@ export async function preflightDockerExtensions(
     if (!requested.length) return [];
 
     let reason: string | undefined;
+    let terminalReason:
+        | 'DOCKER_UNSUPPORTED_PLATFORM'
+        | 'DOCKER_UNSUPPORTED_NETWORK'
+        | 'DOCKER_LOCAL_DAEMON_REQUIRED'
+        | undefined;
     if (os.platform() !== 'linux') {
         reason = 'Docker extensions require a compatible Linux host package';
+        terminalReason = 'DOCKER_UNSUPPORTED_PLATFORM';
     } else if (requestedDataAuto) {
         if (unsupportedDataNetwork(additionalArgs)) {
             reason =
                 'Docker stdio data auto does not support host/container/none networking';
+            terminalReason = 'DOCKER_UNSUPPORTED_NETWORK';
         } else {
             try {
                 await assertLocalDockerDaemon('docker', []);
             } catch {
                 reason =
                     'Docker stdio data auto requires a verified local daemon; remote/TCP/SSH or unavailable contexts are unsupported';
+                terminalReason = 'DOCKER_LOCAL_DAEMON_REQUIRED';
             }
         }
     }
     if (reason) {
+        if (requested.includes('terminal') && terminalReason)
+            throw terminalStartupError(terminalReason);
         console.error(
             `[staff-mcp] Disabling requested Docker extensions (${requested.join(',')}): ${reason}. Basic MCP tools/control remain enabled.`,
         );

@@ -10,9 +10,11 @@ It provides secure file management, shell execution, LSP-powered code intelligen
 
 ## Compatibility and coordinated upgrades
 
+**Unreleased source changes:** the pinned PTY prebuild delivery, explicit terminal startup failures, reverse ping-response lane and new timing diagnostics below describe pending source behavior, not features already published in npm `staff-mcp@2.0.2`. The package version remains 2.0.2; see CHANGELOG Unreleased.
+
 **Breaking release:** reverse connections and optional extensions require a matching chat-ai host: the host must implement reverse v1 and the session-relative data paths described below. Upgrade the host, staff-mcp, descriptors and UI assets together.
 
-Standard stdio/Streamable HTTP tools, resources and prompts remain supported. Extensions are **all off by default**; unavailable or incompatible optional capabilities must not break an otherwise healthy standard MCP connection. The old reverse handshake itself is incompatible, even with extensions disabled: extension degradation cannot replace the paired reverse upgrade. There is no old-protocol compatibility mode, automatic transfer resumption or input replay after disconnect.
+Standard stdio/Streamable HTTP tools, resources and prompts remain supported. Extensions are **all off by default**; optional discovery/data negotiation failures preserve an otherwise healthy standard MCP connection. In the unreleased source, explicitly requesting terminal with unavailable platform/native/shell prerequisites fails startup instead of silently disabling it; files degradation is unchanged. The old reverse handshake itself is incompatible, even with extensions disabled: extension degradation cannot replace the paired reverse upgrade. There is no old-protocol compatibility mode, automatic transfer resumption or input replay after disconnect.
 
 No Chat8/schema9/format7/share protocol2 data migration is required.
 
@@ -26,7 +28,7 @@ See [CHANGELOG](CHANGELOG.md) for the release summary.
 
 Requires **Node.js 22.22.2 or newer**, including inside Docker images.
 
-Linux and Linux-host local Docker Engine are the primary full-extension environments, subject to the prerequisites below. Windows native standard MCP (stdio and HTTP) and Windows Docker standard MCP have been validated, not full extensions. Non-Linux Docker launchers disable optional extensions. **macOS has not been tested**; path translation is not a claim of platform support.
+Linux and Linux-host local Docker Engine are the primary full-extension environments, subject to the prerequisites below. Windows native standard MCP (stdio and HTTP) and Windows Docker standard MCP have been validated, not full extensions. In the unreleased source, non-Linux Docker launchers reject an explicit terminal request; files-only requests retain warning-and-disable behavior. **macOS has not been tested**; path translation is not a claim of platform support.
 
 Run staff-mcp 2.0.2 with an explicit package version:
 
@@ -34,14 +36,14 @@ Run staff-mcp 2.0.2 with an explicit package version:
 npx --yes staff-mcp@2.0.2 --working-dir /path/to/your/project
 ```
 
-For a source checkout of staff-mcp 2.0.2, install dependencies and build before using the absolute entrypoint in the examples:
+For a source checkout, install dependencies and build before using the absolute entrypoint in the examples (pending source changes are not yet in npm 2.0.2):
 
 ```bash
 npm ci
 npm run build
 ```
 
-Replace `/path/to/staff-mcp` with that checkout/build directory. Docker read-only mounts still require a compatible Node/native ABI/libc; in particular an optional PTY built for a different system is not guaranteed to work inside the image.
+Replace `/path/to/staff-mcp` with that checkout/build directory. Docker still read-only mounts the host package and `node_modules`, not an isolated container dependency installation. The unreleased source pins optional `node-pty` exactly to the official prerelease `1.2.0-beta.18`, which includes N-API prebuilds for Linux x64/arm64 with glibc >= 2.28. The runtime still needs system libraries such as `libstdc++` and `libgcc`. This addresses prebuilt delivery for normal installs, not arbitrary local build leftovers or architecture/libc/platform mismatches; N-API does not remove those limits. No user image is upgraded automatically; terminal support is not promised for musl/Alpine.
 
 ### 1. Standard Host Mode
 Run directly on your physical machine or virtual environment.
@@ -50,10 +52,10 @@ node /path/to/staff-mcp/dist/src/index.js --working-dir /path/to/your/project
 ```
 
 ### 2. Docker Transparent Proxy Mode (Cyber-Shell)
-Run staff-mcp inside a compatible Docker image while keeping standard MCP control connected to the host. The wrapper mounts the project and package; image startup, Node/native ABI/libc and mount permissions still apply. Linux host + local Docker Engine is the full-extension path. Non-Linux Docker launchers disable optional Apps/files/terminal extensions with a warning; Windows Docker standard MCP has been validated, while macOS is untested; base Docker connectivity still requires a reachable daemon and valid bind mounts.
+Run staff-mcp inside a compatible Docker image while keeping standard MCP control connected to the host. The wrapper mounts the project and package; image startup, Node/native ABI/libc and mount permissions still apply. Linux host + local Docker Engine is the full-extension path. In the unreleased source, non-Linux Docker launchers fail an explicit terminal request; files-only requests still warn and disable the optional extension; Windows Docker standard MCP has been validated, while macOS is untested; base Docker connectivity still requires a reachable daemon and valid bind mounts.
 
 ```bash
-# Debug a Node.js project inside a pure Alpine container
+# Standard MCP only, no terminal: debug inside an Alpine container
 node /path/to/staff-mcp/dist/src/index.js --docker node:22-alpine
 
 # Perform security analysis inside a custom reverse-engineering image
@@ -128,6 +130,8 @@ The authoritative custom protocol is `chat-ai/docs/protocol/README.md` at the co
 
 Reverse GETs `<base>/sse` with `Authorization: Bearer <token>` and `X-MCP-Server-Name`; an SSE endpoint event supplies the POST message URL. SSE message events contain ordinary MCP JSON-RPC, not a private envelope. Explicit HTTP and HTTPS are accepted; HTTP logs one plaintext warning per start and does not protect tokens or payloads. Use HTTPS on untrusted networks; HTTPS verifies CA and target identity without automatic downgrade. The configured base URL has no credentials, query or fragment. No WebSocket upgrade, gateway process, launcher or private host leg is required. SDK initialization, data-session readiness and current user authorization remain separate checks; short-lived connections do not reset exponential backoff.
 
+**Unreleased source:** only responses to recognized inbound standard MCP `ping` requests use a separate bounded POST send lane. All other POSTs remain FIFO; no request/input replay, protocol version change or extra flag is added, and timeouts are not extended. Slow-send diagnostics distinguish queue wait from POST elapsed time using metadata only, never tokens, URLs or bodies. The host also records App resource-read timing and byte-count metadata.
+
 Optional CLI timeouts (milliseconds, forwarded in Docker mode):
 
 - `--reverse-connect-timeout`: 15000; 0 disables only the SSE connection deadline.
@@ -141,7 +145,7 @@ The two reverse transport sources (`src/reverse/SseTransport.ts` and chat-ai's `
 
 ## 🛠️ Core Capabilities
 
-The runtime defaults below apply to staff-mcp 2.0.2.
+The runtime defaults below remain unchanged; terminal delivery/startup and reverse diagnostic changes marked above are unreleased source behavior, not npm 2.0.2 features.
 
 Extensions are **all off by default**. Use `--extensions files`, `--extensions terminal`, or `--extensions files,terminal`; apps/data dependencies and terminal's streams v1 manifest are added automatically, not selected separately. Disabled features advertise no manifest entry and register no corresponding UI Resource or business handler. With both off there is no extension manifest or application data listener/session; ordinary MCP tools and non-UI Resources remain. HTTP mode still opens its normal MCP listener.
 
@@ -169,7 +173,7 @@ New Apps reusing supported RPC/Resources, files or streams need only their own d
 
 ### Human terminal (explicit extension opt-in)
 
-`--extensions terminal` needs Linux, a loadable optional `node-pty`, an executable shell and negotiated streams/data v1 with a usable duplex dataSession over local stdio/Docker, direct HTTP or reverse. If Linux/native PTY/shell requirements are unavailable, staff warns on stderr and omits terminal/streams from discovery; standard MCP and an available files extension remain usable. The default disabled state never loads the native PTY. A valid absolute executable `$SHELL` is used, otherwise `/bin/bash`; if that is unavailable, terminal is disabled with a warning, without another shell fallback. The interactive shell honors normal startup files and inherits staff's environment, including normal `HOME`, except exact internal control keys documented in the [terminal contract](docs/terminal.md). chat-ai uses the existing current-chat MCP grant and same-origin browser requests, with no extra terminal permission switch or high-risk confirmation. Terminal follows the host site's HTTP/HTTPS deployment policy without a terminal-specific TLS gate or origin allowlist. HTTPS is recommended for the entire site to protect login sessions, tool calls and terminal traffic; allowing HTTP does not encrypt those requests.
+`--extensions terminal` needs Linux, a loadable optional `node-pty`, an executable shell and negotiated streams/data v1 with a usable duplex dataSession over local stdio/Docker, direct HTTP or reverse. In the unreleased source, unavailable Linux/native PTY/shell prerequisites make an explicit terminal request fail startup with an error, including when files is also requested; terminal is not silently omitted. The default disabled state never loads the native PTY. A valid absolute executable `$SHELL` is used, otherwise `/bin/bash`; if that is unavailable, the explicit terminal request fails startup, without another shell fallback. The interactive shell honors normal startup files and inherits staff's environment, including normal `HOME`, except exact internal control keys documented in the [terminal contract](docs/terminal.md). chat-ai uses the existing current-chat MCP grant and same-origin browser requests, with no extra terminal permission switch or high-risk confirmation. Terminal follows the host site's HTTP/HTTPS deployment policy without a terminal-specific TLS gate or origin allowlist. HTTPS is recommended for the entire site to protect login sessions, tool calls and terminal traffic; allowing HTTP does not encrypt those requests.
 
 The PTY starts at the staff workspace (`main`) by default, independently of file roots, and runs as the staff process uid: its starting root/cwd is **not a sandbox** and shell filesystem/network effects are not restricted by file-tool path checks. Terminal bytes never enter model context or chat history. Each stream uses one same-origin browser-to-chat-ai WebSocket at `/api/mcp/app-stream` (`chat-app-stream-v1`) for input, output, resize, presence and real xterm consumption ACKs. The backend remains the shared HTTP dataSession. Browser presence refreshes every 10 seconds with a separate 120-second host deadline; the host generic stream module schedules remote renewal from each returned lease (staff defaults to 30 seconds). Opening the Shell App starts one PTY without another open button or confirmation. Exit, PTY failure or disconnection leaves the app shell for manual reconnect; ordinary hidden views keep read/ACK/presence but reject new input and resize. Actual page exit, close, revocation or expiry cleans up; descendant cleanup is best effort, not rollback.
 
@@ -183,7 +187,7 @@ Never pollute your host machine again. By simply appending `--docker <image>`, `
 - Automatically translates Windows/Mac paths to Linux container paths.
 - Names containers after their launch context (e.g. `staff-mcp-myproj-3000-a1b2c3` = workspace `myproj`, HTTP port `3000`, random suffix `a1b2c3`), so multiple sessions are easy to tell apart in `docker ps`.
 - Mounts a dedicated Docker tools cache (`<staff-global>/tools/docker`) at `/opt/.staff/tools`, alongside the existing skills/profiles mounts. A matching non-root uid can write tools without creating directories in the image, and container-installed tools do not overwrite the host tool cache. Existing mount permissions still apply; no automatic chown or chmod.
-- Allows `--docker-args` for compatible hardware/environment settings (e.g., ADB USB debugging or GPUs). Unsupported stdio data topologies disable optional extensions, not the MCP control connection; overrides of managed bootstrap/mapping and container lifecycle controls remain errors.
+- Allows `--docker-args` for compatible hardware/environment settings (e.g., ADB USB debugging or GPUs). Unsupported stdio data topologies fail an explicit terminal request in the unreleased source; files-only requests retain optional-extension degradation; overrides of managed bootstrap/mapping and container lifecycle controls remain errors.
 
 For **supported Linux local Docker stdio with at least one effective extension enabled**, the existing wrapper reserves a private container port published to a random **127.0.0.1** host port and inspects only its own cidfile container. A read-only mount of a host **0600 metadata file** supplies the reachable base URL without rewriting stdin/stdout or asking users to discover container IPs. The application listener remains lazy until `data/v1/configure`. With all extensions off, `dataAuto` is false: no application-data port publication, metadata mount or bootstrap is created. Ordinary workspace/package mounts are unchanged. Non-Docker stdio also has no application listener before configure. HTTP/reverse add no such publication; disabled extensions create no dataSession, while HTTP retains its MCP listener.
 
@@ -191,11 +195,11 @@ Docker files reuse only the existing workspace (`/workspace`, root `main`) and a
 
 Docker reuses the allowed-directory mounts for both tools and the file UI. A host filesystem root such as `/` is mapped to `/opt/staff-allowed/root-N` because Docker forbids mounting onto container `/`; the inner `-d` and protected staging aliases use the mapped path.
 
-This application-data path requires a local daemon and the host client/wrapper sharing reachable loopback, with compatible bridge/port publication. Non-Linux Docker launchers and incompatible stdio data topologies (remote/TCP/SSH daemon or host/container networking) warn and omit optional extensions; they retain ordinary MCP control/tools when Docker itself can start. HTTP/reverse do not need this stdio mapping. A failed data bootstrap or unavailable data configuration must not terminate an otherwise healthy MCP connection: data-dependent Apps stay unavailable, with no legacy byte fallback or operation replay. Loopback publication is not isolation from hostile containers. Metadata stays 0600 and must be readable by the container uid; workspace/global-directory permissions and PTY ABI/libc still apply. No automatic chown, permission relaxation or browser-user identity switch is performed. Normal exit/signals still clean the owned container, publication and metadata; no cross-restart resource recovery is promised.
+This application-data path requires a local daemon and the host client/wrapper sharing reachable loopback, with compatible bridge/port publication. In the unreleased source, non-Linux Docker launchers and incompatible stdio data topologies (remote/TCP/SSH daemon or host/container networking) fail an explicit terminal request. Without terminal requested, files retains warning-and-disable degradation and ordinary MCP control/tools remain when Docker itself can start. HTTP/reverse do not need this stdio mapping. A failed data bootstrap or unavailable data configuration must not terminate an otherwise healthy MCP connection: data-dependent Apps stay unavailable, with no legacy byte fallback or operation replay. Loopback publication is not isolation from hostile containers. Metadata stays 0600 and must be readable by the container uid; workspace/global-directory permissions and PTY ABI/libc still apply. No automatic chown, permission relaxation or browser-user identity switch is performed. Normal exit/signals still clean the owned container, publication and metadata; no cross-restart resource recovery is promised.
 
-### Optional extensions do not define MCP connectivity
+### Optional negotiation failures versus explicit terminal startup errors
 
-Availability is determined separately for files, terminal and the per-connection data channel. A missing terminal runtime disables terminal only; an unavailable configured file root disables the optional file extension while preserving the standard workspace tools/resources. Unknown or incompatible extension versions do not enable their handlers or Apps. chat-ai keeps successfully initialized standard tools/resources/prompts if optional Apps discovery or data configuration fails. Warnings go to stderr, never stdio JSON-RPC stdout.
+Availability is determined separately for files, terminal and the per-connection data channel. In the unreleased source, a missing terminal runtime fails startup only when terminal is explicitly requested; with terminal disabled no native PTY is loaded. An unavailable configured file root still disables the optional file extension while preserving the standard workspace tools/resources. Unknown or incompatible extension versions do not enable their handlers or Apps. chat-ai keeps successfully initialized standard tools/resources/prompts if optional Apps discovery or data configuration fails. Warnings go to stderr, never stdio JSON-RPC stdout.
 
 This is not an authentication or lifecycle bypass: malformed CLI arguments, Docker launch failure, invalid credentials, and failed standard MCP transport/initialization remain errors. Workspace/global-mount access errors still fail the affected startup or file/tool operation; optional-extension degradation does not grant access or promise that every directory is prevalidated. Old/new incompatible reverse control protocols still require paired upgrades; optional capability degradation does not make those wire protocols compatible. No failed or uncertain file commit/tool/terminal input is automatically retried.
 

@@ -84,6 +84,9 @@ export async function startReverseServer(
                 options.connectTimeout,
                 options.heartbeat?.readTimeout,
             );
+            transport.ondiagnostic = (detail) => {
+                log.warn(`Slow control POST: ${JSON.stringify(detail)}`);
+            };
             active = transport;
             try {
                 server = serverFactory();

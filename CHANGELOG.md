@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Pin optional `node-pty` exactly to official prerelease `1.2.0-beta.18`, with Linux x64/arm64 N-API prebuilds for glibc >= 2.28. System libraries such as `libstdc++`/`libgcc` and an executable shell are still required; no user image upgrade or musl/Alpine terminal support is promised. Docker still mounts the host package/`node_modules`; normal-install prebuilt delivery does not eliminate build leftovers or platform mismatches.
+- Keep terminal off and native PTY unloaded by default. Explicit terminal requests now fail startup when platform/native/shell prerequisites are unavailable, including non-Linux Docker launchers and unsupported stdio Docker data topologies, rather than silently disabling terminal. Files degradation remains unchanged.
+- Send only responses to recognized standard MCP pings on a separate bounded POST lane; all other POSTs remain FIFO, with no replay, protocol version/flag change or timeout extension. Add queue-wait/POST-elapsed slow-send metadata diagnostics and host App resource-read timing/byte-count diagnostics, without tokens, URLs or bodies.
+- These are pending source changes; the package version remains 2.0.2 and published npm 2.0.2 is not claimed to include them.
+
 ## 2.0.2 — 2026-10-26
 
 - Report reverse control closure with fixed reasons, POST status/byte count/duration and bounded network error codes, without logging payloads, credentials or URLs. No retry/replay behavior changes.
