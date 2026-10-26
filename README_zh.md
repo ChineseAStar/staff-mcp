@@ -28,7 +28,7 @@
 
 Linux 与 Linux 宿主＋本地 Docker Engine 是主要完整扩展环境，仍须满足下述前提。Windows 原生标准 MCP（stdio、HTTP）与 Windows Docker 标准 MCP 已验证，不代表完整扩展支持。非 Linux Docker launcher 禁用可选扩展。**macOS 未实测**，路径转换能力不等于平台支持承诺。
 
-**2.0.1 当前是候选版本，尚未发布**。从 `master` 发版前请使用构建后的源码；正式发布后可指定版本运行：
+可指定版本运行 staff-mcp 2.0.1：
 
 ```bash
 npx --yes staff-mcp@2.0.1 --working-dir /path/to/your/project

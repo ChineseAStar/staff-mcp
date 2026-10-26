@@ -28,7 +28,7 @@ Requires **Node.js 22.22.2 or newer**, including inside Docker images.
 
 Linux and Linux-host local Docker Engine are the primary full-extension environments, subject to the prerequisites below. Windows native standard MCP (stdio and HTTP) and Windows Docker standard MCP have been validated, not full extensions. Non-Linux Docker launchers disable optional extensions. **macOS has not been tested**; path translation is not a claim of platform support.
 
-Version **2.0.1 is a release candidate, not yet published**. Use a built source checkout until it is released from `master`. After release, run the package with an explicit version:
+Run staff-mcp 2.0.1 with an explicit package version:
 
 ```bash
 npx --yes staff-mcp@2.0.1 --working-dir /path/to/your/project

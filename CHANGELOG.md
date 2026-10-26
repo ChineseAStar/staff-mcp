@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.1 (unreleased)
+## 2.0.1 — 2026-10-26
 
 - Resolve reverse data paths using the configured reverse origin, without requiring a public URL setting on chat-ai. Upgrade chat-ai and staff-mcp together; extension protocol versions remain v1.
 - Preserve exact-session, same-origin, ticket and binding checks; HTTP/stdio endpoint behavior is unchanged.
