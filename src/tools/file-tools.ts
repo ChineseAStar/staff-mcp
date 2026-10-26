@@ -11,6 +11,8 @@ import { CHARACTER_LIMIT, SEARCH_MAX_COLUMNS, SEARCH_MAX_MATCHES, SEARCH_EXEC_MA
 import { ensureRipgrep } from "../utils/tool-utils.js";
 import { enqueueFileWrite, atomicWriteFile } from "../utils/file-write-queue.js";
 
+import type { FileCore } from "../file-manager/file-core.js";
+
 const execAsync = promisify(exec);
 
 /**
@@ -37,7 +39,13 @@ function truncateContext(context: string, colNum: number, maxLen: number): strin
 /**
  * Registers file-related tools using the latest registerTool API.
  */
-export function registerFileTools(server: McpServer, security: SecurityManager) {
+export function registerFileTools(server: McpServer, security: SecurityManager, core?: FileCore) {
+  const validateRead = async (filePath: string) => {
+    const full = security.resolveAndValidatePath(filePath);
+    return core ? core.validateToolPath(full) : full;
+  };
+  const controlledWrite = <T>(full: string, task: () => Promise<T>, missingParents = false) =>
+    enqueueFileWrite(full, () => core ? core.toolWrite(full, task, missingParents) : task());
   // read_file
   server.registerTool(
     "read_file",
@@ -54,7 +62,7 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
     },
     async ({ path: filePath, startLine, endLine }) => {
       try {
-        const validatedPath = security.resolveAndValidatePath(filePath);
+        const validatedPath = await validateRead(filePath);
 
         // --- Image detection: magic-byte sniff + extension fallback ---
         const ext = path.extname(validatedPath).toLowerCase();
@@ -163,7 +171,7 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
 
         // Serialize the whole read-modify-write cycle per file: concurrent
         // edits must not read-then-overwrite each other (see file-write-queue).
-        return await enqueueFileWrite(validatedPath, async () => {
+        return await controlledWrite(validatedPath, async () => {
           const content = await fs.readFile(validatedPath, "utf-8");
 
           let oldText = originalOldText;
@@ -223,10 +231,10 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
     async ({ path: filePath, content }) => {
       try {
         const validatedPath = security.resolveAndValidatePath(filePath);
-        await enqueueFileWrite(validatedPath, async () => {
+        await controlledWrite(validatedPath, async () => {
           await fs.mkdir(path.dirname(validatedPath), { recursive: true });
           await atomicWriteFile(validatedPath, content);
-        });
+        }, true);
 
         return {
           content: [{ type: "text", text: `Successfully wrote file: ${filePath}` }],
@@ -254,7 +262,7 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
         const validatedPath = security.resolveAndValidatePath(filePath);
         // Queue with writes to the same path so a delete cannot interleave
         // with an in-flight read-modify-write.
-        await enqueueFileWrite(validatedPath, async () => {
+        await controlledWrite(validatedPath, async () => {
           await fs.unlink(validatedPath);
         });
 
@@ -281,7 +289,7 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
     },
     async ({ path: dirPath }) => {
       try {
-        const validatedPath = security.resolveAndValidatePath(dirPath);
+        const validatedPath = await validateRead(dirPath);
         const entries = await fs.readdir(validatedPath, { withFileTypes: true });
 
         const result = entries.map(entry => {
@@ -341,6 +349,7 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
             
             args.push("--glob"); args.push("!.git/**");
             args.push("--glob"); args.push("!node_modules/**");
+            if (core) { args.push("--glob", "!.staff/file-manager/**", "--glob", "!.staff-write-*/**", "--glob", "!.staff-write-*"); }
             
             if (includeGlob) {
                args.push("--glob");
@@ -396,6 +405,7 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
                 if (wholeWord) countArgs.push("--word-regexp");
                 countArgs.push("--glob", "!.git/**");
                 countArgs.push("--glob", "!node_modules/**");
+                if (core) countArgs.push("--glob", "!.staff/file-manager/**", "--glob", "!.staff-write-*/**", "--glob", "!.staff-write-*");
                 if (includeGlob) { countArgs.push("--glob", includeGlob); }
                 if (excludeGlob) { countArgs.push("--glob", `!${excludeGlob}`); }
                 if (noIgnore) { countArgs.push("--no-ignore"); }
@@ -486,6 +496,7 @@ export function registerFileTools(server: McpServer, security: SecurityManager) 
             const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
 
             if (entry.name === "node_modules" || entry.name === ".git") continue;
+            if (core && (relPath === ".staff/file-manager" || entry.name.startsWith(".staff-write-"))) continue;
 
             if (entry.isDirectory()) {
               await searchRecursively(fullPath);

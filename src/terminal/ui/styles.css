@@ -1,0 +1,209 @@
+:root {
+    color-scheme: light;
+    --bg-primary: #ffffff;
+    --bg-secondary: #f7f8fa;
+    --text-primary: #111827;
+    --text-secondary: #4b5563;
+    --text-muted: #9ca3af;
+    --color-primary: #3b82f6;
+    --color-primary-hover: #2563eb;
+    --color-border: #e8eaef;
+    --interactive-hover: #eef0f4;
+    --app-radius-control: 10px;
+    --font-family:
+        system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-code-family:
+        ui-monospace, 'SFMono-Regular', 'Cascadia Code', monospace;
+    font-family: var(--font-family);
+    color: var(--text-primary);
+    background: var(--bg-primary);
+}
+:root.dark {
+    color-scheme: dark;
+    --bg-primary: #101316;
+    --bg-secondary: #15181d;
+    --text-primary: #f1f2f4;
+    --text-secondary: #c6cbd3;
+    --text-muted: #6e7480;
+    --color-border: #262b32;
+    --interactive-hover: #1c2026;
+}
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+html,
+body,
+#root {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+}
+body {
+    -webkit-font-smoothing: antialiased;
+}
+.terminal-app {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    font-size: 12px;
+}
+.toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 48px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--bg-secondary);
+}
+.location {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    flex: 1;
+    gap: 9px;
+}
+.terminal-mark {
+    color: var(--text-muted);
+    font: 600 15px var(--font-code-family);
+}
+.shell {
+    max-width: 180px;
+    flex-shrink: 1;
+    font-weight: 600;
+}
+.path {
+    flex: 1;
+    color: var(--text-secondary);
+    font-family: var(--font-code-family);
+}
+.shell,
+.path {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+    /* Reserve the button height before opening so the first fit stays valid. */
+    min-height: 32px;
+}
+button {
+    border: 1px solid var(--color-border);
+    border-radius: var(--app-radius-control);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    min-height: 32px;
+    padding: 5px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+button:hover:not(:disabled) {
+    background: var(--interactive-hover);
+}
+button.primary {
+    background: var(--color-primary);
+    color: white;
+    border-color: transparent;
+}
+button.primary:hover:not(:disabled) {
+    background: var(--color-primary-hover);
+}
+button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+button:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+}
+.status {
+    display: flex;
+    align-items: baseline;
+    flex-shrink: 0;
+    gap: 7px;
+    padding: 7px 12px;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+    line-height: 1.5;
+}
+.status[data-error] {
+    color: #b42332;
+}
+.dark .status[data-error] {
+    color: #ff9da6;
+}
+.status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    flex-shrink: 0;
+}
+.status-dot.connected {
+    background: #2a9d61;
+}
+.terminal-surface {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    margin: 0 10px 4px;
+    overflow: hidden;
+}
+.terminal-surface .xterm {
+    height: 100%;
+}
+.terminal-surface .xterm-viewport {
+    overscroll-behavior: contain;
+}
+footer {
+    flex-shrink: 0;
+    padding: 5px 12px 8px;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+@media (max-width: 480px) {
+    .toolbar {
+        align-items: flex-start;
+        gap: 8px;
+        padding: 8px;
+    }
+    .location {
+        flex-wrap: wrap;
+        gap: 4px 7px;
+    }
+    .shell {
+        max-width: 120px;
+    }
+    .path {
+        flex-basis: 100%;
+        font-size: 11px;
+    }
+    .actions {
+        gap: 4px;
+        min-height: 36px;
+    }
+    button {
+        min-height: 36px;
+        padding: 6px 8px;
+    }
+    .status {
+        padding: 7px 8px;
+    }
+    .terminal-surface {
+        margin-inline: 6px;
+    }
+    footer {
+        padding-inline: 8px;
+        font-size: 10px;
+    }
+}

@@ -1,7 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { spawn, ChildProcess } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
+import { setTimeout as delay } from "node:timers/promises";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { ListToolsResultSchema, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -13,13 +16,109 @@ interface McpSession {
   args: string[];
   process: ChildProcess | null;
   client: Client;
-  transport: any;
-  status: "starting" | "ready" | "error" | "exited";
+  transport: Transport | null;
+  status: "starting" | "ready" | "stopping" | "error" | "exited";
+  startController: AbortController;
+  cleanup?: Promise<string[]>;
   startedAt: Date;
   error?: string;
 }
 
 const sessions = new Map<string, McpSession>();
+
+function assertStarting(session: McpSession): void {
+  if (sessions.get(session.sessionId) !== session || session.startController.signal.aborted || session.status !== "starting") {
+    throw new Error(session.error || `MCP session '${session.sessionId}' startup was cancelled.`);
+  }
+}
+
+function watchClientClose(session: McpSession): void {
+  const client = session.client;
+  client.onclose = () => {
+    if (sessions.get(session.sessionId) === session && session.client === client && session.status === "ready") {
+      session.status = "exited";
+      session.error = "MCP connection closed.";
+    }
+  };
+}
+
+async function closeSessionConnection(session: McpSession): Promise<string[]> {
+  const errors: string[] = [];
+  try {
+    await session.client.close();
+  } catch (err) {
+    errors.push(`Client close failed: ${String(err)}`);
+    // The transport may still own resources when Client.close rejects (including stdio children).
+    try {
+      await session.transport?.close();
+    } catch (transportError) {
+      errors.push(`Transport close failed: ${String(transportError)}`);
+    }
+  }
+  return errors;
+}
+
+async function cleanupSession(session: McpSession): Promise<string[]> {
+  if (session.cleanup) return session.cleanup;
+  const cleanup = (async () => {
+    const errors = await closeSessionConnection(session);
+    // HTTP children are detached: kill the owned group, even if the leader has exited.
+    // This must not be skipped when closing the MCP connection fails.
+    if (session.process?.pid) {
+      try {
+        process.kill(process.platform === "win32" ? session.process.pid : -session.process.pid, "SIGKILL");
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
+          errors.push(`HTTP process cleanup failed: ${String(err)}`);
+        }
+      }
+    }
+    return errors;
+  })();
+  session.cleanup = cleanup;
+  try {
+    return await cleanup;
+  } finally {
+    // A connect which completes after stop needs another close, not a cached cleanup result.
+    if (session.cleanup === cleanup) session.cleanup = undefined;
+  }
+}
+
+async function connectSession(session: McpSession): Promise<void> {
+  assertStarting(session);
+  const { signal } = session.startController;
+  let onAbort!: () => void;
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  // SDK connect's signal only covers protocol requests, not transport.start().
+  // SSE start can remain pending even after EventSource.close(), so stop must
+  // settle our wait without waiting for the underlying connect to finish.
+  const connecting = (async () => {
+    try {
+      await session.client.connect(session.transport!, { signal });
+    } finally {
+      if (signal.aborted) {
+        // A late success or failure may leave resources after the earlier stop.
+        // Wait for any in-flight close, then perform a fresh cleanup of this
+        // session only; never reinsert it or touch a replacement with the same ID.
+        const previousErrors = session.cleanup ? await session.cleanup : [];
+        const errors = [...previousErrors, ...(await cleanupSession(session))];
+        if (sessions.get(session.sessionId) === session && errors.length > 0) {
+          session.status = "error";
+          session.error = [session.error, ...errors].filter(Boolean).join("; ");
+        }
+      }
+    }
+  })();
+  try {
+    // Promise.race also observes a late rejection, avoiding unhandled failures.
+    await Promise.race([connecting, cancelled]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
 
 /**
  * Ensures a session exists and is ready
@@ -27,12 +126,47 @@ const sessions = new Map<string, McpSession>();
 function getReadySession(sessionId: string): McpSession {
   const session = sessions.get(sessionId);
   if (!session) {
-    throw new Error(`MCP Session '${sessionId}' not found. Please use 'list_mcp_sessions' to check active sessions or start it first.`);
+    throw new Error(`MCP Session '${sessionId}' not found. Please use 'manage_mcp_session' with action: "list" to check active sessions or start it first.`);
   }
   if (session.status !== "ready") {
     throw new Error(`MCP Session '${sessionId}' is not in ready state. Current status: ${session.status}. It might have failed to start or crashed. Check logs if necessary.`);
   }
   return session;
+}
+
+async function listAllTools(client: Client, signal?: AbortSignal): Promise<Tool[]> {
+  const tools: Tool[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+
+  do {
+    // Use the protocol request rather than Client.listTools(): SDK v1 replaces
+    // its output-schema/task metadata cache on *every page*, which can affect
+    // concurrent tool calls while discovery is still in progress.
+    const page = await client.request(
+      { method: "tools/list", ...(cursor === undefined ? {} : { params: { cursor } }) },
+      ListToolsResultSchema,
+      { signal },
+    );
+    for (const tool of page.tools) {
+      tools.push(tool);
+    }
+    cursor = page.nextCursor;
+    if (cursor !== undefined) {
+      if (seenCursors.has(cursor)) {
+        throw new Error(`Cannot retrieve a complete tool list: repeated pagination cursor '${cursor}'.`);
+      }
+      seenCursors.add(cursor);
+    }
+  } while (cursor !== undefined);
+
+  // SDK v1's listTools() ordinarily installs per-tool output validators and
+  // task metadata, but only for its last page. Install the complete snapshot
+  // once after a successful traversal. Do not clear metadata on partial reads.
+  // This SDK method is private in TypeScript; keep the compatibility access
+  // centralized until the SDK exposes a public full-list metadata API.
+  (client as unknown as { cacheToolMetadata(tools: Tool[]): void }).cacheToolMetadata(tools);
+  return tools;
 }
 
 export function registerMcpClientTools(server: McpServer, options: { maxSessions: number } = { maxSessions: 5 }): void {
@@ -100,73 +234,92 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
           };
         }
 
+        if (effectiveTransport === "http" && !effectivePort) {
+          return { content: [{ type: "text", text: `port is required when transportType is 'http'` }], isError: true };
+        }
+
+        const session: McpSession = {
+          sessionId, command, args, process: null,
+          client: new Client({ name: "staff-mcp-proxy", version: STAFF_MCP_VERSION }, { capabilities: {} }),
+          transport: null, status: "starting", startedAt: new Date(),
+          startController: new AbortController(),
+        };
+        // Reserve both the ID and quota before spawning or yielding, for every transport.
+        sessions.set(sessionId, session);
+        watchClientClose(session);
+
         try {
-          const client = new Client({ name: "staff-mcp-proxy", version: STAFF_MCP_VERSION }, { capabilities: {} });
-          let transport: any;
-          let sessionProcess: ChildProcess | null = null;
-
+          const mergedEnv = { ...process.env, ...env } as Record<string, string>;
           if (effectiveTransport === "http") {
-              if (!effectivePort) {
-                  return { content: [{ type: "text", text: `port is required when transportType is 'http'` }], isError: true };
-              }
-              const mergedEnv = { ...process.env, ...env } as Record<string, string>;
-              sessionProcess = spawn(command, args, { stdio: 'ignore', detached: true, env: mergedEnv });
-              sessionProcess.unref();
-              
-              // Wait for server to boot up
-              await new Promise(resolve => setTimeout(resolve, 3000));
-              
-              let connected = false;
-              let lastErr: any;
-              
-              // 1. Try streamable-http first
+            const child = spawn(command, args, { stdio: "ignore", detached: true, env: mergedEnv });
+            session.process = child;
+            child.unref();
+            child.once("error", (err) => {
+              if (sessions.get(sessionId) !== session || session.startController.signal.aborted) return;
+              session.status = "error";
+              session.error = `HTTP process failed: ${err.message}`;
+              session.startController.abort(err);
+            });
+            child.once("exit", (code, signal) => {
+              if (sessions.get(sessionId) !== session || session.startController.signal.aborted) return;
+              session.status = "exited";
+              session.error = `HTTP process exited (code: ${code}, signal: ${signal}).`;
+              session.startController.abort(new Error(session.error));
+              // Do not let the HTTP client reconnect after its owned child exits.
+              void closeSessionConnection(session).then((errors) => {
+                if (sessions.get(sessionId) === session && errors.length > 0) {
+                  session.status = "error";
+                  session.error += ` ${errors.join("; ")}`;
+                }
+              });
+            });
+
+            await delay(3000, undefined, { signal: session.startController.signal });
+            assertStarting(session);
+            session.transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${effectivePort}/mcp`));
+            try {
+              await connectSession(session);
+            } catch (err) {
+              assertStarting(session);
+              const errors = await closeSessionConnection(session);
+              assertStarting(session);
+              if (errors.length > 0) throw new Error(errors.join("; "));
+              // Use a fresh client: callbacks from a failed HTTP candidate must not close the SSE connection.
+              session.client = new Client({ name: "staff-mcp-proxy", version: STAFF_MCP_VERSION }, { capabilities: {} });
+              watchClientClose(session);
+              session.transport = new SSEClientTransport(new URL(`http://127.0.0.1:${effectivePort}/sse`));
               try {
-                  transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${effectivePort}/mcp`));
-                  await client.connect(transport);
-                  connected = true;
-              } catch (e) {
-                  lastErr = e;
-                  // 2. Fallback to sse
-                  try {
-                      // Note: We might need to close the first transport before retrying, but SDK connect typically handles it.
-                      transport = new SSEClientTransport(new URL(`http://127.0.0.1:${effectivePort}/sse`));
-                      await client.connect(transport);
-                      connected = true;
-                  } catch (e2) {
-                      lastErr = e2;
-                  }
+                await connectSession(session);
+              } catch (sseError) {
+                throw new Error(`Failed to connect using 'http' transport (tried streamable-http and sse on port ${effectivePort}): ${String(sseError)} (streamable-http: ${String(err)})`);
               }
-
-              if (!connected) {
-                  if (sessionProcess.pid) {
-                      try { process.kill(sessionProcess.pid, 'SIGKILL'); } catch(e) {}
-                  }
-                  throw new Error(`Failed to connect using 'http' transport (tried streamable-http and sse on port ${effectivePort}): ${lastErr?.message || 'Unknown error'}`);
-              }
-
-              sessions.set(sessionId, {
-                sessionId, command, args, process: sessionProcess, client, transport,
-                status: "ready", startedAt: new Date()
-              });
-              
-              return { content: [{ type: "text", text: `Successfully started and connected to MCP session '${sessionId}' via http transport. (Active sessions: ${sessions.size}/${options.maxSessions})\nUse 'explore_mcp_session' to discover available tools.` }] };
+            }
           } else {
-              const mergedEnv = { ...process.env, ...env } as Record<string, string>;
-              transport = new StdioClientTransport({ command, args, env: mergedEnv });
-              
-              sessions.set(sessionId, {
-                sessionId, command, args, process: sessionProcess, client, transport,
-                status: "starting", startedAt: new Date()
-              });
-
-              await client.connect(transport);
-              sessions.get(sessionId)!.status = "ready";
-
-              return { content: [{ type: "text", text: `Successfully started and connected to MCP session '${sessionId}' via stdio. (Active sessions: ${sessions.size}/${options.maxSessions})\nUse 'explore_mcp_session' to discover available tools.` }] };
+            session.transport = new StdioClientTransport({ command, args, env: mergedEnv });
+            await connectSession(session);
           }
-        } catch (err: any) {
-          sessions.delete(sessionId);
-          return { content: [{ type: "text", text: `Failed to start MCP session '${sessionId}': ${err.message}` }], isError: true };
+
+          assertStarting(session);
+          if (!session.client.transport) throw new Error("MCP connection closed during startup.");
+          session.status = "ready";
+          const via = effectiveTransport === "http" ? "http transport" : "stdio";
+          return { content: [{ type: "text", text: `Successfully started and connected to MCP session '${sessionId}' via ${via}. (Active sessions: ${sessions.size}/${options.maxSessions})\nUse 'explore_mcp_session' to discover available tools.` }] };
+        } catch (err) {
+          const failure = session.error || String(err);
+          session.startController.abort(err);
+          // Finish any in-flight stop cleanup before reporting the failed start.
+          // connectSession also cleans up if the underlying connect settles later.
+          const previousErrors = session.cleanup ? await session.cleanup : [];
+          const errors = [...previousErrors, ...(await cleanupSession(session))];
+          if (sessions.get(sessionId) === session) {
+            if (errors.length > 0) {
+              session.status = "error";
+              session.error = `${failure}; ${errors.join("; ")}`;
+            } else {
+              sessions.delete(sessionId);
+            }
+          }
+          return { content: [{ type: "text", text: `Failed to start MCP session '${sessionId}': ${failure}${errors.length > 0 ? `; ${errors.join("; ")}` : ""}` }], isError: true };
         }
       } else if (action === "stop") {
         if (!sessionId) {
@@ -176,13 +329,19 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
         if (!session) {
           return { content: [{ type: "text", text: `Session '${sessionId}' not found.` }] };
         }
-        try {
-          await session.client.close();
-          if (session.process && session.process.pid) {
-             try { process.kill(session.process.pid, 'SIGKILL'); } catch(e) {}
+        session.status = "stopping";
+        session.startController.abort(new Error(`MCP session '${sessionId}' was stopped.`));
+        const errors = await cleanupSession(session);
+        if (sessions.get(sessionId) === session) {
+          if (errors.length > 0) {
+            session.status = "error";
+            session.error = errors.join("; ");
+          } else {
+            sessions.delete(sessionId);
           }
-        } catch (e) {} finally {
-          sessions.delete(sessionId);
+        }
+        if (errors.length > 0) {
+          return { content: [{ type: "text", text: `Failed to fully stop MCP session '${sessionId}': ${errors.join("; ")}. Session retained for cleanup retry.` }], isError: true };
         }
         return { content: [{ type: "text", text: `Session '${sessionId}' successfully stopped. (Active sessions: ${sessions.size}/${options.maxSessions})` }] };
       } else if (action === "list") {
@@ -191,7 +350,7 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
         }
         let output = `Active MCP Sessions (${sessions.size}/${options.maxSessions}):\n`;
         for (const [id, session] of sessions.entries()) {
-          output += `- [${id}] Status: ${session.status}, Command: ${session.command} ${session.args.join(" ")}\n`;
+          output += `- [${id}] Status: ${session.status}, Command: ${session.command} ${session.args.join(" ")}${session.error ? `, Error: ${session.error}` : ""}\n`;
         }
         return { content: [{ type: "text", text: output }] };
       }
@@ -209,19 +368,27 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
         toolName: z.string().optional().describe("Optional. The specific tool name to get detailed argument schema for"),
       }).strict(),
     },
-    async ({ sessionId, toolName }) => {
+    async ({ sessionId, toolName }, extra) => {
       try {
         const session = getReadySession(sessionId);
         
-        // Fetch tools list first (always needed)
-        const toolsResult = await session.client.listTools();
+        // Fetch every page before displaying or searching the current tools.
+        const tools = await listAllTools(session.client, extra?.signal);
 
         if (toolName) {
           // --- Detailed view: full schema for ONE specific tool ---
-          const tool = toolsResult.tools.find((t) => t.name === toolName);
+          const tool = tools.find((t) => t.name === toolName);
           if (!tool) {
+            let output = `Tool '${toolName}' not found in session '${sessionId}'.\nAvailable Tools (${tools.length} total):\n`;
+            if (tools.length === 0) {
+              output += "No available tools.\n";
+            }
+            for (const availableTool of tools) {
+              output += `\n[${availableTool.name}]\n${availableTool.description ?? "N/A"}\n`;
+            }
+            output += `\nTip: Use explore_mcp_session with "toolName" to inspect a specific tool's full schema.`;
             return {
-              content: [{ type: "text", text: `Tool '${toolName}' not found in session '${sessionId}'. Available tools: ${toolsResult.tools.map(t => t.name).join(", ")}` }],
+              content: [{ type: "text", text: output }],
               isError: true
             };
           }
@@ -259,8 +426,8 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
           }
           
           // List ALL tools with compact info (NO full schemas - those are expensive)
-          output += `Available Tools (${toolsResult.tools.length} total):\n`;
-          for (const t of toolsResult.tools) {
+          output += `Available Tools (${tools.length} total):\n`;
+          for (const t of tools) {
             const props = t.inputSchema?.properties;
             const argCount = props ? Object.keys(props).length : 0;
             const required = t.inputSchema?.required || [];
@@ -277,19 +444,6 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
             } else {
               output += `\n    Args: none`;
             }
-          }
-          
-          // Prompts (if server provides them)
-          try {
-            const promptsResult = await session.client.listPrompts();
-            if (promptsResult?.prompts?.length > 0) {
-              output += `\n\nAvailable Prompts (${promptsResult.prompts.length} total):\n`;
-              for (const p of promptsResult.prompts) {
-                output += `  [${p.name}] ${p.description || ""}\n`;
-              }
-            }
-          } catch (e) {
-            // MCP server may not support prompts
           }
           
           output += `\n💡 Tip: Use explore_mcp_session with "toolName" to inspect a specific tool's full schema before calling it.`;
@@ -319,12 +473,12 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
       try {
         const session = getReadySession(sessionId);
 
-        // Pre-fetch tools to validate the tool exists and fetch its schema
-        const toolsResult = await session.client.listTools();
-        const tool = toolsResult.tools.find(t => t.name === method);
+        // Validate against the complete list, including tools on later pages.
+        const tools = await listAllTools(session.client, extra?.signal);
+        const tool = tools.find(t => t.name === method);
         
         if (!tool) {
-          const availableTools = toolsResult.tools.map(t => t.name).join(", ");
+          const availableTools = tools.map(t => t.name).join(", ");
           return {
             content: [{ type: "text", text: `Tool '${method}' not found in session '${sessionId}'. Available tools: ${availableTools}` }],
             isError: true
@@ -344,6 +498,8 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
         }
 
         try {
+          // The default CallToolResultSchema validates this boundary. The SDK's
+          // return type also includes the legacy toolResult schema even when unused.
           const result = await session.client.callTool({
             name: method,
             arguments: parsedParams,
@@ -351,24 +507,10 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
             timeout: 3600000, // 1 hour, aligned with the chat-ai MCP client. Nested long-running
             // tools manage their own lifecycle; a short cap here orphans their work.
             signal: extra?.signal, // propagate caller cancellation (e.g. user stop) to the nested call
-          });
+          }) as CallToolResult;
 
-          // Process and return result
-          let isErrorResult = false;
-          let contentArray: Array<{type: "text", text: string}> = [];
-          
-          if (result && Array.isArray(result.content)) {
-              contentArray = result.content.map((c: any) => {
-                  if (c.type === "text" && "text" in c) {
-                      return { type: "text" as const, text: String(c.text) };
-                  } else {
-                      return { type: "text" as const, text: `[${c.type} content omitted or unsupported]` };
-                  }
-              });
-          }
-          
-          if (result && (result as any).isError) {
-              isErrorResult = true;
+          const contentArray = [...result.content];
+          if (result.isError) {
               // If it's an error (likely validation or execution), append the schema to help the model correct itself
               contentArray.push({
                 type: "text",
@@ -376,7 +518,7 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
               });
           }
 
-          return { content: contentArray, isError: isErrorResult };
+          return { ...result, content: contentArray, isError: result.isError ?? false };
         } catch (callError: any) {
            // Provide detailed error with schema
            const errorMessage = `Failed to call tool '${method}': ${callError.message}\n\nPlease check the required parameters for this tool. Here is the tool schema:\n${JSON.stringify(tool.inputSchema, null, 2)}`;

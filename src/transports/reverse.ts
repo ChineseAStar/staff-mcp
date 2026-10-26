@@ -1,113 +1,198 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Logger, ReconnectOptions, SSEHeartbeatOptions } from "mcp-reverse";
-import { ReverseMCPClient } from "mcp-reverse/client";
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { performance } from 'node:perf_hooks';
+import { setTimeout as delay } from 'node:timers/promises';
+import { configureExtensionData } from '../extensions/runtime.js';
+import { HttpDataSession } from '../data/HttpDataSession.js';
+import { ReverseSseTransport } from '../reverse/SseTransport.js';
+import {
+    createReverseHttp,
+    reverseProxyUrl,
+    validateReverseUrl,
+} from '../reverse/http.js';
+
+export { reverseProxyUrl, validateReverseUrl } from '../reverse/http.js';
 
 export interface ReverseServerOptions {
-    /** Timeout for establishing each SSE connection. 0 disables the timeout. */
+    proxy?: string;
     connectTimeout?: number;
-    /** Deadline for MCP initialization after the SSE transport opens. */
     initializationTimeout?: number;
-    /** Override liveness monitoring without changing tool execution timeouts. */
-    heartbeat?: SSEHeartbeatOptions;
-    /** Override the automatic reconnect policy. */
-    reconnect?: ReconnectOptions;
-    /** Override reverse transport and lifecycle logging. */
-    logger?: Logger;
-}
-
-const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
-
-/**
- * Render an error with its full `cause` chain. Network failures from
- * Node's fetch surface as a bare "fetch failed" message; the actionable
- * reason (ECONNREFUSED, certificate errors, ...) lives in error.cause.
- */
-function formatErrorChain(error: unknown): string {
-    const messages: string[] = [];
-    let current: unknown = error;
-    while (current instanceof Error) {
-        messages.push(current.message);
-        current = (current as { cause?: unknown }).cause;
-    }
-    return messages.length > 0 ? messages.join("; cause: ") : String(error);
-}
-
-function createReverseLogger(): Logger {
-    const debugEnabled = process.env.STAFF_MCP_REVERSE_DEBUG === "1";
-    return {
-        debug: debugEnabled
-            ? (message, ...args) => console.error(`[staff-mcp][reverse][debug] ${message}`, ...args)
-            : () => {},
-        info: (message, ...args) => console.error(`[staff-mcp][reverse][info] ${message}`, ...args),
-        warn: (message, ...args) => console.error(`[staff-mcp][reverse][warn] ${message}`, ...args),
-        error: (message, ...args) => console.error(`[staff-mcp][reverse][error] ${message}`, ...args),
+    heartbeat?: { readTimeout?: number };
+    reconnect?: {
+        enabled?: boolean;
+        initialDelay?: number;
+        maxDelay?: number;
+        stableConnectionMs?: number;
+    };
+    logger?: {
+        info(message: string): void;
+        warn(message: string): void;
+        error(message: string): void;
     };
 }
+export interface ReverseController {
+    stop(): Promise<void>;
+    readonly closed: Promise<void>;
+}
 
-/**
- * Start a reverse MCP connection to a public gateway.
- *
- * The ReverseMCPClient owns transport lifecycle, reconnection, and MCP
- * protocol re-binding. start() launches the connection loop; readiness is
- * reported asynchronously through the connected event/log.
- */
+/** New HTTP pool, SDK transport and data resources per attempt; never replay requests or input. */
 export async function startReverseServer(
-    server: McpServer,
-    url: string,
+    serverFactory: () => McpServer,
+    value: string,
     token: string,
     name: string,
-    options: ReverseServerOptions = {}
-): Promise<ReverseMCPClient> {
-    const reconnectEnabled = options.reconnect?.enabled !== false;
-    const reverseLogger = options.logger ?? createReverseLogger();
-    const client = await ReverseMCPClient.createSSE(
-        server,
-        {
-            url,
-            serverName: name,
-            authToken: token,
-            connectTimeout: options.connectTimeout ?? DEFAULT_CONNECT_TIMEOUT_MS,
-            initializationTimeout: options.initializationTimeout,
-            heartbeat: options.heartbeat,
-            reconnect: {
-                initialDelay: 1000,
-                maxDelay: 30000,
-                multiplier: 2,
-                maxRetries: 0, // 0 = infinite
-                ...options.reconnect,
-            },
-        },
-        reverseLogger
-    );
-
-    client.on("connected", () => {
-        reverseLogger.info(`MCP initialized and ready as "${name}"`);
-    });
-
-    client.on("disconnected", () => {
-        reverseLogger.warn(
-            reconnectEnabled
-                ? "Gateway connection closed; automatic reconnect is enabled"
-                : "Gateway connection closed; automatic reconnect is disabled"
+    options: ReverseServerOptions = {},
+): Promise<ReverseController> {
+    const url = validateReverseUrl(value);
+    const proxy = reverseProxyUrl(url, options.proxy);
+    if (!token || /\s/.test(token) || token.length > 4096)
+        throw new Error('Invalid reverse token.');
+    if (!name || name.length > 512 || /[\u0000-\u001f\u007f]/.test(name))
+        throw new Error('Invalid reverse server name.');
+    const log = options.logger ?? {
+        info: (message: string) =>
+            console.error(`[staff-mcp][reverse] ${message}`),
+        warn: (message: string) =>
+            console.error(`[staff-mcp][reverse] ${message}`),
+        error: (message: string) =>
+            console.error(`[staff-mcp][reverse] ${message}`),
+    };
+    if (url.protocol === 'http:')
+        log.warn(
+            'Explicit HTTP reverse control uses plaintext; use HTTPS on untrusted networks.',
         );
-    });
+    const abort = new AbortController();
+    let active: ReverseSseTransport | undefined;
 
-    client.on("reconnecting", (completedAttempts: number) => {
-        if (completedAttempts === 0) {
-            reverseLogger.info("Reconnect cycle started");
-        } else {
-            reverseLogger.info(`Connection lost after ${completedAttempts} attempt(s) in the current retry cycle`);
+    let backoff = options.reconnect?.initialDelay ?? 1000;
+    const run = async () => {
+        while (!abort.signal.aborted) {
+            let server: McpServer | undefined;
+            let initializedAt: number | undefined;
+            let previousInitialized: (() => void) | undefined;
+            let initializationTimer: NodeJS.Timeout | undefined;
+            const attempt = new AbortController();
+            const stopped = () => {
+                attempt.abort();
+                void active?.close();
+            };
+            abort.signal.addEventListener('abort', stopped, { once: true });
+            const http = createReverseHttp(url, proxy, attempt.signal);
+            const transport = new ReverseSseTransport(
+                url,
+                { Authorization: `Bearer ${token}`, 'X-MCP-Server-Name': name },
+                http.fetch,
+                options.connectTimeout,
+                options.heartbeat?.readTimeout,
+            );
+            active = transport;
+            try {
+                server = serverFactory();
+                configureExtensionData(
+                    server,
+                    (binding, accept, signal, origin, supportsPurpose) => {
+                        if (origin !== undefined)
+                            throw new Error(
+                                'Reverse data does not accept an advertised origin',
+                            );
+                        const sessionId = transport.sessionId;
+                        if (
+                            !sessionId ||
+                            attempt.signal.aborted ||
+                            signal.aborted
+                        )
+                            throw new Error(
+                                'Reverse data control session unavailable',
+                            );
+                        const expected = new URL(url.href);
+                        expected.pathname =
+                            url.pathname.replace(/\/$/, '') +
+                            '/data/' +
+                            sessionId;
+                        return {
+                            session: new HttpDataSession({
+                                role: 'remote',
+                                binding,
+                                accept,
+                                supportsPurpose,
+                                fetch: http.fetch,
+                                validateEndpoint: (endpoint) => {
+                                    if (
+                                        endpoint.origin !== expected.origin ||
+                                        endpoint.pathname !==
+                                            expected.pathname ||
+                                        endpoint.username ||
+                                        endpoint.password ||
+                                        endpoint.search ||
+                                        endpoint.hash
+                                    )
+                                        throw new Error(
+                                            'Reverse data endpoint rejected',
+                                        );
+                                },
+                            }),
+                        };
+                    },
+                );
+                previousInitialized = server.server.oninitialized;
+                server.server.oninitialized = () => {
+                    previousInitialized?.();
+                    initializedAt = performance.now();
+                    clearTimeout(initializationTimer);
+                    log.info('MCP initialized on a new SSE session.');
+                };
+                await server.connect(transport);
+                // start() completes once the SSE endpoint is admitted; only then start the initialization deadline.
+                if (initializedAt === undefined) {
+                    initializationTimer = setTimeout(() => {
+                        void transport.close();
+                    }, options.initializationTimeout ?? 15000);
+                    initializationTimer.unref();
+                }
+                await transport.closed;
+            } catch {
+                if (!abort.signal.aborted)
+                    log.warn(
+                        'Connection attempt ended before readiness or control connection closed.',
+                    );
+            } finally {
+                clearTimeout(initializationTimer);
+                await transport.close().catch(() => {});
+                attempt.abort();
+                await http.close().catch(() => {});
+                abort.signal.removeEventListener('abort', stopped);
+                await server?.close();
+                if (server) server.server.oninitialized = previousInitialized;
+                active = undefined;
+            }
+            if (abort.signal.aborted || options.reconnect?.enabled === false)
+                break;
+            if (
+                initializedAt !== undefined &&
+                performance.now() - initializedAt >=
+                    (options.reconnect?.stableConnectionMs ?? 30000)
+            )
+                backoff = options.reconnect?.initialDelay ?? 1000;
+            log.info(
+                'Disconnected; retrying with a new session and no replay.',
+            );
+            try {
+                await delay(backoff, undefined, { signal: abort.signal });
+            } catch {
+                break;
+            }
+            backoff = Math.min(
+                options.reconnect?.maxDelay ?? 30000,
+                backoff * 2,
+            );
         }
-    });
-
-    client.on("error", (error: Error) => {
-        reverseLogger.error(`Transport reported an error: ${formatErrorChain(error)}`);
-    });
-
-    client.on("failed", (error: Error) => {
-        reverseLogger.error(`Reconnect budget exhausted: ${formatErrorChain(error)}`);
-    });
-
-    await client.start();
-    return client;
+    };
+    const closed = run();
+    return {
+        closed,
+        stop: async () => {
+            abort.abort();
+            await active?.close().catch(() => {});
+            await closed;
+        },
+    };
 }
