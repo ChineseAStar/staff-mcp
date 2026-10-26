@@ -8,16 +8,36 @@
 
 ---
 
+## 2.0.0 兼容性与升级
+
+**破坏性升级：** reverse 连接与可选扩展需要配套 chat-ai 宿主：commit `66461d16090456d6f1fee21ce19088dceefd6658` 或后续兼容版本。宿主、staff-mcp、描述符和 UI 资源须配套升级。
+
+标准 stdio/Streamable HTTP 的工具、资源和提示词继续保留。扩展**默认全关**；可选能力不可用或版本不匹配，不得拖垮健康的标准 MCP 连接。旧 reverse 握手本身不兼容，即使关闭所有扩展也不能解决，必须配套升级两端；不提供旧协议兼容模式，也不在断线后自动续传或重放输入。
+
+无需进行 Chat8/schema9/format7/分享 protocol2 数据迁移。
+
+1. 结束在途操作，备份正常配置；无需转换数据。
+2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.0，并协调 reverse 连接的停机窗口。
+3. 重新连接 MCP、重新打开 App，仅显式启用需要的扩展。
+
+发布摘要见 [CHANGELOG](CHANGELOG.md)。
+
 ## 🚀 快速开始
 
-需要 **Node.js 22.22.2 或更高版本**。
+需要 **Node.js 22.22.2 或更高版本**，Docker 镜像内也须满足。
 
-**分支状态：** 本文描述未合并、未发布的 `feat/mcp-file-manager` 源码合同，不构成生产部署或全量验收声明。两端应使用匹配且经核实的本分支构建，不要用 registry 的“最新版”替代本分支协议。
+Linux 与 Linux 宿主＋本地 Docker Engine 是主要完整扩展环境，仍须满足下述前提。Windows 原生标准 MCP（stdio、HTTP）与 Windows Docker 标准 MCP 已验证，不代表完整扩展支持。非 Linux Docker launcher 禁用可选扩展。**macOS 未实测**，路径转换能力不等于平台支持承诺。
 
-在本分支 checkout 中先安装依赖并构建，再使用以下示例中的绝对入口：
+可指定版本直接运行已发布包：
 
 ```bash
-npm install
+npx --yes staff-mcp@2.0.0 --working-dir /path/to/your/project
+```
+
+从 staff-mcp 2.0.0 源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口：
+
+```bash
+npm ci
 npm run build
 ```
 
@@ -30,7 +50,7 @@ node /path/to/staff-mcp/dist/src/index.js --working-dir /path/to/your/project
 ```
 
 ### 2. Docker 透明代理模式 (Cyber-Shell)
-在兼容的 Docker 镜像中运行 staff-mcp，保留宿主的标准 MCP 控制连接。wrapper 自动挂载项目和程序包；启动仍取决于镜像、Node/native ABI/libc 和挂载权限。Linux 宿主＋本地 Docker Engine 是完整扩展支持路径。Windows/macOS 的 Docker launcher 保留标准 MCP 连接和工具调用，请求的 Apps/files/terminal 扩展暂时警告后禁用；基础 Docker 连接仍要求 daemon 可达及 bind mount 路径有效。
+在兼容的 Docker 镜像中运行 staff-mcp，保留宿主的标准 MCP 控制连接。wrapper 自动挂载项目和程序包；启动仍取决于镜像、Node/native ABI/libc 和挂载权限。Linux 宿主＋本地 Docker Engine 是完整扩展支持路径。非 Linux Docker launcher 对请求的 Apps/files/terminal 扩展警告后禁用；Windows Docker 已验证基础 MCP，macOS 未实测；基础 Docker 连接仍要求 daemon 可达及 bind mount 路径有效。
 
 ```bash
 # 在一个纯净的 Alpine Node 容器里调试你的代码
@@ -97,7 +117,7 @@ token。这里使用服务端共享 token，不提供 OAuth 流程。
 
 ### Reverse v1 与协议边界
 
-自定义协议权威为 `chat-ai/docs/protocol/README.md`（匹配的 `feat/mcp-file-manager` checkout）。chat-ai、staff-mcp 及第三方可自行实现，无指定扩展 SDK。官方 MCP SDK、标准 stdio/Streamable HTTP 和 tools/resources/prompts 不变；无旧 FTE 分块或 WS 回退，不迁移聊天数据库。
+自定义协议权威为上述兼容宿主版本的 `chat-ai/docs/protocol/README.md`。chat-ai、staff-mcp 及第三方可自行实现，无指定扩展 SDK。官方 MCP SDK、标准 stdio/Streamable HTTP 和 tools/resources/prompts 不变；无旧 FTE 分块或 WS 回退，不迁移聊天数据库。
 
 Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Server-Name`；SSE endpoint 事件给出 POST 回送地址，message 事件直接承载 MCP JSON-RPC，无私有信封。源码接受显式 HTTP/HTTPS；HTTP 每次启动警告一次明文风险，不能保护 token 或正文，不可信网络应使用 HTTPS。HTTPS 验证证书与目标身份，不自动降级；配置基址无凭据、query、fragment。无需 WebSocket upgrade、独立 gateway/launcher 或私有 host leg。SDK 初始化、数据面就绪和用户授权是不同事实；短暂连接不重置指数退避。
 
@@ -142,7 +162,7 @@ node /path/to/staff-mcp/dist/src/index.js --extensions files --file-root system=
 
 PTY 默认从 staff 工作区 `main` 启动，与文件 roots 独立，以 staff 的 OS uid 运行；root/cwd 只是起始目录，**不是 sandbox**；shell 的文件和网络副作用不受文件工具路径检查约束。终端输入输出不进入模型或聊天历史。每个 stream 的浏览器到 chat-ai 交互使用一条同源 WebSocket（`/api/mcp/app-stream`，`chat-app-stream-v1`），输入、输出、resize、presence 和真实 xterm 消费 ACK 共用连接，后端仍是公共 HTTP dataSession。浏览器每 10 秒刷新独立的 120 秒 host presence；host 通用 streams 模块按远端每次返回的租约调度续租，staff 默认 30 秒。点击 Shell App 自动启动一次 PTY，无额外打开按钮或确认；退出、PTY 错误或真实断链后保留 App 壳供手动重连。普通隐藏视图保留 read/ACK/presence，但拒绝新输入和 resize；真正离页、关闭、撤权或到期才清理，后代回收 best effort，不撤销副作用。
 
-当前描述符和 iframe 资源保持 **bridge v1**：文件显式 `scope:"workspace"`，终端 `scope:"chat"`。文件声明 `capabilities.files:{version:1,upload:true,download:true}`；终端声明 `capabilities.streams:{version:1,purpose,create,renew,status,close,commands}` 并要求 streams/data v1。终端业务 RPC 和 data purpose 保持 `cc.qqxing/terminal`，不再声明 terminal manifest；host 仅校验通用信封，PTY 参数与 metadata 由 staff handler/UI adapter 解释。开发阶段直接修改合同、不保留中间实现兼容分支；宿主、描述符与 UI 资源须配套部署并重新打开 App。files-v1 新增自己的 `stat` 用于 force 复制版本检查，不再依赖文件管理 App；chat-ai 的本地字节预算不代表远端业务上限。详见[宿主/桥接边界](docs/file-manager.md#host-boundary-and-bridge-v1)。
+当前描述符和 iframe 资源保持 **bridge v1**：文件显式 `scope:"workspace"`，终端 `scope:"chat"`。文件声明 `capabilities.files:{version:1,upload:true,download:true}`；终端声明 `capabilities.streams:{version:1,purpose,create,renew,status,close,commands}` 并要求 streams/data v1。终端业务 RPC 和 data purpose 保持 `cc.qqxing/terminal`，不再声明 terminal manifest；host 仅校验通用信封，PTY 参数与 metadata 由 staff handler/UI adapter 解释。2.0.0 扩展合同要求宿主、描述符与 UI 资源配套部署并重新打开 App，不提供旧实现兼容路径。files-v1 新增自己的 `stat` 用于 force 复制版本检查，不再依赖文件管理 App；chat-ai 的本地字节预算不代表远端业务上限。详见[宿主/桥接边界](docs/file-manager.md#host-boundary-and-bridge-v1)。
 
 背压退出可能输出不完整，当前源码在远端 `status.error` 返回 `{code:"OUTPUT_INCOMPLETE",message:string}`，宿主通用流结果则以可选 `incomplete:boolean` 与 `error:{code:string,message:string}` 接续异常 close/status 并提供 UI 警告；通用布尔字段为 incomplete，App 本地终端 adapter 再映射完整性警告，不是远端 status 字段；这些字段用于检测和诊断可能的丢失，不恢复缺失字节，也不保证无损输出，即使收到 EOF 或 exit code 0。见[终端 UI 合同（英文）](docs/terminal.md)。
 
@@ -158,7 +178,7 @@ PTY 默认从 staff 工作区 `main` 启动，与文件 roots 独立，以 staff
 
 files 启用时，每个显式 Docker `--file-root id=path` 将对应宿主目录 bind-mount 到 `/opt/staff-file-roots/<id>`。因此 `--file-root system=/` 是明确把宿主根挂到该目录，而不只是指容器根；这是主动扩大文件可见范围，不是自动获得宿主权限或全平台支持承诺，仍受实际 OS/容器权限与 Docker 拓扑约束。默认文件 `main` 与终端 cwd 沿用现有工作区挂载。
 
-此应用数据路径要求本地 daemon、宿主客户端与 wrapper 共享可达 loopback、兼容 bridge/端口发布。Windows/macOS Docker launcher，以及 stdio 的 remote/TCP/SSH daemon 或 host/container 网络等不匹配情况，会明确警告并禁用可选扩展；只要 Docker 自身能正常启动，基础 MCP 连接和工具仍保留。HTTP/reverse 不需要这项 stdio 映射。数据 bootstrap 或 configure 失败不得终止健康的 MCP 控制连接，依赖数据通道的 App 不开放，不回退旧字节协议、不重放操作。loopback 发布不是敌对容器隔离保证；metadata 保持 0600，容器 uid 须能读取，工作区/全局目录权限与 PTY ABI/libc 仍须匹配。不自动 chown、放宽权限或切换浏览器用户身份。正常退出及信号仍清理自有容器、映射和 metadata，不提供跨重启资源恢复。
+此应用数据路径要求本地 daemon、宿主客户端与 wrapper 共享可达 loopback、兼容 bridge/端口发布。非 Linux Docker launcher，以及 stdio 的 remote/TCP/SSH daemon 或 host/container 网络等不匹配情况，会明确警告并禁用可选扩展；只要 Docker 自身能正常启动，基础 MCP 连接和工具仍保留。HTTP/reverse 不需要这项 stdio 映射。数据 bootstrap 或 configure 失败不得终止健康的 MCP 控制连接，依赖数据通道的 App 不开放，不回退旧字节协议、不重放操作。loopback 发布不是敌对容器隔离保证；metadata 保持 0600，容器 uid 须能读取，工作区/全局目录权限与 PTY ABI/libc 仍须匹配。不自动 chown、放宽权限或切换浏览器用户身份。正常退出及信号仍清理自有容器、映射和 metadata，不提供跨重启资源恢复。
 
 ### 扩展可用性不决定 MCP 是否可连接
 
