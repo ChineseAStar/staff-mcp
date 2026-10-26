@@ -5,6 +5,7 @@ import * as fs from "fs/promises";
 import * as fsSync from "fs";
 import * as path from "path";
 import { SecurityManager } from "../security.js";
+import { registerServerCleanup } from "../utils/server-lifecycle.js";
 
 export function registerSkillTools(server: McpServer, workingDir: string, security: SecurityManager, profile: string = "default") {
   let skillsMap = SkillManager.loadSkills(workingDir, profile);
@@ -201,15 +202,32 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
   // 全局目录和内置目录的 skill 变动需重启才能生效
   const projectSkillDir = path.join(workingDir, ".staff", "skills");
 
+  let watcher: fsSync.FSWatcher | null = null;
   let watchTimeout: NodeJS.Timeout | null = null;
+  let disposed = false;
   const DEBOUNCE_MS = 1000; // 1秒防抖
 
+  registerServerCleanup(server, () => {
+    if (disposed) return;
+    disposed = true;
+    if (watchTimeout) {
+      clearTimeout(watchTimeout);
+      watchTimeout = null;
+    }
+    const activeWatcher = watcher;
+    watcher = null;
+    activeWatcher?.close();
+  });
+
   const handleWatchEvent = (event: string, filename: string | null) => {
+    if (disposed) return;
     if (watchTimeout) {
       clearTimeout(watchTimeout);
     }
     
     watchTimeout = setTimeout(() => {
+      watchTimeout = null;
+      if (disposed) return;
       try {
         skillsMap = SkillManager.loadSkills(workingDir, profile);
         refreshPrompts();
@@ -220,14 +238,17 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
   };
 
   const startWatcher = () => {
+    if (disposed) return;
     if (!fsSync.existsSync(projectSkillDir)) {
       fsSync.mkdirSync(projectSkillDir, { recursive: true });
       console.log(`[SkillTools] Created project skill dir: ${projectSkillDir}`);
     }
     try {
-      const watcher = fsSync.watch(projectSkillDir, { recursive: true }, handleWatchEvent);
+      watcher = fsSync.watch(projectSkillDir, { recursive: true }, handleWatchEvent);
       console.log(`[SkillTools] Watching project skill dir: ${projectSkillDir}`);
       watcher.on("close", () => {
+        watcher = null;
+        if (disposed) return;
         console.log(`[SkillTools] Watch closed, re-establishing on: ${projectSkillDir}`);
         startWatcher();
       });

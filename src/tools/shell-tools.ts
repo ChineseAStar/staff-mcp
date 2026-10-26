@@ -440,7 +440,7 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
     "execute_command",
     {
       description:
-        "Execute a shell command in a specified directory (sandboxed). Single entry point for ALL command execution: quick commands, builds, tests, and long-running processes (dev servers, watchers). If the command finishes within the timeout, returns its exit code and output. If it is still running when the timeout elapses, the process is NOT killed — it keeps running in the background and the call returns a task ID plus recent output; follow up with manage_background_task (actions: logs/stop/list).",
+        "Execute a shell command with the staff host/container process permissions. The starting cwd is validated, but this is not an OS sandbox; shell filesystem and network effects are not restricted by file-tool path checks. Single entry point for ALL command execution: quick commands, builds, tests, and long-running processes (dev servers, watchers). If the command finishes within the timeout, returns its exit code and output. If it is still running when the timeout elapses, the process is NOT killed — it keeps running in the background and the call returns a task ID plus recent output; follow up with manage_background_task (actions: logs/stop/list).",
       inputSchema: z.object({
         command: z.string().describe("The shell command to execute."),
         cwd: z.string().optional().describe("Directory to execute command from (must be allowed). Defaults to the workspace root."),

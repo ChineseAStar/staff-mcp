@@ -14,11 +14,29 @@ jobs:
     permissions:
       contents: read
       id-token: write          # Required for OIDC trusted publishing
+    env:
+      NODE_OPTIONS: --max-old-space-size=2048
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify release commit is on master
+        run: |
+          git fetch --no-tags origin refs/heads/master:refs/remotes/origin/master
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/master
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
-      - run: npm install
+      - name: Verify release version
+        run: |
+          node --input-type=commonjs -e '
+            const assert = require("node:assert/strict");
+            const pkg = require("./package.json");
+            const lock = require("./package-lock.json");
+            assert.equal(process.env.GITHUB_REF_NAME, `v${pkg.version}`);
+            assert.equal(lock.version, pkg.version);
+            assert.equal(lock.packages[""].version, pkg.version);
+          '
+      - run: npm ci
       - run: npm publish --provenance --access public

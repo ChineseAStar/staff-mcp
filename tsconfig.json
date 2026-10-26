@@ -12,6 +12,14 @@
     "declaration": true,
     "sourceMap": true
   },
-  "include": ["src/**/*", "tests/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "src/**/*",
+    "tests/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/file-manager/ui",
+    "src/terminal/ui"
+  ]
 }
