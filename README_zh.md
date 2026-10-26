@@ -10,16 +10,16 @@
 
 ## 兼容性与配套升级
 
-**源码待发布变更：** 下文精确锁定的 PTY 预编译交付、显式 terminal 启动失败、reverse ping 响应 lane 与新增耗时诊断描述的是待发布源码行为，不表示 npm `staff-mcp@2.0.2` 已包含。包版本仍为 2.0.2，见 CHANGELOG Unreleased。
+**2.0.3 版本：** 交付 Linux PTY 预编译产物、明确报告终端启动失败，并避免 reverse 大回复阻塞心跳。配套将 chat-ai 升级至提交 `352bdb931bff38b5693dd386cd7584220571fd6b` 或其后继版本，以同时获得 App 窗口生命周期及关闭按钮修复。
 
 **破坏性升级：** reverse 连接与可选扩展需要配套 chat-ai 宿主：宿主须实现 reverse v1 与下文的会话相对数据路径合同。宿主、staff-mcp、描述符和 UI 资源须配套升级。
 
-标准 stdio/Streamable HTTP 的工具、资源和提示词继续保留。扩展**默认全关**；可选发现或 data 协商失败仍保留健康的标准 MCP 连接。待发布源码中，显式请求 terminal 但平台/native/shell 前提不可用时启动失败，不再静默禁用；files 原降级行为不变。旧 reverse 握手本身不兼容，即使关闭所有扩展也不能解决，必须配套升级两端；不提供旧协议兼容模式，也不在断线后自动续传或重放输入。
+标准 stdio/Streamable HTTP 的工具、资源和提示词继续保留。扩展**默认全关**；可选发现或 data 协商失败仍保留健康的标准 MCP 连接。显式请求 terminal 但平台/native/shell 前提不可用时启动失败，不再静默禁用；files 原降级行为不变。旧 reverse 握手本身不兼容，即使关闭所有扩展也不能解决，必须配套升级两端；不提供旧协议兼容模式，也不在断线后自动续传或重放输入。
 
 无需进行 Chat8/schema9/format7/分享 protocol2 数据迁移。
 
 1. 结束在途操作，备份正常配置；无需转换数据。
-2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.2，并协调 reverse 连接的停机窗口。
+2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.3，并协调 reverse 连接的停机窗口。
 3. 重新连接 MCP、重新打开 App，仅显式启用需要的扩展。
 
 发布摘要见 [CHANGELOG](CHANGELOG.md)。
@@ -28,22 +28,22 @@
 
 需要 **Node.js 22.22.2 或更高版本**，Docker 镜像内也须满足。
 
-Linux 与 Linux 宿主＋本地 Docker Engine 是主要完整扩展环境，仍须满足下述前提。Windows 原生标准 MCP（stdio、HTTP）与 Windows Docker 标准 MCP 已验证，不代表完整扩展支持。待发布源码中，非 Linux Docker launcher 对显式 terminal 请求报错；仅 files 仍警告并禁用。**macOS 未实测**，路径转换能力不等于平台支持承诺。
+Linux 与 Linux 宿主＋本地 Docker Engine 是主要完整扩展环境，仍须满足下述前提。Windows 原生标准 MCP（stdio、HTTP）与 Windows Docker 标准 MCP 已验证，不代表完整扩展支持。非 Linux Docker launcher 对显式 terminal 请求报错；仅 files 仍警告并禁用。**macOS 未实测**，路径转换能力不等于平台支持承诺。
 
-可指定版本运行 staff-mcp 2.0.2：
+可指定版本运行 staff-mcp 2.0.3：
 
 ```bash
-npx --yes staff-mcp@2.0.2 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.0.3 --working-dir /path/to/your/project
 ```
 
-从源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口（待发布源码变更尚未包含于 npm 2.0.2）：
+从源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口：
 
 ```bash
 npm ci
 npm run build
 ```
 
-将 `/path/to/staff-mcp` 替换为实际构建目录。Docker 仍只读挂载宿主程序包及 `node_modules`，并非容器依赖完全隔离。待发布源码将 optional `node-pty` 精确锁定为官方预发布版 `1.2.0-beta.18`，内含 Linux x64/arm64、glibc >= 2.28 的 N-API 预编译；运行时仍需要系统 `libstdc++`、`libgcc` 等库。本次解决正常安装的预编译交付，不消除本地构建残留或架构/libc/平台不匹配限制，N-API 也不消除这些限制。不自动升级用户镜像，不承诺 musl/Alpine 的 terminal 支持。
+将 `/path/to/staff-mcp` 替换为实际构建目录。Docker 仍只读挂载宿主程序包及 `node_modules`，并非容器依赖完全隔离。2.0.3 将 optional `node-pty` 精确锁定为官方预发布版 `1.2.0-beta.18`，内含 Linux x64/arm64、glibc >= 2.28 的 N-API 预编译；运行时仍需要系统 `libstdc++`、`libgcc` 等库。本次解决正常安装的预编译交付，不消除本地构建残留或架构/libc/平台不匹配限制，N-API 也不消除这些限制。不自动升级用户镜像，不承诺 musl/Alpine 的 terminal 支持。
 
 ### 1. 标准宿主机模式
 直接在物理机或虚拟环境中运行。
@@ -52,7 +52,7 @@ node /path/to/staff-mcp/dist/src/index.js --working-dir /path/to/your/project
 ```
 
 ### 2. Docker 透明代理模式 (Cyber-Shell)
-在兼容的 Docker 镜像中运行 staff-mcp，保留宿主的标准 MCP 控制连接。wrapper 自动挂载项目和程序包；启动仍取决于镜像、Node/native ABI/libc 和挂载权限。Linux 宿主＋本地 Docker Engine 是完整扩展支持路径。待发布源码中，非 Linux Docker launcher 对显式 terminal 请求启动报错，仅 files 仍警告并禁用；Windows Docker 已验证基础 MCP，macOS 未实测；基础 Docker 连接仍要求 daemon 可达及 bind mount 路径有效。
+在兼容的 Docker 镜像中运行 staff-mcp，保留宿主的标准 MCP 控制连接。wrapper 自动挂载项目和程序包；启动仍取决于镜像、Node/native ABI/libc 和挂载权限。Linux 宿主＋本地 Docker Engine 是完整扩展支持路径。非 Linux Docker launcher 对显式 terminal 请求启动报错，仅 files 仍警告并禁用；Windows Docker 已验证基础 MCP，macOS 未实测；基础 Docker 连接仍要求 daemon 可达及 bind mount 路径有效。
 
 ```bash
 # 仅普通 MCP，不启用 terminal：在 Alpine Node 容器内调试代码
@@ -125,7 +125,7 @@ token。这里使用服务端共享 token，不提供 OAuth 流程。
 
 Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Server-Name`；SSE endpoint 事件给出 POST 回送地址，message 事件直接承载 MCP JSON-RPC，无私有信封。源码接受显式 HTTP/HTTPS；HTTP 每次启动警告一次明文风险，不能保护 token 或正文，不可信网络应使用 HTTPS。HTTPS 验证证书与目标身份，不自动降级；配置基址无凭据、query、fragment。无需 WebSocket upgrade、独立 gateway/launcher 或私有 host leg。SDK 初始化、数据面就绪和用户授权是不同事实；短暂连接不重置指数退避。
 
-**待发布源码：** 仅已识别的入站标准 MCP `ping` 的响应使用独立有界 POST 发送 lane；其他 POST 仍 FIFO，不重放请求/输入、不改变协议版本或新增 flag，也不延长 timeout。慢发送诊断区分排队等待与 POST elapsed，仅记录 metadata，不记录 token、URL 或 body；host 另记录 App resource-read 时间与字节数元数据。
+仅已识别的入站标准 MCP `ping` 的响应使用独立有界 POST 发送 lane；其他 POST 仍 FIFO，不重放请求/输入、不改变协议版本或新增 flag，也不延长 timeout。慢发送诊断区分排队等待与 POST elapsed，仅记录 metadata，不记录 token、URL 或 body；host 另记录 App resource-read 时间与字节数元数据。
 
 可配置参数（毫秒，Docker 也透传）：
 
@@ -140,7 +140,7 @@ Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Ser
 
 ## 🛠️ 核心能力
 
-以下运行时默认值保持不变；上文标明的 terminal 交付/启动与 reverse 诊断变更属于待发布源码，不是 npm 2.0.2 已发布功能。
+以下运行时行为适用于 staff-mcp 2.0.3；扩展仍须显式启用。
 
 扩展**默认全关**。通过 `--extensions files`、`--extensions terminal` 或 `--extensions files,terminal` 启用；apps/data 依赖及 terminal 对 streams v1 的声明自动计算，无需单独选择。禁用能力不声明对应 manifest 条目、不注册对应 UI Resource 或业务 handler；全关时无扩展 manifest、应用数据 listener/session，普通 MCP 工具和非 UI Resources 保留。HTTP 模式仍监听原 MCP 服务。
 
@@ -168,7 +168,7 @@ files 启用时直接复用标准工具目录授权：`main` 是 `--working-dir`
 
 ### 人工终端（显式启用扩展）
 
-`--extensions terminal` 须 Linux、可加载的 optional `node-pty`、可执行 shell 及协商 streams/data v1 后可用的 duplex dataSession，可经本机 stdio/本地 Docker、direct HTTP 或 reverse 接入。待发布源码中，显式请求 terminal 但 Linux/native PTY/shell 不可用时明确报错并启动失败，即使同时请求 files 也不静默移除 terminal。默认关闭时不加载原生 PTY。自动使用有效的绝对可执行 `$SHELL`，否则使用 `/bin/bash`；若仍不可用，显式 terminal 请求启动失败，不再尝试其他 shell。交互 shell 读取正常启动配置，继承 staff 环境（包括正常的 `HOME`），仅排除[终端合同](docs/terminal.md)列出的精确内部控制 key。chat-ai 沿用当前会话 MCP 授权及同源浏览器请求，不另设终端权限开关或高危确认。终端遵循宿主站点统一的 HTTP/HTTPS 部署策略，不另设终端专用 TLS 门槛或 origin 白名单。建议全站使用 HTTPS 保护登录会话、工具调用及终端流量；允许 HTTP 不代表这些请求已加密。
+`--extensions terminal` 须 Linux、可加载的 optional `node-pty`、可执行 shell 及协商 streams/data v1 后可用的 duplex dataSession，可经本机 stdio/本地 Docker、direct HTTP 或 reverse 接入。显式请求 terminal 但 Linux/native PTY/shell 不可用时明确报错并启动失败，即使同时请求 files 也不静默移除 terminal。默认关闭时不加载原生 PTY。自动使用有效的绝对可执行 `$SHELL`，否则使用 `/bin/bash`；若仍不可用，显式 terminal 请求启动失败，不再尝试其他 shell。交互 shell 读取正常启动配置，继承 staff 环境（包括正常的 `HOME`），仅排除[终端合同](docs/terminal.md)列出的精确内部控制 key。chat-ai 沿用当前会话 MCP 授权及同源浏览器请求，不另设终端权限开关或高危确认。终端遵循宿主站点统一的 HTTP/HTTPS 部署策略，不另设终端专用 TLS 门槛或 origin 白名单。建议全站使用 HTTPS 保护登录会话、工具调用及终端流量；允许 HTTP 不代表这些请求已加密。
 
 PTY 默认从 staff 工作区 `main` 启动，与文件 roots 独立，以 staff 的 OS uid 运行；root/cwd 只是起始目录，**不是 sandbox**；shell 的文件和网络副作用不受文件工具路径检查约束。终端输入输出不进入模型或聊天历史。每个 stream 的浏览器到 chat-ai 交互使用一条同源 WebSocket（`/api/mcp/app-stream`，`chat-app-stream-v1`），输入、输出、resize、presence 和真实 xterm 消费 ACK 共用连接，后端仍是公共 HTTP dataSession。浏览器每 10 秒刷新独立的 120 秒 host presence；host 通用 streams 模块按远端每次返回的租约调度续租，staff 默认 30 秒。点击 Shell App 自动启动一次 PTY，无额外打开按钮或确认；退出、PTY 错误或真实断链后保留 App 壳供手动重连。普通隐藏视图保留 read/ACK/presence，但拒绝新输入和 resize；真正离页、关闭、撤权或到期才清理，后代回收 best effort，不撤销副作用。
 
@@ -182,7 +182,7 @@ PTY 默认从 staff 工作区 `main` 启动，与文件 roots 独立，以 staff
 - 自动处理 Windows/Mac 与 Linux 容器之间的路径转换问题。
 - 容器名自带启动上下文（例如 `staff-mcp-myproj-3000-a1b2c3` = 工作区 `myproj`、HTTP 端口 `3000`、随机后缀 `a1b2c3`），多个会话并存时在 `docker ps` 中一眼可辨。
 - 将独立的 Docker 工具缓存 `<staff-global>/tools/docker` 挂到 `/opt/.staff/tools`，并保留原 skills/profiles 挂载。同 uid 非 root 可直接写工具目录，不覆盖宿主原工具缓存；仍受原有挂载权限限制，不自动 chown/chmod。
-- 提供 `--docker-args` 配置兼容的硬件/环境参数（如 ADB USB 调试、GPU）；待发布源码中，stdio 数据拓扑不匹配对显式 terminal 请求报错，仅 files 保持原降级行为；覆盖内部 bootstrap/映射及容器生命周期管理参数仍然报错。
+- 提供 `--docker-args` 配置兼容的硬件/环境参数（如 ADB USB 调试、GPU）；stdio 数据拓扑不匹配对显式 terminal 请求报错，仅 files 保持原降级行为；覆盖内部 bootstrap/映射及容器生命周期管理参数仍然报错。
 
 **受支持的 Linux 本地 Docker stdio 仅在至少实际启用一种扩展时**，由原 wrapper 自动预留容器私有端口到 **127.0.0.1 随机宿主端口**，仅 inspect 自己 cidfile 的容器；只读挂载宿主 **0600 metadata 文件**提供可达 baseUrl，不改 stdin/stdout，不手找容器 IP，应用 listener 等 `data/v1/configure` 才懒启动。全关时 `dataAuto` 为 false，不分配应用数据发布端口、metadata 挂载或 bootstrap；普通工作区/程序包挂载不变。非 Docker stdio 也在 configure 前无应用 listener。HTTP/reverse 不增加这项发布；全关无 dataSession，HTTP 原 MCP listener 保留。
 
@@ -190,11 +190,11 @@ Docker 文件根仅复用已有工作区（`/workspace`，`main`）与 allowed-d
 
 Docker 中普通工具与文件应用复用允许目录挂载。宿主文件系统根（如 `/`）会映射到 `/opt/staff-allowed/root-N`，因为 Docker 禁止挂载到容器 `/`；容器内 `-d` 和受保护暂存别名同时使用映射路径。
 
-此应用数据路径要求本地 daemon、宿主客户端与 wrapper 共享可达 loopback、兼容 bridge/端口发布。待发布源码中，非 Linux Docker launcher，以及 stdio 的 remote/TCP/SSH daemon 或 host/container 网络等不匹配情况，对显式 terminal 请求明确启动报错；未请求 terminal 时，files 仍警告并禁用，只要 Docker 自身能正常启动，基础 MCP 连接和工具仍保留。HTTP/reverse 不需要这项 stdio 映射。数据 bootstrap 或 configure 失败不得终止健康的 MCP 控制连接，依赖数据通道的 App 不开放，不回退旧字节协议、不重放操作。loopback 发布不是敌对容器隔离保证；metadata 保持 0600，容器 uid 须能读取，工作区/全局目录权限与 PTY ABI/libc 仍须匹配。不自动 chown、放宽权限或切换浏览器用户身份。正常退出及信号仍清理自有容器、映射和 metadata，不提供跨重启资源恢复。
+此应用数据路径要求本地 daemon、宿主客户端与 wrapper 共享可达 loopback、兼容 bridge/端口发布。非 Linux Docker launcher，以及 stdio 的 remote/TCP/SSH daemon 或 host/container 网络等不匹配情况，对显式 terminal 请求明确启动报错；未请求 terminal 时，files 仍警告并禁用，只要 Docker 自身能正常启动，基础 MCP 连接和工具仍保留。HTTP/reverse 不需要这项 stdio 映射。数据 bootstrap 或 configure 失败不得终止健康的 MCP 控制连接，依赖数据通道的 App 不开放，不回退旧字节协议、不重放操作。loopback 发布不是敌对容器隔离保证；metadata 保持 0600，容器 uid 须能读取，工作区/全局目录权限与 PTY ABI/libc 仍须匹配。不自动 chown、放宽权限或切换浏览器用户身份。正常退出及信号仍清理自有容器、映射和 metadata，不提供跨重启资源恢复。
 
 ### 可选协商降级与显式 terminal 启动错误
 
-files、terminal 和当前连接的数据通道分别判断可用性。待发布源码中，缺少终端运行时在显式请求 terminal 时导致启动失败；默认关闭时不加载原生 PTY。可选文件根不可用仍只禁用 files，标准工作区工具/资源保留。未知或不匹配的扩展版本不开放对应 handlers/App。chat-ai 在标准 initialize 成功后，即使 Apps 发现或 data configure 失败，仍保留正常的 tools/resources/prompts。降级原因写 stderr，不混入 stdio 的 JSON-RPC stdout。
+files、terminal 和当前连接的数据通道分别判断可用性。缺少终端运行时在显式请求 terminal 时导致启动失败；默认关闭时不加载原生 PTY。可选文件根不可用仍只禁用 files，标准工作区工具/资源保留。未知或不匹配的扩展版本不开放对应 handlers/App。chat-ai 在标准 initialize 成功后，即使 Apps 发现或 data configure 失败，仍保留正常的 tools/resources/prompts。降级原因写 stderr，不混入 stdio 的 JSON-RPC stdout。
 
 这不是绕过鉴权或生命周期：CLI 参数语法错误、Docker 自身启动失败、凭据错误和标准 MCP 控制连接/初始化失败仍须报错。工作区/全局挂载的权限错误仍在相关启动或文件/工具操作中返回错误；扩展降级不授予额外访问，也不表示启动时已预检所有目录。新旧 reverse 控制协议不兼容仍需两端配套升级，不能用可选能力降级掩盖；文件提交、工具副作用和终端输入也不会自动重试。
 

@@ -1,11 +1,11 @@
 # Changelog
 
-## Unreleased
+## 2.0.3 — 2026-10-26
 
 - Pin optional `node-pty` exactly to official prerelease `1.2.0-beta.18`, with Linux x64/arm64 N-API prebuilds for glibc >= 2.28. System libraries such as `libstdc++`/`libgcc` and an executable shell are still required; no user image upgrade or musl/Alpine terminal support is promised. Docker still mounts the host package/`node_modules`; normal-install prebuilt delivery does not eliminate build leftovers or platform mismatches.
 - Keep terminal off and native PTY unloaded by default. Explicit terminal requests now fail startup when platform/native/shell prerequisites are unavailable, including non-Linux Docker launchers and unsupported stdio Docker data topologies, rather than silently disabling terminal. Files degradation remains unchanged.
 - Send only responses to recognized standard MCP pings on a separate bounded POST lane; all other POSTs remain FIFO, with no replay, protocol version/flag change or timeout extension. Add queue-wait/POST-elapsed slow-send metadata diagnostics and host App resource-read timing/byte-count diagnostics, without tokens, URLs or bodies.
-- These are pending source changes; the package version remains 2.0.2 and published npm 2.0.2 is not claimed to include them.
+- Upgrade the matching chat-ai host to commit `352bdb931bff38b5693dd386cd7584220571fd6b` or a descendant for stable App windows during loading/disconnection, cancellation and reopening cleanup, and accessible homepage close controls. These UI changes are delivered by chat-ai, not by the npm package. Extension protocol versions and data formats remain unchanged.
 
 ## 2.0.2 — 2026-10-26
 
