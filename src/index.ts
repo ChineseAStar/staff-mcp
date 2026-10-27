@@ -348,7 +348,7 @@ program
                     const target =
                         source === path.parse(source).root
                             ? `/opt/staff-allowed/root-${index}`
-                            : source;
+                            : toDockerVolumePath(source);
                     return { source, target };
                 },
             );
@@ -356,7 +356,14 @@ program
 
             // 5. Handle HTTP port forwarding
             if (options.transport === 'http') {
-                dockerArgs.push('-p', `${options.port}:${options.port}`);
+                const publishHost =
+                    options.host.includes(':') && !options.host.startsWith('[')
+                        ? `[${options.host}]`
+                        : options.host;
+                dockerArgs.push(
+                    '-p',
+                    `${publishHost}:${options.port}:${options.port}`,
+                );
             }
 
             // 6. Inject the already validated custom Docker options.

@@ -50,11 +50,13 @@ async function dockerOutput(
     });
 }
 
+/** Docker Desktop's local named pipes are valid; remote named pipes are not. */
 export async function assertLocalDockerDaemon(
     command: string,
     prefix: readonly string[],
     signal?: AbortSignal,
 ): Promise<void> {
+    // Match Docker CLI precedence: an explicit context overrides DOCKER_HOST.
     const endpoint =
         !process.env.DOCKER_CONTEXT && process.env.DOCKER_HOST
             ? process.env.DOCKER_HOST
@@ -69,10 +71,31 @@ export async function assertLocalDockerDaemon(
                   ],
                   signal,
               );
-    if (!endpoint.startsWith('unix://') && !endpoint.startsWith('npipe://')) {
-        throw new Error(
-            'Docker data auto requires a local Docker daemon; remote/TCP/SSH contexts are not supported.',
-        );
+    const normalizedEndpoint = endpoint.replace(/\\/g, '/');
+    const localUnix =
+        endpoint.startsWith('unix:///') && endpoint === normalizedEndpoint;
+    const localPipe =
+        normalizedEndpoint.startsWith('npipe:////./pipe/') &&
+        !normalizedEndpoint.slice('npipe:////./pipe/'.length).includes('/') &&
+        normalizedEndpoint.length > 'npipe:////./pipe/'.length;
+    if (!localUnix && !localPipe) {
+        throw new Error('Docker extensions require a verified local daemon.');
+    }
+}
+
+export async function assertLinuxDockerDaemon(
+    command: string,
+    prefix: readonly string[],
+    signal?: AbortSignal,
+): Promise<void> {
+    const osType = await dockerOutput(
+        command,
+        prefix,
+        ['info', '--format', '{{.OSType}}'],
+        signal,
+    );
+    if (osType !== 'linux') {
+        throw new Error('Docker extensions require a Linux container daemon.');
     }
 }
 

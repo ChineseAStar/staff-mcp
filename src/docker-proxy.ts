@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
     assertLocalDockerDaemon,
+    assertLinuxDockerDaemon,
     DOCKER_DATA_STARTUP_TIMEOUT_MS,
     prepareDockerDataArgs,
     publishDockerDataBaseUrl,
@@ -305,21 +306,29 @@ export async function preflightDockerExtensions(
         | 'DOCKER_UNSUPPORTED_NETWORK'
         | 'DOCKER_LOCAL_DAEMON_REQUIRED'
         | undefined;
-    if (os.platform() !== 'linux') {
-        reason = 'Docker extensions require a compatible Linux host package';
-        terminalReason = 'DOCKER_UNSUPPORTED_PLATFORM';
-    } else if (requestedDataAuto) {
-        if (unsupportedDataNetwork(additionalArgs)) {
-            reason =
-                'Docker stdio data auto does not support host/container/none networking';
-            terminalReason = 'DOCKER_UNSUPPORTED_NETWORK';
-        } else {
+    if (requestedDataAuto && unsupportedDataNetwork(additionalArgs)) {
+        reason =
+            'Docker stdio data auto does not support host/container/none networking';
+        terminalReason = 'DOCKER_UNSUPPORTED_NETWORK';
+    } else {
+        // HTTP and stdio advertise a host-local data endpoint. Reverse uses the
+        // peer's endpoint and needs no Docker-published application data port.
+        if (transport === 'stdio' || transport === 'http') {
             try {
                 await assertLocalDockerDaemon('docker', []);
             } catch {
                 reason =
-                    'Docker stdio data auto requires a verified local daemon; remote/TCP/SSH or unavailable contexts are unsupported';
+                    'Docker extension data requires a verified local daemon; remote/TCP/SSH or unavailable contexts are unsupported';
                 terminalReason = 'DOCKER_LOCAL_DAEMON_REQUIRED';
+            }
+        }
+        if (!reason) {
+            try {
+                await assertLinuxDockerDaemon('docker', []);
+            } catch {
+                reason =
+                    'Docker extensions require a verified Linux container daemon';
+                terminalReason = 'DOCKER_UNSUPPORTED_PLATFORM';
             }
         }
     }
@@ -825,6 +834,11 @@ export async function runDockerProxy(
                 try {
                     // Recheck at launch: never publish a remote daemon's loopback as ours.
                     await assertLocalDockerDaemon(
+                        command,
+                        commandPrefixArgs,
+                        startupAbort.signal,
+                    );
+                    await assertLinuxDockerDaemon(
                         command,
                         commandPrefixArgs,
                         startupAbort.signal,

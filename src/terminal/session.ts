@@ -15,8 +15,12 @@ import {
     RECORD_TTL_MS,
     extensionError,
 } from '../extensions/protocol.js';
-import { signalGroup, writeInput } from './pty.js';
-import type { LinuxPty, TerminalRuntime } from './pty.js';
+import { TerminalStartupError } from './pty.js';
+import type {
+    TerminalPty,
+    TerminalRuntime,
+    TerminalStartupReason,
+} from './pty.js';
 
 export interface CreateTerminal {
     operationId: string;
@@ -34,10 +38,11 @@ interface Terminal {
     expires: number;
     finished?: number;
     job?: Promise<void>;
-    pty?: LinuxPty;
+    pty?: TerminalPty;
     bound: boolean;
     fenced: boolean;
     outputIncomplete?: boolean;
+    failureReason?: TerminalStartupReason;
     channel?: DataChannel;
     queue: Buffer[];
     bytes: number;
@@ -135,7 +140,9 @@ export class TerminalSession {
                 ...base,
                 error: {
                     code: 'TERMINAL_START_FAILED',
-                    message: 'Terminal could not be started',
+                    message: item.failureReason
+                        ? `Terminal could not be started: reason=${item.failureReason}`
+                        : 'Terminal could not be started',
                 },
             };
         return base;
@@ -242,12 +249,15 @@ export class TerminalSession {
             this.resources.set(item.terminalId, item);
             item.subscriptions.push(
                 pty.onData((raw) => {
-                    // encoding:null makes node-pty emit raw Buffers. No per-chunk UTF-8 decoding.
+                    // Cleanup resumes the PTY to drain its tail. Fenced output
+                    // must stay draining until close, not pause on the first chunk.
+                    if (item.fenced || this.disposed) return;
+                    // Linux emits raw Buffers; ConPTY emits streaming-decoded UTF-8 text.
                     const data = Buffer.isBuffer(raw)
                         ? raw
                         : Buffer.from(raw, 'utf8');
                     pty.pause();
-                    if (item.fenced || this.disposed || !data.length) return;
+                    if (!data.length) return;
                     if (this.outputBytes + data.length > OUTPUT_LIMIT) {
                         this.stop(item, 'OUTPUT_LIMIT');
                         return;
@@ -269,7 +279,9 @@ export class TerminalSession {
             );
             this.check(item);
             item.state = 'running';
-        } catch {
+        } catch (error) {
+            if (error instanceof TerminalStartupError)
+                item.failureReason = error.reason;
             if (item.pty) this.stop(item, 'START_FAILED');
             else if (item.state === 'starting') {
                 item.state = 'failed';
@@ -344,10 +356,11 @@ export class TerminalSession {
         }
         item.state = 'closing';
         item.pty.pause();
-        signalGroup(item.pty, 'SIGTERM');
+        item.pty.kill('SIGTERM');
+        // A cancelled Windows connection can report exit synchronously.
+        if (item.state !== 'closing') return;
         item.killTimer = setTimeout(() => {
-            if (item.pty && item.state === 'closing')
-                signalGroup(item.pty, 'SIGKILL');
+            if (item.pty && item.state === 'closing') item.pty.kill('SIGKILL');
         }, 1000);
         item.killTimer.unref();
     }
@@ -447,8 +460,7 @@ export class TerminalSession {
                         offset < data.byteLength;
                         offset += INPUT_LIMIT
                     ) {
-                        await writeInput(
-                            item.pty!,
+                        await item.pty!.writeInput(
                             data.subarray(offset, offset + INPUT_LIMIT),
                             () => this.check(item),
                         );
@@ -473,7 +485,7 @@ export class TerminalSession {
                 item.pty &&
                 (item.state === 'running' || item.state === 'closing')
             )
-                signalGroup(item.pty, 'SIGKILL');
+                item.pty.kill('SIGKILL');
         }
     }
 
