@@ -10,6 +10,8 @@
 
 ## 兼容性与配套升级
 
+**2.0.5 版本：** 取消文件传输的 100 MiB 硬限制。配套将 chat-ai 升级至提交 `cfd7a2815f46d105b2da01d3980987c818ab0d39` 或兼容后继版本，以获得 App 流式上传、浏览器原生下载及跨 MCP 中转；参与传输的 staff-mcp 端点也须全部升级。内联预览仍限 2 MiB，资源边界与发布步骤见下文。
+
 **2.0.4 版本：** 新增 Windows 原生 ConPTY 终端及符合条件的 Windows Docker Desktop Linux 容器扩展支持，保留 2.0.3 的 Linux PTY 预编译交付、明确终端启动错误和 reverse 心跳修复。配套将 chat-ai 升级至提交 `88f86aeb136bc2440da35b540868f9606d34ac58` 或其后继版本，以获得 Bash/CMD/PowerShell 命令生成器及此前的 App 窗口修复。
 
 **从 2.0.3 升级：** Windows 新功能需要 staff-mcp 2.0.4；仅更新 chat-ai 不会为现有 staff 进程增加这些能力。`node-pty` 依赖锁定与扩展协议版本不变。
@@ -21,7 +23,7 @@
 无需进行 Chat8/schema9/format7/分享 protocol2 数据迁移。
 
 1. 结束在途操作，备份正常配置；无需转换数据。
-2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.4，并协调 reverse 连接的停机窗口。
+2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.5，并协调 reverse 连接的停机窗口。
 3. 重新连接 MCP、重新打开 App，仅显式启用需要的扩展。
 
 发布摘要见 [CHANGELOG](CHANGELOG.md)。
@@ -35,7 +37,7 @@
 使用明确版本运行 staff-mcp：
 
 ```bash
-npx --yes staff-mcp@2.0.4 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.0.5 --working-dir /path/to/your/project
 ```
 
 从源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口：
@@ -298,7 +300,7 @@ node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest 
 
 ---
 
-## 大文件传输（2.0.5 源码）
+## 大文件传输（2.0.5）
 
 files-v1 跨 MCP 中转与文件应用上传不再设置 100 MiB 单文件硬限制。配套 chat-ai 宿主的普通下载使用浏览器原生下载管理器，不再把整个文件收进网页 Blob；点击“保存到设备”后才开始接收。页面只显示传输进度，是否已成功写入磁盘请以浏览器下载记录为准。`readBytes` 小型预览仍限 2 MiB，文本编辑和标准 Resource 限制不变。
 
@@ -306,21 +308,58 @@ files-v1 跨 MCP 中转与文件应用上传不再设置 100 MiB 单文件硬限
 
 ## 发版流程
 
-先将已验收的发布改动合入 `master`，补齐 CHANGELOG 发布日期。`package.json`、`package-lock.json` 顶层及 `packages[""].version` 必须与目标标签一致。确认工作区干净、该版本尚未发布，再在发布 checkout 中执行（本段是发布操作说明，不会由普通开发提交自动执行）：
+1. 在临时开发分支完成改动、补齐 CHANGELOG 发布日期，确认 `package.json`、`package-lock.json` 顶层及 `packages[""].version` 都是本次目标版本，提交并推送该分支。
+2. 运行以下 **Bash** 检查流程。先将 `VERSION` 和 `RELEASE_BRANCH` 改为本次已验收、尚未发布的版本与分支。示例为 2.0.5；它发布后不可原样重跑。任何一步失败都应先排查，不要跳过检查继续打标签。
 
-```sh
+```bash
+(
+set -euo pipefail
+VERSION=2.0.5
+RELEASE_BRANCH=tmp/streaming-file-size
+
 git fetch origin --tags
+test -z "$(git status --porcelain)"
 git switch master
 git pull --ff-only origin master
+# 必须实际合入新功能；只检查 HEAD 属于 master 不能证明功能已合入。
+git merge --ff-only "origin/$RELEASE_BRANCH"
+git merge-base --is-ancestor "origin/$RELEASE_BRANCH" HEAD
+
+RELEASE_VERSION="$VERSION" node --input-type=commonjs <<'JS'
+const assert = require("node:assert/strict");
+const p = require("./package.json");
+const l = require("./package-lock.json");
+const expected = process.env.RELEASE_VERSION;
+assert.equal(p.version, expected, "package.json is not the target release");
+assert.equal(l.version, expected);
+assert.equal(l.packages[""].version, expected);
+console.log("Verified release version:", expected);
+JS
+
+# 已有标签或 npm 版本都必须停止；正常发布流程不删除或移动标签。
+if git show-ref --verify --quiet "refs/tags/v$VERSION"; then
+  echo "Tag v$VERSION already exists; stop." >&2
+  exit 1
+fi
+npm view staff-mcp versions --json | RELEASE_VERSION="$VERSION" node -e '
+  const assert = require("node:assert/strict");
+  const versions = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+  assert(![].concat(versions).includes(process.env.RELEASE_VERSION), "Version already published");
+'
+
 npm ci
 NODE_OPTIONS="--max-old-space-size=2048" npm run build
 npm pack --dry-run
-# 确认当前提交已推送并包含于 origin/master，且版本确为本次发布版本。
-git merge-base --is-ancestor HEAD origin/master
-node -e 'const p=require("./package.json"),l=require("./package-lock.json");if(p.version!==l.version||p.version!==l.packages[""].version)process.exit(1);console.log("v"+p.version)'
-git tag -a v2.0.5 -m "Release staff-mcp 2.0.5"
-git push origin v2.0.5
+test -z "$(git status --porcelain)"
+git push origin master
+git fetch --no-tags origin master
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/master)"
+git tag -a "v$VERSION" -m "Release staff-mcp $VERSION"
+git push origin "refs/tags/v$VERSION"
+)
 ```
+
+若不能快进合并，在临时分支先处理与最新 `master` 的集成并重新验收；不要用强推绕过。已推送但错误的标签只能在核实 npm 尚未发布、相关发布任务已停止且获得明确确认后单独修复，不属于每次发版步骤。
 
 标签触发 `.github/workflows/publish.yml` 的 **Publish to npm**。工作流使用 Node 24、OIDC trusted publishing 和 `npm publish --provenance --access public`；npm 包设置中的 trusted publisher 必须对应仓库和 `publish.yml` 工作流文件。发布任务会验证标签对应提交已包含于远端 `master`，并校验三处版本；仅 push/合并 `master` 不会发布 npm。禁止从未合入的开发分支发版、移动已发布标签或重用已发布版本。
 

@@ -10,6 +10,8 @@ It provides secure file management, shell execution, LSP-powered code intelligen
 
 ## Compatibility and coordinated upgrades
 
+**Version 2.0.5:** removes the 100 MiB file transfer cap. Upgrade chat-ai to commit `cfd7a2815f46d105b2da01d3980987c818ab0d39` or a compatible descendant for streaming App uploads, native browser downloads and cross-MCP relay. Upgrade all participating staff-mcp endpoints as well; inline previews remain limited to 2 MiB. See the large-file limits and release checklist below.
+
 **Version 2.0.4:** adds Windows native ConPTY terminal support and extensions for eligible Windows Docker Desktop Linux containers. It retains the Linux PTY prebuild delivery, explicit terminal startup errors and reverse heartbeat fixes from 2.0.3. Upgrade chat-ai to commit `88f86aeb136bc2440da35b540868f9606d34ac58` or a descendant for the matching Bash/CMD/PowerShell command generator and earlier App window fixes.
 
 **Upgrade from 2.0.3:** the Windows features require staff-mcp 2.0.4; updating chat-ai alone does not add them to an existing staff process. The `node-pty` dependency pin and extension protocol versions are unchanged.
@@ -21,7 +23,7 @@ Standard stdio/Streamable HTTP tools, resources and prompts remain supported. Ex
 No Chat8/schema9/format7/share protocol2 data migration is required.
 
 1. Finish in-flight operations and back up your normal configuration; no data conversion is needed.
-2. Upgrade the matching chat-ai host first, then staff-mcp 2.0.4, coordinating downtime for reverse connections.
+2. Upgrade the matching chat-ai host first, then staff-mcp 2.0.5, coordinating downtime for reverse connections.
 3. Reconnect MCP, reopen Apps and explicitly enable only the extensions you want.
 
 See [CHANGELOG](CHANGELOG.md) for the release summary.
@@ -35,7 +37,7 @@ Current source supports Linux PTY and Windows native ConPTY, subject to native l
 Run staff-mcp with an explicit package version:
 
 ```bash
-npx --yes staff-mcp@2.0.4 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.0.5 --working-dir /path/to/your/project
 ```
 
 For a source checkout, install dependencies and build before using the absolute entrypoint in the examples:
@@ -302,7 +304,7 @@ node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest 
 
 ---
 
-## Large file transfers (2.0.5 source)
+## Large file transfers (2.0.5)
 
 files-v1 cross-MCP relay and file App uploads no longer have a 100 MiB per-file hard cap. With the matching chat-ai host, ordinary App downloads use the native browser download manager rather than a whole-file page Blob. “Save to device” starts receiving bytes; verified HTTP transfer is not proof of successful local disk persistence. Inline `readBytes` previews remain bounded to 2 MiB; text/Resource limits are unchanged.
 
@@ -310,7 +312,7 @@ Upgrade the host and all participating endpoints, reconnect MCP and reopen Apps.
 
 ## Release workflow
 
-Merge the verified release changes into `master` first. From an up-to-date `master` checkout, confirm that `package.json`, the root package-lock versions and the release tag agree; finalize the changelog, then create and push the new version tag. The npm workflow rejects a tag whose commit is not contained in remote `master`. Do not publish from a development branch or move an existing release tag. Merging code alone does not publish to npm. `.github/workflows/publish.yml` runs Node 24 and OIDC trusted publishing with provenance; npm must trust the matching repository/workflow. Run `npm ci`, `npm run build` and `npm pack --dry-run` in the release checkout before tagging. After Actions succeeds, verify the exact version with `npm view staff-mcp@2.0.5 version`, update the package at each endpoint and restart it. See the [step-by-step release checklist](README_zh.md#发版流程); version/tag examples must be advanced for later releases.
+Merge the verified release changes into `master` first. From an up-to-date `master` checkout, confirm that the intended feature commit is included and all three package/lock versions equal the explicit target version, not merely each other; finalize the changelog, then create and push the new version tag. A check that HEAD belongs to master alone does not prove the feature branch was merged. The checklist stops on any failed command and rejects an existing version/tag. The npm workflow rejects a tag whose commit is not contained in remote `master`. Do not publish from a development branch or move an existing release tag. Merging code alone does not publish to npm. `.github/workflows/publish.yml` runs Node 24 and OIDC trusted publishing with provenance; npm must trust the matching repository/workflow. Run `npm ci`, `npm run build` and `npm pack --dry-run` in the release checkout before tagging. After Actions succeeds, verify the exact version with `npm view staff-mcp@2.0.5 version`, update the package at each endpoint and restart it. See the [step-by-step release checklist](README_zh.md#发版流程); version/tag examples must be advanced for later releases.
 
 ## 📄 License
 
