@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## 2.0.4 — 2026-10-27
 
 - Add opt-in Windows native ConPTY terminal support; all extensions remain off and native PTY code stays unloaded by default. Require Windows build >= 18309 plus compatible native binaries and an executable shell. Keep `node-pty@1.2.0-beta.18` unchanged; N-API/prebuild availability does not validate every OS/architecture. Windows arm64 and macOS remain untested on real hardware; no musl/Alpine terminal support is promised.
 - Prefer executable `pwsh.exe`, then `powershell.exe` with `-NoLogo -NoProfile`, then `ComSpec`/system `cmd.exe` with `/d`. Linux retains executable `$SHELL` or `/bin/bash` with `-i` and normal profiles. No public `--shell` option is added; Windows profile suppression does not guarantee absence of shell/program/system history.
 - Keep Linux raw fd input/EAGAIN handling. Windows uses the ConPTY UTF-8 input pipe with one bounded write in flight; input ACK follows its write callback, not local buffering or command execution. The public raw-binary data v1 protocol and generic host byte handling are unchanged. Windows close releases the owned ConPTY console best-effort, without rollback or guaranteed cleanup of all detached descendants.
 - Check Docker extension prerequisites by Linux-container daemon OS rather than launcher OS, with verified local Unix-socket/`npipe` endpoint checks for HTTP/stdio, allowing eligible Windows Docker Desktop Linux containers. HTTP/stdio still require reachable host loopback; stdio publishes an extra data port. Reverse needs no such stdio mapping but retains Linux-container and existing-mount prerequisites. Translate Windows drive/UNC allowed directories into the POSIX container namespace without bypassing staging protection.
-- Pair with chat-ai's Bash/CMD/PowerShell command-generation and copy support: ordinary safe arguments need no unnecessary quotes, special values use shell-specific quoting, and values that cannot be safely inlined produce an error rather than a misleading command. These source changes are not included in published 2.0.3; package/protocol versions are unchanged.
+- Pair with chat-ai commit `88f86aeb136bc2440da35b540868f9606d34ac58` or a descendant for Bash/CMD/PowerShell command-generation and copy support: ordinary safe arguments need no unnecessary quotes, special values use shell-specific quoting, and values that cannot be safely inlined produce an error rather than a misleading command. These UI changes are delivered by chat-ai, not the npm package. The Windows features require staff-mcp 2.0.4; dependency pins, extension protocol versions and data formats are unchanged.
 
 ## 2.0.3 — 2026-10-26
 

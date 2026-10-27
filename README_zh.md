@@ -10,9 +10,9 @@
 
 ## 兼容性与配套升级
 
-**2.0.3 版本：** 交付 Linux PTY 预编译产物、明确报告终端启动失败，并避免 reverse 大回复阻塞心跳。配套将 chat-ai 升级至提交 `352bdb931bff38b5693dd386cd7584220571fd6b` 或其后继版本，以同时获得 App 窗口生命周期及关闭按钮修复。
+**2.0.4 版本：** 新增 Windows 原生 ConPTY 终端及符合条件的 Windows Docker Desktop Linux 容器扩展支持，保留 2.0.3 的 Linux PTY 预编译交付、明确终端启动错误和 reverse 心跳修复。配套将 chat-ai 升级至提交 `88f86aeb136bc2440da35b540868f9606d34ac58` 或其后继版本，以获得 Bash/CMD/PowerShell 命令生成器及此前的 App 窗口修复。
 
-**待发布源码变更：** 下文的 Windows 原生 ConPTY 终端与 Windows Docker Desktop Linux 容器扩展支持尚不包含在已发布的 2.0.3 中。正式发布前须使用配套、已构建的源码 checkout；包版本与依赖锁定不变。
+**从 2.0.3 升级：** Windows 新功能需要 staff-mcp 2.0.4；仅更新 chat-ai 不会为现有 staff 进程增加这些能力。`node-pty` 依赖锁定与扩展协议版本不变。
 
 **破坏性升级：** reverse 连接与可选扩展需要配套 chat-ai 宿主：宿主须实现 reverse v1 与下文的会话相对数据路径合同。宿主、staff-mcp、描述符和 UI 资源须配套升级。
 
@@ -21,7 +21,7 @@
 无需进行 Chat8/schema9/format7/分享 protocol2 数据迁移。
 
 1. 结束在途操作，备份正常配置；无需转换数据。
-2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.3，并协调 reverse 连接的停机窗口。
+2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.4，并协调 reverse 连接的停机窗口。
 3. 重新连接 MCP、重新打开 App，仅显式启用需要的扩展。
 
 发布摘要见 [CHANGELOG](CHANGELOG.md)。
@@ -32,10 +32,10 @@
 
 当前源码支持 Linux PTY 与 Windows 原生 ConPTY，仍须通过原生加载和可执行 shell 检查。Windows **build >= 18309** 是必要而非充分条件。Windows Docker Desktop 经验证的本地 Linux 容器 daemon 可启用 files/terminal，不再仅按 launcher OS 判断。**Windows arm64 与 macOS 未实机验证，不承诺 musl/Alpine terminal 支持。** 路径转换或附带 N-API 预编译产物不等于平台支持承诺。
 
-可指定版本运行已发布的 staff-mcp 2.0.3（不包含上述待发布功能）：
+使用明确版本运行 staff-mcp：
 
 ```bash
-npx --yes staff-mcp@2.0.3 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.0.4 --working-dir /path/to/your/project
 ```
 
 从源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口：
@@ -45,7 +45,7 @@ npm ci
 npm run build
 ```
 
-将 `/path/to/staff-mcp` 替换为实际构建目录。Docker 仍只读挂载宿主程序包及 `node_modules`，并非容器依赖完全隔离。2.0.3 将 optional `node-pty` 精确锁定为官方预发布版 `1.2.0-beta.18`，内含 Linux x64/arm64、glibc >= 2.28 的 N-API 预编译；运行时仍需要系统 `libstdc++`、`libgcc` 等库。本次解决正常安装的预编译交付，不消除本地构建残留或架构/libc/平台不匹配限制，N-API 也不消除这些限制。不自动升级用户镜像，不承诺 musl/Alpine 的 terminal 支持。
+将 `/path/to/staff-mcp` 替换为实际构建目录。Docker 仍只读挂载宿主程序包及 `node_modules`，并非容器依赖完全隔离。optional `node-pty` 继续精确锁定为官方预发布版 `1.2.0-beta.18`，内含 Linux x64/arm64、glibc >= 2.28 的 N-API 预编译；运行时仍需要系统 `libstdc++`、`libgcc` 等库。本次解决正常安装的预编译交付，不消除本地构建残留或架构/libc/平台不匹配限制，N-API 也不消除这些限制。不自动升级用户镜像，不承诺 musl/Alpine 的 terminal 支持。
 
 ### 1. 标准宿主机模式
 直接在物理机或虚拟环境中运行。
@@ -142,7 +142,7 @@ Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Ser
 
 ## 🛠️ 核心能力
 
-以下描述当前源码，包括上述待发布变更，不表示已发布的 2.0.3 包含这些新功能；扩展仍须显式启用。
+以下描述 staff-mcp 2.0.4 的行为；扩展仍须显式启用。
 
 扩展**默认全关**。通过 `--extensions files`、`--extensions terminal` 或 `--extensions files,terminal` 启用；apps/data 依赖及 terminal 对 streams v1 的声明自动计算，无需单独选择。禁用能力不声明对应 manifest 条目、不注册对应 UI Resource 或业务 handler；全关时无扩展 manifest、应用数据 listener/session，普通 MCP 工具和非 UI Resources 保留。HTTP 模式仍监听原 MCP 服务。
 

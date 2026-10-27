@@ -10,9 +10,9 @@ It provides secure file management, shell execution, LSP-powered code intelligen
 
 ## Compatibility and coordinated upgrades
 
-**Version 2.0.3:** delivers Linux PTY prebuilds, reports explicit terminal startup failures, and prevents large reverse replies from blocking heartbeat responses. Upgrade chat-ai to commit `352bdb931bff38b5693dd386cd7584220571fd6b` or a descendant to also receive the App window lifecycle and close-control fixes.
+**Version 2.0.4:** adds Windows native ConPTY terminal support and extensions for eligible Windows Docker Desktop Linux containers. It retains the Linux PTY prebuild delivery, explicit terminal startup errors and reverse heartbeat fixes from 2.0.3. Upgrade chat-ai to commit `88f86aeb136bc2440da35b540868f9606d34ac58` or a descendant for the matching Bash/CMD/PowerShell command generator and earlier App window fixes.
 
-**Unreleased source changes:** the Windows native ConPTY terminal and Windows Docker Desktop Linux-container extension support described below are not included in published 2.0.3. Use a matching, built source checkout until a release includes them; the package version and dependency pin are unchanged.
+**Upgrade from 2.0.3:** the Windows features require staff-mcp 2.0.4; updating chat-ai alone does not add them to an existing staff process. The `node-pty` dependency pin and extension protocol versions are unchanged.
 
 **Breaking release:** reverse connections and optional extensions require a matching chat-ai host: the host must implement reverse v1 and the session-relative data paths described below. Upgrade the host, staff-mcp, descriptors and UI assets together.
 
@@ -21,7 +21,7 @@ Standard stdio/Streamable HTTP tools, resources and prompts remain supported. Ex
 No Chat8/schema9/format7/share protocol2 data migration is required.
 
 1. Finish in-flight operations and back up your normal configuration; no data conversion is needed.
-2. Upgrade the matching chat-ai host first, then staff-mcp 2.0.3, coordinating downtime for reverse connections.
+2. Upgrade the matching chat-ai host first, then staff-mcp 2.0.4, coordinating downtime for reverse connections.
 3. Reconnect MCP, reopen Apps and explicitly enable only the extensions you want.
 
 See [CHANGELOG](CHANGELOG.md) for the release summary.
@@ -32,10 +32,10 @@ Requires **Node.js 22.22.2 or newer**, including inside Docker images.
 
 Current source supports Linux PTY and Windows native ConPTY, subject to native loading and executable-shell checks. Windows build **18309 or newer** is necessary, not sufficient. Windows Docker Desktop with a verified local Linux-container daemon can enable files/terminal; the launcher OS alone does not decide availability. **Windows arm64 and macOS have not been validated on real hardware; musl/Alpine terminal support is not promised.** Path translation or a shipped N-API prebuild is not a platform-support guarantee.
 
-Run the published staff-mcp 2.0.3 with an explicit package version (this does not include the Unreleased features above):
+Run staff-mcp with an explicit package version:
 
 ```bash
-npx --yes staff-mcp@2.0.3 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.0.4 --working-dir /path/to/your/project
 ```
 
 For a source checkout, install dependencies and build before using the absolute entrypoint in the examples:
@@ -45,7 +45,7 @@ npm ci
 npm run build
 ```
 
-Replace `/path/to/staff-mcp` with that checkout/build directory. Docker still read-only mounts the host package and `node_modules`, not an isolated container dependency installation. Version 2.0.3 pins optional `node-pty` exactly to the official prerelease `1.2.0-beta.18`, which includes N-API prebuilds for Linux x64/arm64 with glibc >= 2.28. The runtime still needs system libraries such as `libstdc++` and `libgcc`. This addresses prebuilt delivery for normal installs, not arbitrary local build leftovers or architecture/libc/platform mismatches; N-API does not remove those limits. No user image is upgraded automatically; terminal support is not promised for musl/Alpine.
+Replace `/path/to/staff-mcp` with that checkout/build directory. Docker still read-only mounts the host package and `node_modules`, not an isolated container dependency installation. The optional dependency `node-pty` remains pinned exactly to the official prerelease `1.2.0-beta.18`, which includes N-API prebuilds for Linux x64/arm64 with glibc >= 2.28. The runtime still needs system libraries such as `libstdc++` and `libgcc`. This addresses prebuilt delivery for normal installs, not arbitrary local build leftovers or architecture/libc/platform mismatches; N-API does not remove those limits. No user image is upgraded automatically; terminal support is not promised for musl/Alpine.
 
 ### 1. Standard Host Mode
 Run directly on your physical machine or virtual environment.
@@ -147,7 +147,7 @@ The two reverse transport sources (`src/reverse/SseTransport.ts` and chat-ai's `
 
 ## 🛠️ Core Capabilities
 
-The behavior below describes current source, including the Unreleased changes noted above; it does not assert that published 2.0.3 contains those changes. Extensions remain opt-in.
+The behavior below describes staff-mcp 2.0.4. Extensions remain opt-in.
 
 Extensions are **all off by default**. Use `--extensions files`, `--extensions terminal`, or `--extensions files,terminal`; apps/data dependencies and terminal's streams v1 manifest are added automatically, not selected separately. Disabled features advertise no manifest entry and register no corresponding UI Resource or business handler. With both off there is no extension manifest or application data listener/session; ordinary MCP tools and non-UI Resources remain. HTTP mode still opens its normal MCP listener.
 
