@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { bridge, BridgeError, errorMessage } from './bridge';
 import type { TransferProgress } from './bridge';
 
-export const MAX_FILE_SIZE = 100 * 1024 * 1024;
+// Numeric validity boundary, also used by the upload retry button; not a byte budget.
+export const MAX_FILE_SIZE = Number.MAX_SAFE_INTEGER;
 
 type TransferStatus =
     | 'queued'
@@ -42,8 +43,8 @@ export const transferLabels: Record<TransferStatus, string> = {
     queued: '等待上传',
     checking: '检查目标',
     confirm: '等待覆盖确认',
-    preparing: '准备下载，等待首字节…',
-    ready: '可保存',
+    preparing: '准备下载快照…',
+    ready: '准备就绪',
     saving: '正在交给浏览器…',
     'handed-off': '已交给浏览器',
     running: '传输中',
@@ -343,7 +344,8 @@ export function useTransfers(
 
     const upload = (files: File[], rootId: string, directory: string) => {
         for (const file of files) {
-            const tooLarge = file.size > MAX_FILE_SIZE;
+            const invalidSize =
+                !Number.isSafeInteger(file.size) || file.size < 0;
             add({
                 id: `transfer-${++sequence.current}`,
                 direction: 'upload',
@@ -353,9 +355,9 @@ export function useTransfers(
                 file,
                 size: file.size,
                 loaded: 0,
-                status: tooLarge ? 'error' : 'queued',
-                error: tooLarge
-                    ? '超过单文件 100 MiB 限制，未开始上传。'
+                status: invalidSize ? 'error' : 'queued',
+                error: invalidSize
+                    ? '文件大小必须是非负安全整数，未开始上传。'
                     : undefined,
             });
         }
@@ -364,7 +366,7 @@ export function useTransfers(
     const discardDownload = async (job: TransferJob) => {
         if (job.direction !== 'download' || !job.transferId) return;
         earlyProgress.current.delete(job.transferId);
-        // Lifecycle invalidation also clears the host's local cache.
+        // Lifecycle invalidation also releases the host's temporary download resources.
         if (!enabledRef.current) return;
         await bridge.request('downloadDiscard', { transferId: job.transferId });
     };
@@ -465,11 +467,32 @@ export function useTransfers(
         if (!job || job.status !== 'ready' || !enabledRef.current) return;
         change(id, { status: 'saving', error: undefined });
         try {
-            await bridge.request('downloadSave', {
-                transferId: job.transferId,
+            const result = await bridge.request<{ receiving?: boolean }>(
+                'downloadSave',
+                { transferId: job.transferId },
+            );
+            const current = jobsRef.current.find((entry) => entry.id === id);
+            // Progress/cancellation may settle before the native GET ack arrives.
+            // Only this attempt's still-pending save can be advanced by its reply.
+            if (
+                !current ||
+                current.transferId !== job.transferId ||
+                current.status !== 'saving' ||
+                current.cancelRequested
+            )
+                return;
+            change(id, {
+                status: result?.receiving ? 'running' : 'handed-off',
             });
-            change(id, { status: 'handed-off' });
         } catch (error) {
+            const current = jobsRef.current.find((entry) => entry.id === id);
+            if (
+                !current ||
+                current.transferId !== job.transferId ||
+                current.status !== 'saving' ||
+                current.cancelRequested
+            )
+                return;
             change(id, {
                 status: 'error',
                 error: `交给浏览器的结果未确认，请检查浏览器下载记录：${errorMessage(error)}`,
@@ -609,7 +632,7 @@ export function useTransfers(
             return;
         if (job.direction === 'download') {
             void runDownload(job);
-        } else if (job.size <= MAX_FILE_SIZE) {
+        } else if (Number.isSafeInteger(job.size) && job.size >= 0) {
             change(id, {
                 status: 'queued',
                 overwrite,
@@ -644,7 +667,7 @@ export function useTransfers(
             } catch (error) {
                 change(job.id, {
                     status: 'error',
-                    error: `释放下载缓存失败：${errorMessage(error)}`,
+                    error: `释放下载资源失败：${errorMessage(error)}`,
                 });
             }
         }

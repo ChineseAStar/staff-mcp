@@ -298,9 +298,33 @@ node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest 
 
 ---
 
+## 大文件传输（2.0.5 源码）
+
+files-v1 跨 MCP 中转与文件应用上传不再设置 100 MiB 单文件硬限制。配套 chat-ai 宿主的普通下载使用浏览器原生下载管理器，不再把整个文件收进网页 Blob；点击“保存到设备”后才开始接收。页面只显示传输进度，是否已成功写入磁盘请以浏览器下载记录为准。`readBytes` 小型预览仍限 2 MiB，文本编辑和标准 Resource 限制不变。
+
+需要升级源端、目标端和宿主，重新连接 MCP 并重开应用。2.0.4 及更早 staff-mcp 仍拒绝超过 100 MiB 的文件。源快照和目标暂存需要磁盘空间；保留准备请求 30 秒超时、远端租约、背压和权限检查，不提供断点续传或副作用自动重放。代理请求体／超时限制和慢盘仍可能导致失败。“无 100 MiB 硬限”不等于无限资源。新源码须完成以下发布流程后才会出现在 npm。
+
 ## 发版流程
 
-先将已验收的发布改动合入 `master`，再从已同步的 `master` checkout 核对 `package.json`、package-lock 根版本与目标标签一致，补齐 CHANGELOG 发布日期后创建并推送新版本标签。npm 工作流拒绝发布尚未包含于远端 `master` 的提交。禁止从开发分支发版或移动已发布标签；合并代码本身不会发布 npm。
+先将已验收的发布改动合入 `master`，补齐 CHANGELOG 发布日期。`package.json`、`package-lock.json` 顶层及 `packages[""].version` 必须与目标标签一致。确认工作区干净、该版本尚未发布，再在发布 checkout 中执行（本段是发布操作说明，不会由普通开发提交自动执行）：
+
+```sh
+git fetch origin --tags
+git switch master
+git pull --ff-only origin master
+npm ci
+NODE_OPTIONS="--max-old-space-size=2048" npm run build
+npm pack --dry-run
+# 确认当前提交已推送并包含于 origin/master，且版本确为本次发布版本。
+git merge-base --is-ancestor HEAD origin/master
+node -e 'const p=require("./package.json"),l=require("./package-lock.json");if(p.version!==l.version||p.version!==l.packages[""].version)process.exit(1);console.log("v"+p.version)'
+git tag -a v2.0.5 -m "Release staff-mcp 2.0.5"
+git push origin v2.0.5
+```
+
+标签触发 `.github/workflows/publish.yml` 的 **Publish to npm**。工作流使用 Node 24、OIDC trusted publishing 和 `npm publish --provenance --access public`；npm 包设置中的 trusted publisher 必须对应仓库和 `publish.yml` 工作流文件。发布任务会验证标签对应提交已包含于远端 `master`，并校验三处版本；仅 push/合并 `master` 不会发布 npm。禁止从未合入的开发分支发版、移动已发布标签或重用已发布版本。
+
+成功后检查 Actions 和 `npm view staff-mcp@2.0.5 version`，再按原安装方式更新（如 `npm install -g staff-mcp@2.0.5` 或 `npx -y staff-mcp@2.0.5 ...`），并重启各 MCP 进程；已运行进程和已打开的 App 不会自动替换。版本号与标签示例需随每次后续发布更新。
 
 ## 📄 License
 

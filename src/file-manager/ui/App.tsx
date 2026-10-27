@@ -2040,12 +2040,17 @@ export function App() {
                                                 aria-live="polite"
                                             >
                                                 {job.direction === 'download' &&
-                                                job.status === 'running' &&
-                                                job.loaded === job.size
-                                                    ? '接收完毕，等待完整性校验…'
-                                                    : transferLabels[
-                                                          job.status
-                                                      ]}
+                                                job.status === 'done'
+                                                    ? '传输结束，请检查浏览器下载记录'
+                                                    : job.direction ===
+                                                            'download' &&
+                                                        job.status ===
+                                                            'running' &&
+                                                        job.loaded === job.size
+                                                      ? '响应流已传输，等待宿主完整性校验…'
+                                                      : transferLabels[
+                                                            job.status
+                                                        ]}
                                             </span>
                                         </div>
                                         <progress
@@ -2062,7 +2067,6 @@ export function App() {
                                                     ? undefined
                                                     : [
                                                             'done',
-                                                            'ready',
                                                             'handed-off',
                                                         ].includes(job.status)
                                                       ? job.size || 1
@@ -2072,10 +2076,13 @@ export function App() {
                                         />
                                         <div className="transfer-meta">
                                             {job.status === 'preparing'
-                                                ? '正在准备文件或等待服务器响应，尚未收到数据。'
+                                                ? '正在准备源文件快照，尚未开始传输。'
                                                 : `${formatSize(job.loaded)} / ${formatSize(job.size)}${job.size > 0 ? ` · ${Math.floor((job.loaded / job.size) * 100)}%` : ''}`}
                                             {job.status === 'ready' &&
-                                                ' · 文件已完整接收，请在 5 分钟内保存或丢弃。'}
+                                                ' · 快照已准备就绪，尚未接收文件；点击“保存到设备”开始下载。'}
+                                            {job.direction === 'download' &&
+                                                job.status === 'done' &&
+                                                ' · 宿主已校验响应流，不代表文件已写入本地磁盘。'}
                                             {job.status === 'handed-off' &&
                                                 ' · 是否保存成功请查看浏览器下载记录。'}
                                         </div>
@@ -2132,7 +2139,7 @@ export function App() {
                                                         )
                                                     }
                                                 >
-                                                    保存到本机
+                                                    保存到设备
                                                 </button>
                                                 <button
                                                     onClick={() =>

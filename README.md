@@ -302,9 +302,15 @@ node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest 
 
 ---
 
+## Large file transfers (2.0.5 source)
+
+files-v1 cross-MCP relay and file App uploads no longer have a 100 MiB per-file hard cap. With the matching chat-ai host, ordinary App downloads use the native browser download manager rather than a whole-file page Blob. “Save to device” starts receiving bytes; verified HTTP transfer is not proof of successful local disk persistence. Inline `readBytes` previews remain bounded to 2 MiB; text/Resource limits are unchanged.
+
+Upgrade the host and all participating endpoints, reconnect MCP and reopen Apps. staff-mcp through 2.0.4 retains the remote cap. Source snapshots and destination staging require disk space. Existing 30-second preparation RPC/remote lease, bounded data windows, cancellation, authorization and no-automatic-replay behavior remain; slow disks and deployment proxy limits can still reject large transfers. There is no unbounded-resource or resumable-transfer guarantee. Source changes are not npm publication.
+
 ## Release workflow
 
-Merge the verified release changes into `master` first. From an up-to-date `master` checkout, confirm that `package.json`, the root package-lock versions and the release tag agree; finalize the changelog, then create and push the new version tag. The npm workflow rejects a tag whose commit is not contained in remote `master`. Do not publish from a development branch or move an existing release tag. Merging code alone does not publish to npm.
+Merge the verified release changes into `master` first. From an up-to-date `master` checkout, confirm that `package.json`, the root package-lock versions and the release tag agree; finalize the changelog, then create and push the new version tag. The npm workflow rejects a tag whose commit is not contained in remote `master`. Do not publish from a development branch or move an existing release tag. Merging code alone does not publish to npm. `.github/workflows/publish.yml` runs Node 24 and OIDC trusted publishing with provenance; npm must trust the matching repository/workflow. Run `npm ci`, `npm run build` and `npm pack --dry-run` in the release checkout before tagging. After Actions succeeds, verify the exact version with `npm view staff-mcp@2.0.5 version`, update the package at each endpoint and restart it. See the [step-by-step release checklist](README_zh.md#发版流程); version/tag examples must be advanced for later releases.
 
 ## 📄 License
 

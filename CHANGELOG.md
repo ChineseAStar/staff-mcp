@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.5 — Unreleased
+
+- Remove the 100 MiB whole-file limit from files-v1 read preparation, write preparation and the file App upload queue. File sizes remain nonnegative safe integers; text editing (2 MiB), Resource reads (256 KiB), chunk/window bounds, permissions, staging protection and transfer concurrency are unchanged.
+- Snapshot a fixed initial source size in bounded 64 KiB chunks, preserving identity/metadata checks and detecting short reads or source changes. Cancellation, disconnect and lease expiry stop ongoing snapshot copy rather than continuing large unneeded disk I/O.
+- Pair with the matching chat-ai native-download host: uploads and cross-MCP relay stream without a whole-file buffer; App downloads stream through the browser's native download manager instead of a page Blob. Prepared means ready to start, not already downloaded. Completion reports verified response transfer, not successful persistence to the user's disk. Inline byte previews remain bounded to 2 MiB.
+- Source snapshots and destination staging need sufficient disk space. Existing 30-second preparation RPC/remote lease, streaming progress timeouts, cancellation, commit uncertainty and no-automatic-replay behavior remain. Slow storage, proxy limits or very large preparations can still fail; no unlimited-size/throughput or resumable-transfer guarantee is made.
+- Upgrade the chat-ai host and all participating staff-mcp endpoints, reconnect MCP and reopen file Apps. Versions through 2.0.4 still enforce the old remote limit. Extension protocol/data versions and native dependency pins are unchanged; no persistent data migration is needed. This entry is release preparation, not a claim of npm publication.
+
 ## 2.0.4 — 2026-10-27
 
 - Add opt-in Windows native ConPTY terminal support; all extensions remain off and native PTY code stays unloaded by default. Require Windows build >= 18309 plus compatible native binaries and an executable shell. Keep `node-pty@1.2.0-beta.18` unchanged; N-API/prebuild availability does not validate every OS/architecture. Windows arm64 and macOS remain untested on real hardware; no musl/Alpine terminal support is promised.

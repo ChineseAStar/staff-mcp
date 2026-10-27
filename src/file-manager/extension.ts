@@ -527,13 +527,7 @@ export function registerFileManager(
                 mode: z.enum(['read', 'write']),
                 rootId: z.string().min(1),
                 path: z.string().min(1),
-                size: z
-                    .number()
-                    .int()
-                    .nonnegative()
-                    .safe()
-                    .max(100 * 1024 * 1024)
-                    .optional(),
+                size: z.number().int().nonnegative().safe().optional(),
                 sha256: digest.optional(),
                 overwrite: z.boolean().optional(),
                 expectedVersion: expected,

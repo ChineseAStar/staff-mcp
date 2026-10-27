@@ -5,7 +5,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import {
-    FILE_LIMIT,
     FileCore,
     FileError,
     Mutex,
@@ -258,12 +257,11 @@ export class TransferManager {
                 'At most two transfers are allowed per session',
             );
         if (params.mode === 'write') {
-            if (
-                !Number.isSafeInteger(params.size) ||
-                params.size! < 0 ||
-                params.size! > FILE_LIMIT
-            )
-                fail('INVALID_PARAMS', 'Write size must be 0..100 MiB');
+            if (!Number.isSafeInteger(params.size) || params.size! < 0)
+                fail(
+                    'INVALID_PARAMS',
+                    'Write size must be a nonnegative safe integer',
+                );
             if (!!params.overwrite !== (params.expectedVersion !== undefined))
                 fail(
                     'INVALID_PARAMS',
@@ -333,6 +331,7 @@ export class TransferManager {
                     p.rootId,
                     p.path,
                     item.staging,
+                    item.abort.signal,
                 );
                 item.size = snapshot.size;
                 item.version = snapshot.version;

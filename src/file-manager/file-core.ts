@@ -4,7 +4,6 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 export const TEXT_LIMIT = 2 * 1024 * 1024;
-export const FILE_LIMIT = 100 * 1024 * 1024;
 export const CHUNK_LIMIT = 512 * 1024;
 export class FileError extends Error {
     constructor(
@@ -858,8 +857,15 @@ export class FileCore {
             return { deleted: true, path: file };
         });
     }
-    async snapshot(rootId: string, file: string, destination: string) {
+    async snapshot(
+        rootId: string,
+        file: string,
+        destination: string,
+        signal?: AbortSignal,
+    ) {
+        signal?.throwIfAborted();
         const source = await this.resolve(rootId, file);
+        signal?.throwIfAborted();
         const input = await fs.open(
             source,
             constants.O_RDONLY | constants.O_NOFOLLOW,
@@ -869,8 +875,12 @@ export class FileCore {
             const before = await input.stat();
             if (!before.isFile())
                 fail('NOT_FILE', 'Only files can be downloaded');
-            if (before.size > FILE_LIMIT)
-                fail('TOO_LARGE', 'Download limit is 100 MiB');
+            if (!Number.isSafeInteger(before.size) || before.size < 0)
+                fail(
+                    'INVALID_PARAMS',
+                    'Source size must be a nonnegative safe integer',
+                );
+            signal?.throwIfAborted();
             output = await fs.open(
                 destination,
                 constants.O_WRONLY |
@@ -880,23 +890,29 @@ export class FileCore {
                 0o600,
             );
             const hash = createHash('sha256');
-            const buffer = Buffer.alloc(CHUNK_LIMIT);
+            const buffer = Buffer.alloc(65536);
             let size = 0;
-            while (true) {
+            // Never chase a growing source: copy only the initially observed size.
+            while (size < before.size) {
+                signal?.throwIfAborted();
                 const { bytesRead } = await input.read(
                     buffer,
                     0,
-                    Math.min(buffer.length, FILE_LIMIT + 1 - size),
+                    Math.min(buffer.length, before.size - size),
                     size,
                 );
-                if (!bytesRead) break;
+                signal?.throwIfAborted();
+                if (!bytesRead)
+                    fail(
+                        'VERSION_CONFLICT',
+                        'Source changed while creating download snapshot',
+                    );
                 size += bytesRead;
-                if (size > FILE_LIMIT)
-                    fail('TOO_LARGE', 'Download limit is 100 MiB');
                 const chunk = buffer.subarray(0, bytesRead);
                 hash.update(chunk);
                 await output.writeFile(chunk);
             }
+            signal?.throwIfAborted();
             const unchanged = (after: Awaited<ReturnType<typeof input.stat>>) =>
                 before.dev === after.dev &&
                 before.ino === after.ino &&
@@ -911,6 +927,7 @@ export class FileCore {
                     'Source changed while creating download snapshot',
                 );
             await this.mutex.run(async () => {
+                signal?.throwIfAborted();
                 const current = await this.resolve(rootId, file);
                 if (current !== source || !unchanged(await fs.lstat(current)))
                     fail(
@@ -918,6 +935,7 @@ export class FileCore {
                         'Source changed while creating download snapshot',
                     );
             });
+            signal?.throwIfAborted();
             return {
                 name: path.basename(file),
                 size,
