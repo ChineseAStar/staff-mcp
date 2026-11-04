@@ -71,6 +71,10 @@ Regular files offer **Reference file** by default and a separate **Attach conten
 
 If an open tab for that file has unsaved changes, either action is blocked with a save-first message; the app never silently saves or attaches an older disk copy. The host composer remains the authority for current attachments. Older hosts which do not understand `mode` must be upgraded together, not silently treated as if a reference included file content.
 
+## Resizable desktop panes
+
+On wide layouts, drag the divider between the file tree and editor with the mouse to resize both panes. Pane minimums prevent either side from disappearing; resizing the host window clamps the visible width without changing file tabs or drafts. The setting lasts for the current open App instance and is not stored across users or servers. Narrow layouts retain the existing file/editor navigation instead of displaying a draggable divider. The focused divider also supports arrow keys and Home/End; double-click resets its default width.
+
 ## Markdown and directory transfers
 
 A structured `BINARY_FILE` refusal from `readText` is a normal unsupported text-preview result: the UI keeps a neutral placeholder, download and reference actions, without a red MCP error. Other size/encoding failures and real authorization, missing-file or connection errors remain visible; classification never guesses from an error-message substring or filename alone.

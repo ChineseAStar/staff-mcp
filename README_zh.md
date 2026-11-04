@@ -1,7 +1,5 @@
 # staff-mcp
 
-> 开发分支：`2.0.6-dev.2` 是尚未发布的本地测试包。文件引用、Markdown 预览、文件夹上传和 ZIP 下载需配套新版 chat-ai，见[文件管理说明](docs/file-manager.md)。不代表 npm 发布，也不会自动升级远程实例。
-
 [English](./README.md) | [简体中文](./README_zh.md)
 
 新一代模型上下文协议 (MCP) 服务器，它将普通的 AI 助手转变为一位极具能力的、支持容器化和按角色动态适配的“数字员工”。
@@ -11,6 +9,8 @@
 ---
 
 ## 兼容性与配套升级
+
+**2.0.6 版本：** 新增文件仅引用、Markdown 草稿预览、文件夹上传与 ZIP 下载，以及大文本手动加载（≤512 KiB 自动加载、>2 MiB 只读、≥5 MiB 仅下载）。二进制文件使用中性预览提示，读取失败保留未保存草稿。请配套 chat-ai 提交 `972d26e2df5998f67dbcbab96685f72ef1fadf3cbbf` 或兼容后继版本；终端后台心跳、上传 HTTP 诊断、命令编辑及 Apps 合并属于宿主更新，不由 npm 包单独提供。详见[文件管理说明](docs/file-manager.md)与 [CHANGELOG](CHANGELOG.md)。
 
 **2.0.5 版本：** 取消文件传输的 100 MiB 硬限制。配套将 chat-ai 升级至提交 `cfd7a2815f46d105b2da01d3980987c818ab0d39` 或兼容后继版本，以获得 App 流式上传、浏览器原生下载及跨 MCP 中转；参与传输的 staff-mcp 端点也须全部升级。内联预览仍限 2 MiB，资源边界与发布步骤见下文。
 
@@ -25,7 +25,7 @@
 无需进行 Chat8/schema9/format7/分享 protocol2 数据迁移。
 
 1. 结束在途操作，备份正常配置；无需转换数据。
-2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.5，并协调 reverse 连接的停机窗口。
+2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.6，并协调 reverse 连接的停机窗口。
 3. 重新连接 MCP、重新打开 App，仅显式启用需要的扩展。
 
 发布摘要见 [CHANGELOG](CHANGELOG.md)。
@@ -39,7 +39,7 @@
 使用明确版本运行 staff-mcp：
 
 ```bash
-npx --yes staff-mcp@2.0.5 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.0.6 --working-dir /path/to/your/project
 ```
 
 从源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口：
@@ -304,20 +304,20 @@ node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest 
 
 ## 大文件传输（2.0.5）
 
-files-v1 跨 MCP 中转与文件应用上传不再设置 100 MiB 单文件硬限制。配套 chat-ai 宿主的普通下载使用浏览器原生下载管理器，不再把整个文件收进网页 Blob；点击“保存到设备”后才开始接收。页面只显示传输进度，是否已成功写入磁盘请以浏览器下载记录为准。`readBytes` 小型预览仍限 2 MiB，文本编辑和标准 Resource 限制不变。
+files-v1 跨 MCP 中转与文件应用上传不再设置 100 MiB 单文件硬限制。配套 chat-ai 宿主的普通下载使用浏览器原生下载管理器，不再把整个文件收进网页 Blob；准备完成后交给浏览器开始下载；只有宿主确认需要时才显示手动开始入口。页面只显示传输进度，是否已成功写入磁盘请以浏览器下载记录为准。`readBytes` 小型预览仍限 2 MiB，文本编辑和标准 Resource 限制不变。
 
 需要升级源端、目标端和宿主，重新连接 MCP 并重开应用。2.0.4 及更早 staff-mcp 仍拒绝超过 100 MiB 的文件。源快照和目标暂存需要磁盘空间；保留准备请求 30 秒超时、远端租约、背压和权限检查，不提供断点续传或副作用自动重放。代理请求体／超时限制和慢盘仍可能导致失败。“无 100 MiB 硬限”不等于无限资源。新源码须完成以下发布流程后才会出现在 npm。
 
 ## 发版流程
 
 1. 在临时开发分支完成改动、补齐 CHANGELOG 发布日期，确认 `package.json`、`package-lock.json` 顶层及 `packages[""].version` 都是本次目标版本，提交并推送该分支。
-2. 运行以下 **Bash** 检查流程。先将 `VERSION` 和 `RELEASE_BRANCH` 改为本次已验收、尚未发布的版本与分支。示例为 2.0.5；它发布后不可原样重跑。任何一步失败都应先排查，不要跳过检查继续打标签。
+2. 运行以下 **Bash** 检查流程。先将 `VERSION` 和 `RELEASE_BRANCH` 改为本次已验收、尚未发布的版本与分支。示例为 2.0.6；它发布后不可原样重跑。任何一步失败都应先排查，不要跳过检查继续打标签。
 
 ```bash
 (
 set -euo pipefail
-VERSION=2.0.5
-RELEASE_BRANCH=tmp/streaming-file-size
+VERSION=2.0.6
+RELEASE_BRANCH=tmp/file-workspace-improvements
 
 git fetch origin --tags
 test -z "$(git status --porcelain)"
@@ -365,7 +365,7 @@ git push origin "refs/tags/v$VERSION"
 
 标签触发 `.github/workflows/publish.yml` 的 **Publish to npm**。工作流使用 Node 24、OIDC trusted publishing 和 `npm publish --provenance --access public`；npm 包设置中的 trusted publisher 必须对应仓库和 `publish.yml` 工作流文件。发布任务会验证标签对应提交已包含于远端 `master`，并校验三处版本；仅 push/合并 `master` 不会发布 npm。禁止从未合入的开发分支发版、移动已发布标签或重用已发布版本。
 
-成功后检查 Actions 和 `npm view staff-mcp@2.0.5 version`，再按原安装方式更新（如 `npm install -g staff-mcp@2.0.5` 或 `npx -y staff-mcp@2.0.5 ...`），并重启各 MCP 进程；已运行进程和已打开的 App 不会自动替换。版本号与标签示例需随每次后续发布更新。
+成功后检查 Actions 和 `npm view staff-mcp@2.0.6 version`，再按原安装方式更新（如 `npm install -g staff-mcp@2.0.6` 或 `npx -y staff-mcp@2.0.6 ...`），并重启各 MCP 进程；已运行进程和已打开的 App 不会自动替换。版本号与标签示例需随每次后续发布更新。
 
 ## 📄 License
 

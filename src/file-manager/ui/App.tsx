@@ -5,6 +5,7 @@ import {
     useState,
     useSyncExternalStore,
 } from 'react';
+import type { CSSProperties } from 'react';
 import type { EditorView } from '@codemirror/view';
 import { redo, undo } from '@codemirror/commands';
 import { openSearchPanel } from '@codemirror/search';
@@ -149,6 +150,10 @@ function entryIcon(entry: Pick<Entry, 'type' | 'name'>): IconName {
     return 'file';
 }
 
+const DEFAULT_TREE_WIDTH = 270;
+const MIN_TREE_WIDTH = 180;
+const MIN_EDITOR_WIDTH = 240;
+
 export function App() {
     const lifecycle = useSyncExternalStore(bridge.subscribe, bridge.snapshot);
     const available = lifecycle.enabled && lifecycle.connected;
@@ -167,6 +172,52 @@ export function App() {
         { rootId: string; path: string } | undefined
     >(undefined);
     const [mobileView, setMobileView] = useState<'files' | 'editor'>('files');
+    // Keep the requested width when the host temporarily shrinks or hides the App.
+    const [requestedTreeWidth, setRequestedTreeWidth] =
+        useState(DEFAULT_TREE_WIDTH);
+    const [workspaceWidth, setWorkspaceWidth] = useState(0);
+    const [resizing, setResizing] = useState(false);
+    const workspace = useRef<HTMLDivElement>(null);
+    const resizeGesture = useRef<{
+        element: HTMLDivElement;
+        pointerId: number;
+        startX: number;
+        startWidth: number;
+    } | null>(null);
+    const maxTreeWidth = Math.max(
+        MIN_TREE_WIDTH,
+        workspaceWidth ? workspaceWidth - MIN_EDITOR_WIDTH : DEFAULT_TREE_WIDTH,
+    );
+    const treeWidth = Math.min(
+        maxTreeWidth,
+        Math.max(MIN_TREE_WIDTH, requestedTreeWidth),
+    );
+    const finishResize = useCallback(() => {
+        const gesture = resizeGesture.current;
+        resizeGesture.current = null;
+        if (gesture?.element.hasPointerCapture(gesture.pointerId))
+            gesture.element.releasePointerCapture(gesture.pointerId);
+        setResizing(false);
+    }, []);
+
+    useEffect(() => {
+        const element = workspace.current;
+        if (!element) return;
+        const observer = new ResizeObserver(([entry]) => {
+            const width = Math.floor(entry.contentRect.width);
+            setWorkspaceWidth(width);
+            if (width < 900) finishResize();
+        });
+        observer.observe(element);
+        return () => {
+            observer.disconnect();
+            const gesture = resizeGesture.current;
+            resizeGesture.current = null;
+            if (gesture?.element.hasPointerCapture(gesture.pointerId))
+                gesture.element.releasePointerCapture(gesture.pointerId);
+        };
+    }, [finishResize]);
+
     const [opening, setOpening] = useState(false);
     const openingPaths = useRef(new Set<string>());
     const savingTabs = useRef(new Set<string>());
@@ -1674,7 +1725,14 @@ export function App() {
                 </FileContextMenu>
             )}
 
-            <div className="workspace">
+            <div
+                ref={workspace}
+                className="workspace"
+                data-resizing={resizing || undefined}
+                style={
+                    { '--tree-pane-width': `${treeWidth}px` } as CSSProperties
+                }
+            >
                 <section
                     id="directory-panel"
                     className="directory-panel"
@@ -1756,6 +1814,81 @@ export function App() {
                         entryIcon={entryIcon}
                     />
                 </section>
+
+                <div
+                    className="pane-separator"
+                    role="separator"
+                    aria-label="文件列表宽度"
+                    aria-orientation="vertical"
+                    aria-controls="directory-panel"
+                    aria-valuemin={MIN_TREE_WIDTH}
+                    aria-valuemax={maxTreeWidth}
+                    aria-valuenow={treeWidth}
+                    tabIndex={0}
+                    title="拖动或使用左右方向键调整宽度，双击恢复默认"
+                    onPointerDown={(event) => {
+                        if (!event.isPrimary || event.button !== 0) return;
+                        event.preventDefault();
+                        event.currentTarget.focus();
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                        resizeGesture.current = {
+                            element: event.currentTarget,
+                            pointerId: event.pointerId,
+                            startX: event.clientX,
+                            startWidth: treeWidth,
+                        };
+                        setResizing(true);
+                    }}
+                    onPointerMove={(event) => {
+                        const gesture = resizeGesture.current;
+                        if (!gesture || gesture.pointerId !== event.pointerId)
+                            return;
+                        setRequestedTreeWidth(
+                            Math.min(
+                                maxTreeWidth,
+                                Math.max(
+                                    MIN_TREE_WIDTH,
+                                    gesture.startWidth +
+                                        event.clientX -
+                                        gesture.startX,
+                                ),
+                            ),
+                        );
+                    }}
+                    onPointerUp={finishResize}
+                    onPointerCancel={finishResize}
+                    onLostPointerCapture={finishResize}
+                    onDoubleClick={() =>
+                        setRequestedTreeWidth(DEFAULT_TREE_WIDTH)
+                    }
+                    onKeyDown={(event) => {
+                        let next: number;
+                        const step = event.shiftKey ? 50 : 10;
+                        switch (event.key) {
+                            case 'ArrowLeft':
+                                next = treeWidth - step;
+                                break;
+                            case 'ArrowRight':
+                                next = treeWidth + step;
+                                break;
+                            case 'Home':
+                                next = MIN_TREE_WIDTH;
+                                break;
+                            case 'End':
+                                next = maxTreeWidth;
+                                break;
+                            default:
+                                return;
+                        }
+                        event.preventDefault();
+                        setRequestedTreeWidth(
+                            Math.min(
+                                maxTreeWidth,
+                                Math.max(MIN_TREE_WIDTH, next),
+                            ),
+                        );
+                    }}
+                />
 
                 <section
                     id="editor-section"

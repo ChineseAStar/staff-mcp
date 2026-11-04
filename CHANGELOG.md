@@ -1,27 +1,20 @@
 # Changelog
 
-## 2.0.6-dev.2 (unreleased development branch)
+## 2.0.6 — 2026-11-04
 
-- Defer text loading above 512 KiB until the user explicitly chooses to view it. Files at or above 5 MiB remain download-only; previews over the existing 2 MiB editing limit are read-only.
-- Keep text-save and resource-attachment limits unchanged, and preserve binary-file, authorization and version-conflict behavior.
+- Add reference-only file attachments, with a separate bounded content-attachment action. A matching chat-ai host preserves source metadata in formal messages, history, sharing and export; references do not read or copy file contents.
+- Let users resize the desktop file tree/editor split by dragging its divider, with bounded pane sizes and unchanged narrow-screen navigation. The width is local to the open App instance.
+- Add Markdown previews of the current unsaved draft, with GFM support but no raw HTML execution, external image loads or navigation.
+- Add directory-picker uploads that preserve relative paths, with per-file conflict checks and explicit overwrite confirmation. Browser pickers omit empty directories; batches are not atomic, and cancellation does not delete already committed files or created directories.
+- Add explicit server-side ZIP downloads for non-root directories, preserving Unicode names and empty directories. ZIP preparation uses disk-backed snapshots and rejects symlinks, protected staging paths and unsupported objects; it is not an atomic snapshot of a concurrently changing directory.
+- Start native downloads after preparation without a second routine confirmation; retain a host-confirmed manual-start fallback. Preserve safe file error codes/phases without exposing internal paths or credentials.
+- Retain cleaned-up terminal transfer receipts separately from active transfers: 2 active, 128 heavy/unresolved and 4096 total retained records. Final receipts keep their existing five-minute lifetime; unknown publication results are not compacted or automatically replayed.
+- Treat structured `BINARY_FILE` text-preview refusals as normal unsupported-preview states, keeping download/reference actions available. Actual permission, missing-file, size and connection errors remain visible.
+- Automatically load text up to 512 KiB; larger files below 5 MiB require an explicit Load text action. Previews above the existing 2 MiB editing limit are read-only; files at or above 5 MiB are download-only. Preserve dirty drafts on failed rereads and check the encoded RPC budget without increasing the SDK stdio buffer limit.
+- Keep the 2 MiB text-save and 256 KiB content-attachment limits, extension/data protocol versions, native dependency pins, permissions, leases and single-use transfer/commit safeguards unchanged. No persistent data migration is required.
+- Upgrade chat-ai to commit `972d26e2df5998f67dbcbab96685f72ef1fadf3cbbf` or a compatible descendant, then update staff-mcp, reconnect MCP and reopen Apps. Background WebSocket heartbeats, upload HTTP diagnostics, command editing and source-bound App merging are host changes, not fixes delivered by this npm package alone.
 
-This is a local development package, not an npm release or an automatic update of remote instances.
-
-## 2.0.6-dev.1 (unreleased development branch)
-
-- Treat structured binary-file text-preview refusal as a normal unsupported-preview state instead of a red MCP failure; keep download and file-reference actions available. Actual permission, missing-file, size and connection errors remain visible.
-- The paired chat-ai host now keeps terminal presence through authenticated WebSocket ping/pong rather than background JavaScript timers. This host-side fix does not change staff terminal leases or data-consumption ACK requirements.
-
-This is a local development package, not an npm release or an automatic update of remote instances.
-
-## 2.0.6-dev.0 (unreleased development branch)
-
-- Add reference-only file attachments, with a separate bounded content-attachment action for compatible hosts.
-- Add safe Markdown draft previews, directory-picker uploads preserving relative paths, and explicit directory ZIP downloads.
-- Start native downloads after preparation without a second routine confirmation; retain a host-confirmed manual-start fallback.
-- Preserve safe file error codes/phases and retain completed transfer receipts without occupying the active-record budget.
-
-This development package is built locally for paired chat-ai testing; it is not an npm release. It does not add video playback, resumable downloads or automatic retries of uncertain writes.
+Existing preparation/lease limits, disk-space requirements, proxy limits and data-consumption timeouts still apply. This release does not add video playback, resumable transfers, or automatic retries of uncertain writes; it does not claim to resolve every large-file/slow-link failure. Remote running processes are not updated automatically.
 
 ## 2.0.5 — 2026-10-27
 
