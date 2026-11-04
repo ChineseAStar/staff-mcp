@@ -1,6 +1,6 @@
 # staff-mcp
 
-> Development branch: `2.0.6-dev.0` is an unpublished local test package. File references, Markdown previews, folder uploads and ZIP downloads require the matching chat-ai host; see [file manager](docs/file-manager.md). No npm release or automatic remote upgrade is implied.
+> Development branch: `2.0.6-dev.1` is an unpublished local test package. File references, Markdown previews, folder uploads and ZIP downloads require the matching chat-ai host; see [file manager](docs/file-manager.md). No npm release or automatic remote upgrade is implied.
 
 [English](./README.md) | [简体中文](./README_zh.md)
 

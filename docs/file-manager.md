@@ -73,6 +73,8 @@ If an open tab for that file has unsaved changes, either action is blocked with 
 
 ## Markdown and directory transfers
 
+A structured `BINARY_FILE` refusal from `readText` is a normal unsupported text-preview result: the UI keeps a neutral placeholder, download and reference actions, without a red MCP error. Other size/encoding failures and real authorization, missing-file or connection errors remain visible; classification never guesses from an error-message substring or filename alone.
+
 `.md` and `.markdown` text tabs provide Edit and Preview modes. Preview uses the current unsaved draft, supports GFM tables/lists/code, and never saves as a side effect. Raw HTML is not executed, images are not fetched, and links do not open arbitrary network destinations from the isolated App. Text size and file save/version checks are unchanged. Video/audio streaming, Range downloads and transcoding are not included.
 
 **Upload folder** uses the browser directory picker and preserves each selected file's relative path. It validates components, creates required directories, then uses the existing bounded per-file upload queue and overwrite/version confirmation. Browser directory selections do not represent empty directories; empty-folder preservation is not promised. Folder paste/drop is still rejected rather than silently uploading a partial tree. Root/connection changes fence a pending picker, and no operation gains access outside the selected file root. This is not an all-or-nothing batch: cancellation or a later failure does not remove already-created directories or committed files.

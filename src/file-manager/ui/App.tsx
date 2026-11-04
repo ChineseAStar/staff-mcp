@@ -478,7 +478,11 @@ export function App() {
                             'UNSUPPORTED_ENCODING',
                         ].includes(error.code)
                     ) {
-                        tab.error = errorMessage(error);
+                        // A confirmed binary file uses the neutral preview placeholder.
+                        // Keep size/encoding failures visible; never infer from the message.
+                        if (error.code !== 'BINARY_FILE') {
+                            tab.error = errorMessage(error);
+                        }
                     } else throw error;
                 }
             } else if (imageMimeType) {
@@ -2082,7 +2086,7 @@ export function App() {
                                     <span>
                                         {tab.kind === 'image'
                                             ? '无法预览图片'
-                                            : '此文件不支持文本编辑'}
+                                            : '此文件不支持文本预览或编辑'}
                                     </span>
                                     <button
                                         disabled={!available}

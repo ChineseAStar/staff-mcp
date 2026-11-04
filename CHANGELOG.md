@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.6-dev.1 (unreleased development branch)
+
+- Treat structured binary-file text-preview refusal as a normal unsupported-preview state instead of a red MCP failure; keep download and file-reference actions available. Actual permission, missing-file, size and connection errors remain visible.
+- The paired chat-ai host now keeps terminal presence through authenticated WebSocket ping/pong rather than background JavaScript timers. This host-side fix does not change staff terminal leases or data-consumption ACK requirements.
+
+This is a local development package, not an npm release or an automatic update of remote instances.
+
 ## 2.0.6-dev.0 (unreleased development branch)
 
 - Add reference-only file attachments, with a separate bounded content-attachment action for compatible hosts.
