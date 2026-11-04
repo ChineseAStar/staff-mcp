@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.6-dev.2 (unreleased development branch)
+
+- Defer text loading above 512 KiB until the user explicitly chooses to view it. Files at or above 5 MiB remain download-only; previews over the existing 2 MiB editing limit are read-only.
+- Keep text-save and resource-attachment limits unchanged, and preserve binary-file, authorization and version-conflict behavior.
+
+This is a local development package, not an npm release or an automatic update of remote instances.
+
 ## 2.0.6-dev.1 (unreleased development branch)
 
 - Treat structured binary-file text-preview refusal as a normal unsupported-preview state instead of a red MCP failure; keep download and file-reference actions available. Actual permission, missing-file, size and connection errors remain visible.

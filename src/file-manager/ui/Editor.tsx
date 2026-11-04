@@ -10,11 +10,13 @@ import { markdown } from '@codemirror/lang-markdown';
 import { html } from '@codemirror/lang-html';
 import { javascript } from '@codemirror/lang-javascript';
 import { css } from '@codemirror/lang-css';
+import { TEXT_AUTO_LIMIT } from '../text-limits';
 
 interface Props {
     id: string;
     name: string;
     text: string;
+    size: number;
     revision: number;
     active: boolean;
     readOnly: boolean;
@@ -49,7 +51,9 @@ const chinesePhrases = {
     'replaced match on line $': '已替换第 $ 行的匹配',
 };
 
-function language(name: string) {
+function language(name: string, size: number) {
+    // Large, explicitly loaded documents stay plain text: no full syntax parse.
+    if (size >= TEXT_AUTO_LIMIT) return [];
     if (/\.(json|jsonc)$/i.test(name)) return json();
     if (/\.(md|markdown)$/i.test(name)) return markdown();
     if (/\.(html?|svg|xml)$/i.test(name)) return html();
@@ -132,12 +136,14 @@ export function TextEditor(props: Props) {
                         ]),
                     ),
                     wrapping.current.of(
-                        compact.matches ? EditorView.lineWrapping : [],
+                        compact.matches && initial.size < TEXT_AUTO_LIMIT
+                            ? EditorView.lineWrapping
+                            : [],
                     ),
                     EditorState.lineSeparator.of(lineBreak),
                     EditorState.phrases.of(chinesePhrases),
                     nameConfiguration.current.of([
-                        language(initial.name),
+                        language(initial.name, initial.size),
                         EditorView.contentAttributes.of({
                             'aria-label': `编辑 ${initial.name}`,
                             'aria-multiline': 'true',
@@ -152,14 +158,15 @@ export function TextEditor(props: Props) {
                         {
                             key: 'Mod-s',
                             run: () => {
-                                current.current.onSave();
+                                if (!current.current.readOnly)
+                                    current.current.onSave();
                                 return true;
                             },
                         },
                         indentWithTab,
                     ]),
                     EditorView.updateListener.of((update) => {
-                        if (update.docChanged) {
+                        if (update.docChanged && !current.current.readOnly) {
                             current.current.onChange(update.state.sliceDoc());
                         }
                     }),
@@ -221,7 +228,9 @@ export function TextEditor(props: Props) {
         const updateWrapping = () => {
             instance.dispatch({
                 effects: wrapping.current.reconfigure(
-                    compact.matches ? EditorView.lineWrapping : [],
+                    compact.matches && initial.size < TEXT_AUTO_LIMIT
+                        ? EditorView.lineWrapping
+                        : [],
                 ),
             });
         };
@@ -247,7 +256,7 @@ export function TextEditor(props: Props) {
     useEffect(() => {
         view.current?.dispatch({
             effects: nameConfiguration.current.reconfigure([
-                language(props.name),
+                language(props.name, props.size),
                 EditorView.contentAttributes.of({
                     'aria-label': `编辑 ${props.name}`,
                     'aria-multiline': 'true',
@@ -255,7 +264,7 @@ export function TextEditor(props: Props) {
                 }),
             ]),
         });
-    }, [props.name, props.revision]);
+    }, [props.name, props.size, props.revision]);
 
     useEffect(() => {
         if (props.active) view.current?.requestMeasure();

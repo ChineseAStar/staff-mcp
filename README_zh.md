@@ -1,6 +1,6 @@
 # staff-mcp
 
-> 开发分支：`2.0.6-dev.1` 是尚未发布的本地测试包。文件引用、Markdown 预览、文件夹上传和 ZIP 下载需配套新版 chat-ai，见[文件管理说明](docs/file-manager.md)。不代表 npm 发布，也不会自动升级远程实例。
+> 开发分支：`2.0.6-dev.2` 是尚未发布的本地测试包。文件引用、Markdown 预览、文件夹上传和 ZIP 下载需配套新版 chat-ai，见[文件管理说明](docs/file-manager.md)。不代表 npm 发布，也不会自动升级远程实例。
 
 [English](./README.md) | [简体中文](./README_zh.md)
 

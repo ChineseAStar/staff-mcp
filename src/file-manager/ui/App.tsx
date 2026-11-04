@@ -25,6 +25,11 @@ import {
 } from './transfers';
 import { formatSize, Icon, IconButton, Menu, Modal } from './ui';
 import type { IconName } from './ui';
+import {
+    TEXT_LIMIT,
+    TEXT_AUTO_LIMIT,
+    TEXT_PREVIEW_LIMIT,
+} from '../text-limits';
 
 interface Root {
     rootId: string;
@@ -50,7 +55,7 @@ interface FileTab {
     id: string;
     rootId: string;
     name: string;
-    kind: 'text' | 'image' | 'binary';
+    kind: 'pending' | 'text' | 'image' | 'binary';
     text: string;
     savedText: string;
     version: string;
@@ -110,6 +115,10 @@ function isDirty(tab: FileTab) {
     return tab.kind === 'text' && tab.text !== tab.savedText;
 }
 
+function hasMarkdownPreview(tab: FileTab) {
+    return isMarkdown(tab.name) && tab.size <= TEXT_LIMIT;
+}
+
 function affected(tab: FileTab, rootId: string, path: string) {
     return tab.rootId === rootId && withinPath(tab.path, path);
 }
@@ -161,6 +170,7 @@ export function App() {
     const [opening, setOpening] = useState(false);
     const openingPaths = useRef(new Set<string>());
     const savingTabs = useRef(new Set<string>());
+    const loadingTabs = useRef(new Set<string>());
     const tabSequence = useRef(0);
     const views = useRef(new Map<string, EditorView>());
     const [attaching, setAttaching] = useState<{
@@ -409,6 +419,121 @@ export function App() {
         }
     };
 
+    // Metadata first: pending tabs never prepare a snapshot or read the body.
+    const loadText = async (tab: FileTab, confirmed = false) => {
+        if (!available || loadingTabs.current.has(tab.id)) return;
+        const replacingText = tab.kind === 'text';
+        const epoch = actionContext.current.epoch;
+        const isCurrent = () =>
+            epoch === actionContext.current.epoch &&
+            actionContext.current.available &&
+            tabsRef.current.some(
+                (item) =>
+                    item.id === tab.id &&
+                    item.path === tab.path &&
+                    item.rootId === tab.rootId,
+            );
+        loadingTabs.current.add(tab.id);
+        updateTab(tab.id, { busy: true, error: undefined });
+        try {
+            const stat = await bridge.request<FileStat>('stat', {
+                rootId: tab.rootId,
+                path: tab.path,
+            });
+            if (!isCurrent()) return;
+            // Keep an existing document intact until its replacement is ready.
+            if (!replacingText)
+                updateTab(tab.id, {
+                    size: stat.size,
+                    readOnly: stat.readOnly || stat.size > TEXT_LIMIT,
+                });
+            if (
+                stat.size > TEXT_PREVIEW_LIMIT ||
+                (!confirmed && stat.size > TEXT_AUTO_LIMIT)
+            ) {
+                if (replacingText)
+                    throw new Error(
+                        stat.size > TEXT_PREVIEW_LIMIT
+                            ? '文件达到 5 MiB，不支持在线文本预览，请下载查看。'
+                            : '文件超过自动读取上限，请确认后重新读取。',
+                    );
+                updateTab(tab.id, {
+                    kind: 'pending',
+                    preview: false,
+                    conflict: false,
+                });
+                return;
+            }
+            const result = await bridge.request<TextResult>('readText', {
+                rootId: tab.rootId,
+                path: tab.path,
+                // Recheck the actual opened file in core, not just the stat above.
+                maxBytes: confirmed ? TEXT_PREVIEW_LIMIT : TEXT_AUTO_LIMIT,
+            });
+            if (!isCurrent()) return;
+            updateTab(tab.id, {
+                kind: 'text',
+                text: result.text,
+                savedText: result.text,
+                version: result.version,
+                encoding: result.encoding,
+                size: result.size,
+                readOnly: stat.readOnly || result.size > TEXT_LIMIT,
+                conflict: false,
+                preview: false,
+                revision: tab.revision + 1,
+            });
+        } catch (error) {
+            if (!isCurrent()) return;
+            if (replacingText) {
+                updateTab(tab.id, {
+                    error: `重新读取失败，草稿已保留。${errorMessage(error)}`,
+                });
+            } else if (
+                error instanceof BridgeError &&
+                error.code === 'BINARY_FILE'
+            ) {
+                updateTab(tab.id, {
+                    kind: 'binary',
+                    error: undefined,
+                    preview: false,
+                    conflict: false,
+                });
+            } else if (
+                error instanceof BridgeError &&
+                error.code === 'TOO_LARGE'
+            ) {
+                // A small file may grow after stat. Require a click, never auto-retry.
+                // An explicitly authorized read refused by the wire budget falls back to download.
+                updateTab(tab.id, {
+                    kind: confirmed ? 'binary' : 'pending',
+                    preview: false,
+                    conflict: false,
+                    error: confirmed ? errorMessage(error) : undefined,
+                });
+                try {
+                    const stat = await bridge.request<FileStat>('stat', {
+                        rootId: tab.rootId,
+                        path: tab.path,
+                    });
+                    if (isCurrent())
+                        updateTab(tab.id, {
+                            size: stat.size,
+                            readOnly: stat.readOnly || stat.size > TEXT_LIMIT,
+                        });
+                } catch (statError) {
+                    if (isCurrent())
+                        updateTab(tab.id, { error: errorMessage(statError) });
+                }
+            } else {
+                updateTab(tab.id, { error: errorMessage(error) });
+            }
+        } finally {
+            loadingTabs.current.delete(tab.id);
+            updateTab(tab.id, { busy: false });
+        }
+    };
+
     const openPath = async (
         targetRoot: string,
         path: string,
@@ -423,6 +548,7 @@ export function App() {
         }
         const key = `${targetRoot}\0${path}`;
         if (openingPaths.current.has(key)) return;
+        const epoch = actionContext.current.epoch;
         openingPaths.current.add(key);
         setOpening(true);
         try {
@@ -441,7 +567,7 @@ export function App() {
                 rootId: targetRoot,
                 path,
                 name: fileName(path),
-                kind: 'binary',
+                kind: imageMimeType ? 'image' : 'pending',
                 text: '',
                 savedText: '',
                 version: '',
@@ -451,42 +577,7 @@ export function App() {
                     ?.readOnly,
                 revision: 0,
             };
-            if (!imageMimeType && (entry?.size ?? 0) <= 2 * 1024 * 1024) {
-                try {
-                    const result = await bridge.request<TextResult>(
-                        'readText',
-                        {
-                            rootId: targetRoot,
-                            path,
-                        },
-                    );
-                    Object.assign(tab, {
-                        kind: 'text',
-                        text: result.text,
-                        savedText: result.text,
-                        version: result.version,
-                        encoding: result.encoding,
-                        size: result.size,
-                    });
-                } catch (error) {
-                    if (
-                        error instanceof BridgeError &&
-                        [
-                            'TOO_LARGE',
-                            'BINARY_FILE',
-                            'NOT_TEXT',
-                            'UNSUPPORTED_ENCODING',
-                        ].includes(error.code)
-                    ) {
-                        // A confirmed binary file uses the neutral preview placeholder.
-                        // Keep size/encoding failures visible; never infer from the message.
-                        if (error.code !== 'BINARY_FILE') {
-                            tab.error = errorMessage(error);
-                        }
-                    } else throw error;
-                }
-            } else if (imageMimeType) {
-                tab.kind = 'image';
+            if (imageMimeType) {
                 try {
                     const result = await bridge.request<{ data: string }>(
                         'readBytes',
@@ -501,11 +592,18 @@ export function App() {
                     tab.error = errorMessage(error);
                 }
             }
+            if (
+                epoch !== actionContext.current.epoch ||
+                !actionContext.current.available
+            )
+                return;
             setTabs((current) => [...current, tab]);
             setActiveTabId(tab.id);
             setMobileView('editor');
+            if (!imageMimeType) await loadText(tab);
         } catch (error) {
-            setNotice({ kind: 'error', text: errorMessage(error) });
+            if (epoch === actionContext.current.epoch)
+                setNotice({ kind: 'error', text: errorMessage(error) });
         } finally {
             openingPaths.current.delete(key);
             setOpening(openingPaths.current.size > 0);
@@ -530,6 +628,7 @@ export function App() {
             tab.busy ||
             savingTabs.current.has(id) ||
             tab.readOnly ||
+            tab.size > TEXT_LIMIT ||
             !canWrite(tab.rootId) ||
             !isDirty(tab)
         )
@@ -554,7 +653,7 @@ export function App() {
             return;
         }
         const { text, name, path } = tab;
-        if (new TextEncoder().encode(text).byteLength > 2 * 1024 * 1024) {
+        if (new TextEncoder().encode(text).byteLength > TEXT_LIMIT) {
             updateTab(id, { error: '文本编辑上限为 2 MiB，正文已保留。' });
             return;
         }
@@ -639,7 +738,7 @@ export function App() {
     };
 
     const closeTab = (tab: FileTab) => {
-        if (tab.busy) return;
+        if (tab.busy && tab.kind !== 'pending') return;
         if (isDirty(tab)) {
             setDialog({ kind: 'close', tabId: tab.id });
             setDialogError('');
@@ -859,6 +958,13 @@ export function App() {
     };
 
     const beginReread = (tab: FileTab) => {
+        if (
+            !available ||
+            tab.kind !== 'text' ||
+            tab.busy ||
+            loadingTabs.current.has(tab.id)
+        )
+            return;
         setDialog({ kind: 'reread', tabId: tab.id });
         setDialogError('');
     };
@@ -1025,22 +1131,9 @@ export function App() {
                     (item) => item.id === dialog.tabId,
                 );
                 if (!tab) throw new Error('文件标签已关闭。');
-                const result = await bridge.request<TextResult>('readText', {
-                    rootId: tab.rootId,
-                    path: tab.path,
-                });
-                updateTab(tab.id, {
-                    text: result.text,
-                    savedText: result.text,
-                    version: result.version,
-                    size: result.size,
-                    encoding: result.encoding,
-                    conflict: false,
-                    error: undefined,
-                    revision: tab.revision + 1,
-                });
-                setDialog(undefined);
-                setNotice({ kind: 'success', text: '已重新读取服务器内容。' });
+                await loadText(tab, true);
+                if (dialogEpoch.current === actionContext.current.epoch)
+                    setDialog(undefined);
             }
         } catch (error) {
             setDialogError(errorMessage(error));
@@ -1101,7 +1194,13 @@ export function App() {
 
     const editorCommand = (command: 'undo' | 'redo' | 'search') => {
         const view = views.current.get(activeTabId);
-        if (!view) return;
+        if (
+            !view ||
+            !activeTab ||
+            (command !== 'search' &&
+                (activeTab.readOnly || !canWrite(activeTab.rootId)))
+        )
+            return;
         if (command === 'search') openSearchPanel(view);
         else if (command === 'undo') undo(view);
         else redo(view);
@@ -1746,7 +1845,9 @@ export function App() {
                                         className="tab-close icon-button"
                                         title={`关闭 ${tab.name}`}
                                         aria-label={`关闭 ${tab.name}`}
-                                        disabled={tab.busy}
+                                        disabled={
+                                            tab.busy && tab.kind !== 'pending'
+                                        }
                                         onClick={() => closeTab(tab)}
                                     >
                                         <Icon name="close" size={12} />
@@ -1766,7 +1867,7 @@ export function App() {
                             )}
                             {activeTab.kind === 'text' && (
                                 <>
-                                    {isMarkdown(activeTab.name) && (
+                                    {hasMarkdownPreview(activeTab) && (
                                         <div
                                             className="preview-segment"
                                             role="group"
@@ -1803,7 +1904,7 @@ export function App() {
                                         name="search"
                                         title="查找与替换（Ctrl/Cmd+F）"
                                         disabled={
-                                            isMarkdown(activeTab.name) &&
+                                            hasMarkdownPreview(activeTab) &&
                                             activeTab.preview
                                         }
                                         onClick={() => editorCommand('search')}
@@ -1814,7 +1915,7 @@ export function App() {
                                         disabled={
                                             !available ||
                                             activeTab.readOnly ||
-                                            (isMarkdown(activeTab.name) &&
+                                            (hasMarkdownPreview(activeTab) &&
                                                 activeTab.preview)
                                         }
                                         onClick={() => editorCommand('undo')}
@@ -1835,7 +1936,7 @@ export function App() {
                                         }
                                     >
                                         <Icon name="save" size={14} />
-                                        {activeTab.busy ? '保存中' : '保存'}
+                                        {activeTab.busy ? '处理中' : '保存'}
                                     </button>
                                 </>
                             )}
@@ -1944,7 +2045,9 @@ export function App() {
                                                     }
                                                 >
                                                     <Icon name="copy" />
-                                                    复制完整草稿
+                                                    {activeTab.readOnly
+                                                        ? '复制完整文本'
+                                                        : '复制完整草稿'}
                                                 </button>
                                                 <button
                                                     role="menuitem"
@@ -2026,19 +2129,21 @@ export function App() {
                                     <div
                                         className="text-editor-pane"
                                         hidden={
-                                            isMarkdown(tab.name) && tab.preview
+                                            hasMarkdownPreview(tab) &&
+                                            tab.preview
                                         }
                                     >
                                         <TextEditor
                                             id={tab.id}
                                             name={tab.name}
                                             text={tab.text}
+                                            size={tab.size}
                                             revision={tab.revision}
                                             active={
                                                 activeTabId === tab.id &&
                                                 mobilePane === 'editor' &&
                                                 !(
-                                                    isMarkdown(tab.name) &&
+                                                    hasMarkdownPreview(tab) &&
                                                     tab.preview
                                                 )
                                             }
@@ -2046,17 +2151,58 @@ export function App() {
                                                 tab.readOnly ||
                                                 !canWrite(tab.rootId)
                                             }
-                                            onChange={(text) =>
-                                                updateTab(tab.id, { text })
-                                            }
+                                            onChange={(text) => {
+                                                if (
+                                                    !tab.readOnly &&
+                                                    canWrite(tab.rootId)
+                                                )
+                                                    updateTab(tab.id, { text });
+                                            }}
                                             onSave={() => void saveTab(tab.id)}
                                             onView={onView}
                                         />
                                     </div>
-                                    {isMarkdown(tab.name) && tab.preview && (
+                                    {hasMarkdownPreview(tab) && tab.preview && (
                                         <MarkdownPreview text={tab.text} />
                                     )}
                                 </>
+                            ) : tab.kind === 'pending' ? (
+                                <div className="empty-state binary-state">
+                                    <Icon name="file" size={32} />
+                                    <span>
+                                        {tab.name} · {formatSize(tab.size)}
+                                    </span>
+                                    <span>
+                                        {tab.busy
+                                            ? '正在检查或读取文件…'
+                                            : tab.size > TEXT_PREVIEW_LIMIT
+                                              ? '文件达到 5 MiB，不支持在线文本预览，请下载查看。'
+                                              : '文件较大，点击后尝试文本读取。超过 2 MiB 的文本仅供只读查看。'}
+                                    </span>
+                                    {tab.size <= TEXT_PREVIEW_LIMIT && (
+                                        <button
+                                            disabled={!available || tab.busy}
+                                            onClick={() =>
+                                                void loadText(tab, true)
+                                            }
+                                        >
+                                            {tab.busy ? '加载中…' : '加载文本'}
+                                        </button>
+                                    )}
+                                    <button
+                                        disabled={!available}
+                                        onClick={() =>
+                                            download(
+                                                tab.rootId,
+                                                tab.path,
+                                                tab.size,
+                                            )
+                                        }
+                                    >
+                                        <Icon name="download" />
+                                        下载文件
+                                    </button>
+                                </div>
                             ) : tab.kind === 'image' && tab.image ? (
                                 <div className="image-preview">
                                     <img

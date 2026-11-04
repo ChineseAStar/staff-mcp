@@ -6,8 +6,8 @@ import { ZipFile } from 'yazl';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-
-export const TEXT_LIMIT = 2 * 1024 * 1024;
+import { TEXT_LIMIT, TEXT_PREVIEW_LIMIT } from './text-limits.js';
+export { TEXT_LIMIT } from './text-limits.js';
 export const CHUNK_LIMIT = 512 * 1024;
 export class FileError extends Error {
     constructor(
@@ -631,6 +631,8 @@ export class FileCore {
         }
     }
     async readText(rootId: string, file: string, max = TEXT_LIMIT) {
+        if (!Number.isInteger(max) || max < 1 || max > TEXT_PREVIEW_LIMIT)
+            fail('INVALID_PARAMS', `maxBytes must be 1..${TEXT_PREVIEW_LIMIT}`);
         const data = await this.readBytes(rootId, file, max);
         return {
             text: utf8(data),

@@ -32,8 +32,11 @@ import {
     supports,
 } from '../extensions/protocol.js';
 import { FILE_MANAGER, readAppResource } from '../extensions/apps.js';
+import { TEXT_LIMIT, TEXT_PREVIEW_LIMIT } from './text-limits.js';
 
 const RESOURCE_LIMIT = 256 * 1024;
+// Keep escaped results below the SDK's 10 MiB stdio buffer, including envelope.
+const TEXT_RESULT_WIRE_LIMIT = 10 * 1024 * 1024 - 64 * 1024;
 const pathField = z.string();
 const rootPath = { rootId: z.string().default('main'), path: pathField };
 const expected = z.string().min(1).optional();
@@ -50,7 +53,17 @@ const params = {
     stat: z
         .object({ ...rootPath, includeVersion: z.boolean().default(false) })
         .strict(),
-    readText: z.object(rootPath).strict(),
+    readText: z
+        .object({
+            ...rootPath,
+            maxBytes: z
+                .number()
+                .int()
+                .min(1)
+                .max(TEXT_PREVIEW_LIMIT)
+                .default(TEXT_LIMIT),
+        })
+        .strict(),
     saveText: z
         .object({
             ...rootPath,
@@ -471,7 +484,23 @@ export function registerFileManager(
             }
             case 'readText': {
                 const p = parse(params.readText, input);
-                return core.readText(p.rootId, p.path);
+                const result = await core.readText(
+                    p.rootId,
+                    p.path,
+                    p.maxBytes,
+                );
+                // Valid UTF-8 text can still double in size when JSON-escaped.
+                // Small reads cannot reach this budget; avoid serializing them twice.
+                if (
+                    result.size > 4 * 1024 * 1024 &&
+                    Buffer.byteLength(JSON.stringify(result), 'utf8') >
+                        TEXT_RESULT_WIRE_LIMIT
+                )
+                    fail(
+                        'TOO_LARGE',
+                        'Escaped text exceeds the RPC response budget; download the file instead',
+                    );
+                return result;
             }
             case 'saveText': {
                 const p = parse(params.saveText, input);
