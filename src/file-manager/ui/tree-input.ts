@@ -76,3 +76,22 @@ export function namePastedFiles(files: File[]) {
         );
     });
 }
+
+// Browser folder paths are literal root-relative names, never URL paths. Reject
+// every unsafe segment before joining a picker path to its captured destination.
+export function validUploadPath(path: string) {
+    return (
+        !!path &&
+        !path.includes('\\') &&
+        !path.includes('\0') &&
+        path
+            .split('/')
+            .every(
+                (part) =>
+                    !!part &&
+                    part !== '.' &&
+                    part !== '..' &&
+                    !/^[a-z]:/i.test(part),
+            )
+    );
+}

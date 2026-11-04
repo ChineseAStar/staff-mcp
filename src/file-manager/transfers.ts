@@ -33,6 +33,7 @@ export interface PrepareParams {
     sha256?: string;
     overwrite?: boolean;
     expectedVersion?: string;
+    archive?: 'zip';
 }
 type State =
     | 'preparing'
@@ -46,23 +47,25 @@ type State =
     | 'expired'
     | 'failed'
     | 'unknown';
-interface Prepared {
+interface TransferRecord {
     params: PrepareParams;
     fingerprint: string;
     transferId: string;
     state: State;
     expires: number;
     finished?: number;
-    directory?: string;
-    staging?: string;
     size: number;
     loaded: number;
     version?: string;
     sha256?: string;
-    error?: { code: string; message: string };
+    error?: { code: string; message: string; phase?: string };
     result?: { path: string; size: number; sha256: string; version: string };
     published?: false;
     commitHash?: string;
+}
+interface Prepared extends TransferRecord {
+    directory?: string;
+    staging?: string;
     job?: Promise<unknown>;
     cleanup?: Promise<void>;
     commit?: Promise<void>;
@@ -73,6 +76,8 @@ interface Prepared {
     abort: AbortController;
     channel?: DataChannel;
 }
+// Includes lightweight five-minute receipts/tombstones. Never evict an unexpired key.
+const MAX_RETAINED_RECORDS = 4096;
 const terminal = (state: State) =>
     ['committed', 'released', 'expired', 'failed', 'unknown'].includes(state);
 const managers = new Set<TransferManager>();
@@ -84,6 +89,7 @@ process.once('exit', () => {
 export class TransferManager {
     private readonly operations = new Map<string, Prepared>();
     private readonly resources = new Map<string, Prepared>();
+    private readonly history = new Map<string, TransferRecord>();
     private disposed = false;
     private closing?: Promise<void>;
     private readonly timer: NodeJS.Timeout;
@@ -100,6 +106,9 @@ export class TransferManager {
 
     private sweep() {
         const now = performance.now();
+        for (const [id, item] of this.history) {
+            if (now - item.finished! >= RECORD_TTL_MS) this.history.delete(id);
+        }
         for (const [id, item] of this.operations) {
             if (
                 !terminal(item.state) &&
@@ -117,6 +126,37 @@ export class TransferManager {
                 this.resources.delete(item.transferId);
             }
         }
+    }
+
+    private retain(item: Prepared) {
+        if (
+            !terminal(item.state) ||
+            item.state === 'unknown' ||
+            item.job ||
+            item.commit ||
+            item.cleanup ||
+            item.directory
+        )
+            return;
+        if (this.operations.get(item.params.operationId) !== item) return;
+        this.history.set(item.params.operationId, {
+            params: item.params,
+            fingerprint: item.fingerprint,
+            transferId: item.transferId,
+            state: item.state,
+            expires: item.expires,
+            finished: item.finished,
+            size: item.size,
+            loaded: item.loaded,
+            version: item.version,
+            sha256: item.sha256,
+            error: item.error,
+            result: item.result,
+            published: item.published,
+            commitHash: item.commitHash,
+        });
+        this.operations.delete(item.params.operationId);
+        this.resources.delete(item.transferId);
     }
 
     private alive(item: Prepared) {
@@ -140,9 +180,22 @@ export class TransferManager {
         item.published = false;
         if (error) {
             const failure = fileError(error);
-            item.error = { code: failure.code, message: failure.message };
+            item.error = {
+                code: failure.code,
+                message: failure.message,
+                ...(failure.phase ? { phase: failure.phase } : {}),
+            };
         }
-        item.abort.abort();
+        item.abort.abort(
+            error
+                ? fileError(error)
+                : new FileError(
+                      state === 'expired' ? 'LEASE_EXPIRED' : 'CANCELLED',
+                      state === 'expired'
+                          ? 'Transfer lease expired'
+                          : 'Transfer released',
+                  ),
+        );
         item.channel?.close(state.toUpperCase());
         void this.cleanup(item).catch(() => {});
     }
@@ -150,6 +203,7 @@ export class TransferManager {
     private cleanup(item: Prepared): Promise<void> {
         if (item.cleanup) return item.cleanup;
         const pending = item.job;
+        let cleaned = false;
         const cleanup = (async () => {
             await pending?.catch(() => {});
             await item.io.run(async () => {
@@ -161,18 +215,22 @@ export class TransferManager {
                         recursive: true,
                         force: true,
                     });
+                item.directory = undefined;
+                item.staging = undefined;
+                cleaned = true;
             });
         })();
         item.cleanup = cleanup;
         void cleanup
             .finally(() => {
                 if (item.cleanup === cleanup) item.cleanup = undefined;
+                if (cleaned) this.retain(item);
             })
             .catch(() => {});
         return cleanup;
     }
 
-    private view(item: Prepared) {
+    private view(item: TransferRecord) {
         const operationId = item.params.operationId;
         if (item.state === 'preparing')
             return { operationId, state: item.state };
@@ -208,12 +266,18 @@ export class TransferManager {
         };
     }
 
-    private preparedView(item: Prepared) {
+    private preparedView(item: TransferRecord) {
         if (terminal(item.state) || item.state === 'committing')
             return this.view(item);
         return {
             ...this.view(item),
-            name: path.basename(item.params.path),
+            name:
+                item.params.archive === 'zip'
+                    ? `${path.basename(item.params.path)}.zip`
+                    : path.basename(item.params.path),
+            ...(item.params.archive === 'zip'
+                ? { mimeType: 'application/zip' }
+                : {}),
             ...(item.sha256 ? { sha256: item.sha256 } : {}),
             ...(item.version ? { version: item.version } : {}),
             expiresInMs: Math.max(
@@ -237,7 +301,14 @@ export class TransferManager {
             normalized.sha256 ?? null,
             normalized.overwrite,
             normalized.expectedVersion ?? null,
+            normalized.archive ?? null,
         ]);
+        const retained = this.history.get(params.operationId);
+        if (retained) {
+            if (retained.fingerprint && retained.fingerprint !== fingerprint)
+                fail('IDEMPOTENCY_CONFLICT', 'Operation parameters changed');
+            return this.preparedView(retained);
+        }
         const existing = this.operations.get(params.operationId);
         if (existing) {
             if (existing.fingerprint && existing.fingerprint !== fingerprint)
@@ -245,7 +316,10 @@ export class TransferManager {
             await existing.job?.catch(() => {});
             return this.preparedView(existing);
         }
-        if (this.operations.size >= MAX_RECORDS)
+        if (
+            this.operations.size >= MAX_RECORDS ||
+            this.operations.size + this.history.size >= MAX_RETAINED_RECORDS
+        )
             fail('LIMIT_EXCEEDED', 'Transfer record limit reached');
         if (
             [...this.operations.values()].filter(
@@ -255,6 +329,14 @@ export class TransferManager {
             fail(
                 'LIMIT_EXCEEDED',
                 'At most two transfers are allowed per session',
+            );
+        if (
+            params.archive !== undefined &&
+            (params.archive !== 'zip' || params.mode !== 'read')
+        )
+            fail(
+                'INVALID_PARAMS',
+                'ZIP archive is only supported for read prepare',
             );
         if (params.mode === 'write') {
             if (!Number.isSafeInteger(params.size) || params.size! < 0)
@@ -300,7 +382,10 @@ export class TransferManager {
             await job;
         } finally {
             item.job = undefined;
-            if (terminal(item.state)) await this.cleanup(item);
+            if (terminal(item.state)) {
+                await this.cleanup(item);
+                this.retain(item);
+            }
         }
         return this.preparedView(item);
     }
@@ -327,12 +412,20 @@ export class TransferManager {
             item.staging = path.join(item.directory, 'data');
             this.alive(item);
             if (p.mode === 'read') {
-                const snapshot = await this.core.snapshot(
-                    p.rootId,
-                    p.path,
-                    item.staging,
-                    item.abort.signal,
-                );
+                const snapshot =
+                    p.archive === 'zip'
+                        ? await this.core.archiveSnapshot(
+                              p.rootId,
+                              p.path,
+                              item.staging,
+                              item.abort.signal,
+                          )
+                        : await this.core.snapshot(
+                              p.rootId,
+                              p.path,
+                              item.staging,
+                              item.abort.signal,
+                          );
                 item.size = snapshot.size;
                 item.version = snapshot.version;
                 item.sha256 = snapshot.version;
@@ -341,21 +434,32 @@ export class TransferManager {
             this.authorize();
             item.state = 'prepared';
         } catch (error) {
-            this.finish(item, 'failed', error);
-            throw error;
+            const failure = fileError(
+                error,
+                item.params.archive === 'zip' ? 'archive' : 'prepare',
+            );
+            this.finish(item, 'failed', failure);
+            throw failure;
         }
     }
 
     status(operationId: string) {
         this.sweep();
-        const item = this.operations.get(operationId);
+        const item =
+            this.operations.get(operationId) ?? this.history.get(operationId);
         return item ? this.view(item) : { operationId, state: 'unknown' };
     }
 
     renew(operationId: string) {
         this.authorize();
         const item = this.operations.get(operationId);
-        if (!item) fail('RESOURCE_NOT_FOUND', 'Unknown transfer');
+        if (!item) {
+            const retained = this.history.get(operationId);
+            if (retained?.state === 'expired')
+                fail('LEASE_EXPIRED', 'Transfer lease expired');
+            if (retained) fail('INVALID_STATE', 'Transfer is no longer active');
+            fail('RESOURCE_NOT_FOUND', 'Unknown transfer');
+        }
         this.alive(item);
         if (item.state === 'committing')
             fail('TOO_LATE', 'Commit already admitted');
@@ -485,7 +589,14 @@ export class TransferManager {
             fail('INVALID_PARAMS', 'Invalid files channel direction');
         await this.bind(item, channel);
         const failure = (error: unknown) => {
-            this.finish(item, 'failed', error);
+            this.finish(
+                item,
+                'failed',
+                fileError(
+                    error,
+                    item.params.mode === 'read' ? 'download' : 'upload',
+                ),
+            );
         };
         if (item.params.mode === 'read') {
             // Start asynchronously: the data writer waits for channel acceptance.
@@ -544,6 +655,22 @@ export class TransferManager {
 
     async commit(operationId: string, transferId: string, sha256: string) {
         this.authorize();
+        const retained = this.history.get(operationId);
+        if (retained) {
+            if (
+                retained.transferId !== transferId ||
+                retained.params.mode !== 'write'
+            )
+                fail('RESOURCE_NOT_FOUND', 'Unknown write transfer');
+            if (retained.commitHash !== undefined) {
+                if (retained.commitHash !== sha256)
+                    fail('IDEMPOTENCY_CONFLICT', 'Commit digest changed');
+                return this.view(retained);
+            }
+            if (retained.state === 'expired')
+                fail('LEASE_EXPIRED', 'Transfer lease expired');
+            fail('INVALID_STATE', 'Transfer is no longer active');
+        }
         const item = this.operations.get(operationId);
         if (
             !item ||
@@ -602,18 +729,29 @@ export class TransferManager {
         } finally {
             item.commit = undefined;
             await this.cleanup(item).catch(() => {});
+            this.retain(item);
         }
         return this.view(item);
     }
 
     release(operationId: string) {
+        this.sweep();
+        const retained = this.history.get(operationId);
+        if (retained) {
+            if (retained.state === 'committed')
+                fail('TOO_LATE', 'Commit already admitted');
+            return this.view(retained);
+        }
         const item = this.operations.get(operationId);
         if (!item) {
             // A cancel-before-prepare tombstone prevents a delayed create on this operation.
             this.sweep();
-            if (this.operations.size >= MAX_RECORDS)
+            if (
+                this.operations.size + this.history.size >=
+                MAX_RETAINED_RECORDS
+            )
                 fail('LIMIT_EXCEEDED', 'Transfer record limit reached');
-            const tombstone: Prepared = {
+            const tombstone: TransferRecord = {
                 params: { operationId, mode: 'read', rootId: '', path: '' },
                 fingerprint: '',
                 transferId: randomUUID(),
@@ -622,12 +760,8 @@ export class TransferManager {
                 finished: performance.now(),
                 size: 0,
                 loaded: 0,
-                bound: false,
-                hash: createHash('sha256'),
-                io: new Mutex(),
-                abort: new AbortController(),
             };
-            this.operations.set(operationId, tombstone);
+            this.history.set(operationId, tombstone);
             return this.view(tombstone);
         }
         if (

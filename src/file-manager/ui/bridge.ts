@@ -14,6 +14,8 @@ export interface TransferProgress {
     total: number;
     status: string;
     error?: string;
+    // Only the host can confirm that no native GET consumed this handle.
+    manualStart?: boolean;
 }
 
 interface WireError {

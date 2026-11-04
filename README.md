@@ -1,5 +1,7 @@
 # staff-mcp
 
+> Development branch: `2.0.6-dev.0` is an unpublished local test package. File references, Markdown previews, folder uploads and ZIP downloads require the matching chat-ai host; see [file manager](docs/file-manager.md). No npm release or automatic remote upgrade is implied.
+
 [English](./README.md) | [简体中文](./README_zh.md)
 
 A next-generation Model Context Protocol (MCP) server that transforms any AI assistant into a highly capable, container-aware, and role-adaptable digital employee. 

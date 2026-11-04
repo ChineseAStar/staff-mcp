@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.6-dev.0 (unreleased development branch)
+
+- Add reference-only file attachments, with a separate bounded content-attachment action for compatible hosts.
+- Add safe Markdown draft previews, directory-picker uploads preserving relative paths, and explicit directory ZIP downloads.
+- Start native downloads after preparation without a second routine confirmation; retain a host-confirmed manual-start fallback.
+- Preserve safe file error codes/phases and retain completed transfer receipts without occupying the active-record budget.
+
+This development package is built locally for paired chat-ai testing; it is not an npm release. It does not add video playback, resumable downloads or automatic retries of uncertain writes.
+
 ## 2.0.5 — 2026-10-27
 
 - Remove the 100 MiB whole-file limit from files-v1 read preparation, write preparation and the file App upload queue. File sizes remain nonnegative safe integers; text editing (2 MiB), Resource reads (256 KiB), chunk/window bounds, permissions, staging protection and transfer concurrency are unchanged.

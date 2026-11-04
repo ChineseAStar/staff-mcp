@@ -10,6 +10,7 @@ import { redo, undo } from '@codemirror/commands';
 import { openSearchPanel } from '@codemirror/search';
 import { bridge, BridgeError, errorMessage } from './bridge';
 import { TextEditor } from './Editor';
+import { isMarkdown, MarkdownPreview } from './MarkdownPreview';
 import { FileContextMenu } from './FileContextMenu';
 import { DirectoryTree } from './DirectoryTree';
 import { hasFilePayload } from './tree-input';
@@ -61,6 +62,7 @@ interface FileTab {
     conflict?: boolean;
     error?: string;
     image?: string;
+    preview?: boolean;
 }
 
 interface Creation {
@@ -221,6 +223,7 @@ export function App() {
               rootId: string;
               directory: string;
               epoch: number;
+              folder: boolean;
           }
         | undefined
     >(undefined);
@@ -719,6 +722,7 @@ export function App() {
         path: string,
         name: string,
         size: number,
+        mode: 'reference' | 'content' = 'reference',
     ) => {
         if (!available || attachmentPending.current) return;
         if (
@@ -731,11 +735,11 @@ export function App() {
         ) {
             setNotice({
                 kind: 'error',
-                text: `${name} 有未保存的编辑，请先保存后再添加到对话。不会自动保存或附加旧的服务器内容。`,
+                text: `${name} 有未保存的编辑，请先保存后再${mode === 'reference' ? '引用文件' : '附加内容'}。不会自动保存或使用旧的磁盘内容。`,
             });
             return;
         }
-        if (size > 256 * 1024) {
+        if (mode === 'content' && size > 256 * 1024) {
             setNotice({
                 kind: 'error',
                 text: `${name} 超过附件 256 KiB 限制，不能添加到对话。`,
@@ -752,12 +756,20 @@ export function App() {
             }>('attachResource', {
                 uri: `staff-file://${targetRoot}/${path.split('/').map(encodeURIComponent).join('/')}`,
                 title: name,
+                mode,
             });
             if (result.attached !== true)
-                throw new Error('宿主未确认添加附件。');
+                throw new Error('宿主未确认添加文件。');
+            if (mode === 'reference')
+                setNotice({
+                    kind: 'success',
+                    text: '已引用文件；只引用，未附加正文，不会自动发送。',
+                });
         } catch (error) {
             const message =
-                error instanceof BridgeError && error.code === 'TOO_LARGE'
+                mode === 'content' &&
+                error instanceof BridgeError &&
+                error.code === 'TOO_LARGE'
                     ? '附件上限为 256 KiB，文件未添加；下载不能绕过附件限制。'
                     : errorMessage(error);
             setNotice({ kind: 'error', text: `${name}：${message}` });
@@ -1037,6 +1049,7 @@ export function App() {
         files: File[],
         targetRoot: string,
         targetDirectory: string,
+        folder = false,
     ) => {
         if (!files.length) return;
         if (!canWrite(targetRoot)) {
@@ -1049,10 +1062,14 @@ export function App() {
             return;
         }
         setShowTransfers(true);
-        transfers.upload(files, targetRoot, targetDirectory);
+        transfers.upload(files, targetRoot, targetDirectory, folder);
     };
 
-    const beginUpload = (targetRoot: string, targetDirectory: string) => {
+    const beginUpload = (
+        targetRoot: string,
+        targetDirectory: string,
+        folder = false,
+    ) => {
         if (!canWrite(targetRoot) || !uploadInput.current) return;
         // Selection/directory changes do not invalidate this captured target.
         // Root/connection lifetime changes do: never reuse an old authorization.
@@ -1060,15 +1077,22 @@ export function App() {
             rootId: targetRoot,
             directory: targetDirectory,
             epoch: actionContext.current.epoch,
+            folder,
         };
         setContextMenu(undefined);
+        uploadInput.current.webkitdirectory = folder;
         uploadInput.current.value = '';
         uploadInput.current.click();
     };
 
-    const download = (targetRoot: string, path: string, size: number) => {
+    const download = (
+        targetRoot: string,
+        path: string,
+        size: number,
+        archive?: 'zip',
+    ) => {
         setShowTransfers(true);
-        transfers.download(targetRoot, path, size);
+        transfers.download(targetRoot, path, size, archive);
     };
 
     const editorCommand = (command: 'undo' | 'redo' | 'search') => {
@@ -1276,7 +1300,12 @@ export function App() {
                             });
                             return;
                         }
-                        chooseFiles(files, target.rootId, target.directory);
+                        chooseFiles(
+                            files,
+                            target.rootId,
+                            target.directory,
+                            target.folder,
+                        );
                     }}
                 />
             </header>
@@ -1366,6 +1395,21 @@ export function App() {
                                 <Icon name="upload" />
                                 上传文件
                             </button>
+                            <button
+                                role="menuitem"
+                                disabled={!canWrite(contextMenu.rootId)}
+                                title="保留相对路径；不会上传浏览器未提供的空目录，覆盖需逐文件确认"
+                                onClick={() =>
+                                    beginUpload(
+                                        contextMenu.rootId,
+                                        contextDirectory,
+                                        true,
+                                    )
+                                }
+                            >
+                                <Icon name="folder" />
+                                上传文件夹（不含空目录）
+                            </button>
                             {contextEntry && <div role="separator" />}
                         </>
                     )}
@@ -1404,49 +1448,66 @@ export function App() {
                             </button>
                             {contextEntry.type === 'file' && (
                                 <>
-                                    <button
-                                        role="menuitem"
-                                        disabled={
-                                            !available ||
-                                            !!attaching ||
-                                            contextEntry.size > 256 * 1024
-                                        }
-                                        title="添加已保存的文件内容，上限 256 KiB；有未保存编辑时请先保存"
-                                        onClick={() => {
-                                            const target = contextMenu;
-                                            setContextMenu(undefined);
-                                            void attachFile(
-                                                target.rootId,
-                                                contextEntry.path,
-                                                contextEntry.name,
-                                                contextEntry.size,
-                                            );
-                                        }}
-                                    >
-                                        <Icon name="attach" />
-                                        {attaching
-                                            ? '正在添加…'
-                                            : contextEntry.size > 256 * 1024
-                                              ? '添加到对话（超过 256 KiB）'
-                                              : '添加到对话'}
-                                    </button>
-                                    <button
-                                        role="menuitem"
-                                        disabled={!available}
-                                        onClick={() => {
-                                            const target = contextMenu;
-                                            setContextMenu(undefined);
-                                            download(
-                                                target.rootId,
-                                                contextEntry.path,
-                                                contextEntry.size,
-                                            );
-                                        }}
-                                    >
-                                        <Icon name="download" />
-                                        下载
-                                    </button>
+                                    {(['reference', 'content'] as const).map(
+                                        (mode) => (
+                                            <button
+                                                key={mode}
+                                                role="menuitem"
+                                                disabled={
+                                                    !available ||
+                                                    !!attaching ||
+                                                    (mode === 'content' &&
+                                                        contextEntry.size >
+                                                            256 * 1024)
+                                                }
+                                                title={
+                                                    mode === 'reference'
+                                                        ? '只引用文件，未附加正文；有未保存编辑时请先保存'
+                                                        : '附加已保存的正文，上限 256 KiB；有未保存编辑时请先保存'
+                                                }
+                                                onClick={() => {
+                                                    const target = contextMenu;
+                                                    setContextMenu(undefined);
+                                                    void attachFile(
+                                                        target.rootId,
+                                                        contextEntry.path,
+                                                        contextEntry.name,
+                                                        contextEntry.size,
+                                                        mode,
+                                                    );
+                                                }}
+                                            >
+                                                <Icon name="attach" />
+                                                {mode === 'reference'
+                                                    ? '引用文件'
+                                                    : '附加内容（≤256 KiB）'}
+                                            </button>
+                                        ),
+                                    )}
                                 </>
+                            )}
+                            {contextEntry.type !== 'symlink' && (
+                                <button
+                                    role="menuitem"
+                                    disabled={!available}
+                                    onClick={() => {
+                                        const target = contextMenu;
+                                        setContextMenu(undefined);
+                                        download(
+                                            target.rootId,
+                                            contextEntry.path,
+                                            contextEntry.size,
+                                            contextEntry.type === 'directory'
+                                                ? 'zip'
+                                                : undefined,
+                                        );
+                                    }}
+                                >
+                                    <Icon name="download" />
+                                    {contextEntry.type === 'directory'
+                                        ? '下载文件夹（ZIP）'
+                                        : '下载'}
+                                </button>
                             )}
                             <div role="separator" />
                             {(['rename', 'move'] as const).map((kind) => (
@@ -1558,7 +1619,7 @@ export function App() {
                         onDirectoryDrop={() =>
                             setNotice({
                                 kind: 'error',
-                                text: '不支持上传文件夹。请展开文件夹后选择文件，可一次上传多个。',
+                                text: '文件夹拖放/粘贴暂不支持。请在目录菜单选择“上传文件夹”；浏览器未提供的空目录不会上传。',
                             })
                         }
                         onSelect={selectEntry}
@@ -1701,16 +1762,56 @@ export function App() {
                             )}
                             {activeTab.kind === 'text' && (
                                 <>
+                                    {isMarkdown(activeTab.name) && (
+                                        <div
+                                            className="preview-segment"
+                                            role="group"
+                                            aria-label="Markdown 视图"
+                                        >
+                                            <button
+                                                aria-pressed={
+                                                    !activeTab.preview
+                                                }
+                                                onClick={() =>
+                                                    updateTab(activeTab.id, {
+                                                        preview: false,
+                                                    })
+                                                }
+                                            >
+                                                编辑
+                                            </button>
+                                            <button
+                                                aria-pressed={
+                                                    !!activeTab.preview
+                                                }
+                                                title="预览当前草稿，包括未保存内容"
+                                                onClick={() =>
+                                                    updateTab(activeTab.id, {
+                                                        preview: true,
+                                                    })
+                                                }
+                                            >
+                                                预览
+                                            </button>
+                                        </div>
+                                    )}
                                     <IconButton
                                         name="search"
                                         title="查找与替换（Ctrl/Cmd+F）"
+                                        disabled={
+                                            isMarkdown(activeTab.name) &&
+                                            activeTab.preview
+                                        }
                                         onClick={() => editorCommand('search')}
                                     />
                                     <IconButton
                                         name="undo"
                                         title="撤销（Ctrl/Cmd+Z）"
                                         disabled={
-                                            !available || activeTab.readOnly
+                                            !available ||
+                                            activeTab.readOnly ||
+                                            (isMarkdown(activeTab.name) &&
+                                                activeTab.preview)
                                         }
                                         onClick={() => editorCommand('undo')}
                                     />
@@ -1741,15 +1842,12 @@ export function App() {
                                     !available ||
                                     !!attaching ||
                                     activeTab.busy ||
-                                    isDirty(activeTab) ||
-                                    activeTab.size > 256 * 1024
+                                    isDirty(activeTab)
                                 }
                                 title={
                                     isDirty(activeTab)
-                                        ? '请先保存编辑，再添加到对话；不会自动保存'
-                                        : activeTab.size > 256 * 1024
-                                          ? '附件上限为 256 KiB'
-                                          : '添加服务器最新快照，不会自动发送'
+                                        ? '请先保存编辑，再引用文件；不会自动保存'
+                                        : '只引用文件，未附加正文；不会自动发送'
                                 }
                                 onClick={() =>
                                     void attachFile(
@@ -1765,10 +1863,8 @@ export function App() {
                                 attaching.path === activeTab.path
                                     ? '添加中…'
                                     : isDirty(activeTab)
-                                      ? '先保存再添加'
-                                      : activeTab.size > 256 * 1024
-                                        ? '超过 256 KiB'
-                                        : '添加到对话'}
+                                      ? '先保存再引用'
+                                      : '引用文件'}
                             </button>
                             <div className="menu-anchor">
                                 <IconButton
@@ -1787,6 +1883,32 @@ export function App() {
                                         label="更多编辑操作"
                                         onClose={() => setMenu(null)}
                                     >
+                                        <button
+                                            role="menuitem"
+                                            disabled={
+                                                !available ||
+                                                !!attaching ||
+                                                activeTab.busy ||
+                                                isDirty(activeTab) ||
+                                                activeTab.size > 256 * 1024
+                                            }
+                                            title="附加已保存的内容，上限 256 KiB；不会自动保存或发送"
+                                            onClick={() =>
+                                                fileMenuAction(
+                                                    () =>
+                                                        void attachFile(
+                                                            activeTab.rootId,
+                                                            activeTab.path,
+                                                            activeTab.name,
+                                                            activeTab.size,
+                                                            'content',
+                                                        ),
+                                                )
+                                            }
+                                        >
+                                            <Icon name="attach" />
+                                            附加内容（≤256 KiB）
+                                        </button>
                                         {activeTab.kind === 'text' && (
                                             <>
                                                 <button
@@ -1896,24 +2018,41 @@ export function App() {
                                 )
                             )}
                             {tab.kind === 'text' ? (
-                                <TextEditor
-                                    id={tab.id}
-                                    name={tab.name}
-                                    text={tab.text}
-                                    revision={tab.revision}
-                                    active={
-                                        activeTabId === tab.id &&
-                                        mobilePane === 'editor'
-                                    }
-                                    readOnly={
-                                        tab.readOnly || !canWrite(tab.rootId)
-                                    }
-                                    onChange={(text) =>
-                                        updateTab(tab.id, { text })
-                                    }
-                                    onSave={() => void saveTab(tab.id)}
-                                    onView={onView}
-                                />
+                                <>
+                                    <div
+                                        className="text-editor-pane"
+                                        hidden={
+                                            isMarkdown(tab.name) && tab.preview
+                                        }
+                                    >
+                                        <TextEditor
+                                            id={tab.id}
+                                            name={tab.name}
+                                            text={tab.text}
+                                            revision={tab.revision}
+                                            active={
+                                                activeTabId === tab.id &&
+                                                mobilePane === 'editor' &&
+                                                !(
+                                                    isMarkdown(tab.name) &&
+                                                    tab.preview
+                                                )
+                                            }
+                                            readOnly={
+                                                tab.readOnly ||
+                                                !canWrite(tab.rootId)
+                                            }
+                                            onChange={(text) =>
+                                                updateTab(tab.id, { text })
+                                            }
+                                            onSave={() => void saveTab(tab.id)}
+                                            onView={onView}
+                                        />
+                                    </div>
+                                    {isMarkdown(tab.name) && tab.preview && (
+                                        <MarkdownPreview text={tab.text} />
+                                    )}
+                                </>
                             ) : tab.kind === 'image' && tab.image ? (
                                 <div className="image-preview">
                                     <img
@@ -2079,7 +2218,7 @@ export function App() {
                                                 ? '正在准备源文件快照，尚未开始传输。'
                                                 : `${formatSize(job.loaded)} / ${formatSize(job.size)}${job.size > 0 ? ` · ${Math.floor((job.loaded / job.size) * 100)}%` : ''}`}
                                             {job.status === 'ready' &&
-                                                ' · 快照已准备就绪，尚未接收文件；点击“保存到设备”开始下载。'}
+                                                ' · 浏览器尚未开始接收；可点击“手动开始下载”。'}
                                             {job.direction === 'download' &&
                                                 job.status === 'done' &&
                                                 ' · 宿主已校验响应流，不代表文件已写入本地磁盘。'}
@@ -2139,7 +2278,7 @@ export function App() {
                                                         )
                                                     }
                                                 >
-                                                    保存到设备
+                                                    手动开始下载
                                                 </button>
                                                 <button
                                                     onClick={() =>
@@ -2189,8 +2328,9 @@ export function App() {
                                                     !available ||
                                                     (job.direction ===
                                                         'upload' &&
-                                                        job.size >
-                                                            MAX_FILE_SIZE)
+                                                        (job.invalidUpload ||
+                                                            job.size >
+                                                                MAX_FILE_SIZE))
                                                 }
                                                 onClick={() =>
                                                     transfers.retry(job.id)

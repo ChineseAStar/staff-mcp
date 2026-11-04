@@ -96,7 +96,10 @@ function parse<T extends z.ZodTypeAny>(schema: T, data: unknown): z.infer<T> {
 function rpc(error: unknown) {
     if (error instanceof McpError) return error;
     const e = fileError(error);
-    return new McpError(e.rpcCode, e.message, { code: e.code });
+    return new McpError(e.rpcCode, e.message, {
+        code: e.code,
+        ...(e.phase ? { phase: e.phase } : {}),
+    });
 }
 
 export function resourceUri(rootId: string, file: string): string {
@@ -525,6 +528,7 @@ export function registerFileManager(
             .object({
                 operationId,
                 mode: z.enum(['read', 'write']),
+                archive: z.literal('zip').optional(),
                 rootId: z.string().min(1),
                 path: z.string().min(1),
                 size: z.number().int().nonnegative().safe().optional(),

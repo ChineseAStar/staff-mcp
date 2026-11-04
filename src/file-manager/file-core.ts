@@ -1,4 +1,8 @@
-import { constants } from 'node:fs';
+import { constants, createWriteStream } from 'node:fs';
+import type { EventEmitter } from 'node:events';
+import { Transform } from 'node:stream';
+import { finished, pipeline } from 'node:stream/promises';
+import { ZipFile } from 'yazl';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -10,6 +14,7 @@ export class FileError extends Error {
         public code: string,
         message: string,
         public rpcCode = -32000,
+        public phase?: string,
     ) {
         super(message);
     }
@@ -17,8 +22,11 @@ export class FileError extends Error {
 export function fail(code: string, message: string): never {
     throw new FileError(code, message);
 }
-export function fileError(error: unknown): FileError {
-    if (error instanceof FileError) return error;
+export function fileError(error: unknown, phase?: string): FileError {
+    if (error instanceof FileError) {
+        if (!phase || error.phase) return error;
+        return new FileError(error.code, error.message, error.rpcCode, phase);
+    }
     const code = (error as NodeJS.ErrnoException)?.code;
     const mapped: Record<string, string> = {
         ENOENT: 'NOT_FOUND',
@@ -31,12 +39,28 @@ export function fileError(error: unknown): FileError {
         ELOOP: 'SYMLINK_NOT_ALLOWED',
         ENOSPC: 'NO_SPACE',
         EROFS: 'READ_ONLY',
+        EMFILE: 'TOO_MANY_OPEN_FILES',
+        ENFILE: 'TOO_MANY_OPEN_FILES',
+        EDQUOT: 'QUOTA_EXCEEDED',
+        EFBIG: 'FILE_TOO_LARGE',
+        ENAMETOOLONG: 'NAME_TOO_LONG',
+        ABORT_ERR: 'CANCELLED',
+        ERR_STREAM_PREMATURE_CLOSE: 'STREAM_CLOSED',
     };
+    // Only expose a bounded system identifier, never native messages (which contain paths).
+    const safeCode =
+        typeof code === 'string' && /^E[A-Z0-9_]{1,63}$/.test(code)
+            ? code
+            : undefined;
+    const failure =
+        (error as Error)?.name === 'AbortError'
+            ? 'CANCELLED'
+            : (mapped[code ?? ''] ?? safeCode ?? 'IO_ERROR');
     return new FileError(
-        mapped[code ?? ''] ?? 'IO_ERROR',
-        mapped[code ?? '']
-            ? `File operation failed: ${mapped[code ?? '']}`
-            : 'File operation failed',
+        failure,
+        `File operation failed: ${failure}`,
+        -32000,
+        phase,
     );
 }
 export class Mutex {
@@ -856,6 +880,145 @@ export class FileCore {
             this.changed(rootId, file);
             return { deleted: true, path: file };
         });
+    }
+    /**
+     * Stream an archive into this transfer's private staging; never modify source files.
+     * Each file uses the existing bounded, version-checked snapshot reader. Only one
+     * extra file snapshot is retained at a time; ZIP central-directory metadata is O(entries).
+     * Tree mutations are checked where observed, not a filesystem-wide atomic snapshot.
+     */
+    async archiveSnapshot(
+        rootId: string,
+        directory: string,
+        destination: string,
+        signal: AbortSignal,
+    ) {
+        signal.throwIfAborted();
+        const name = path.basename(relativePath(directory));
+        if (!name)
+            fail('INVALID_PARAMS', 'Archive requires a non-root directory');
+        // yazl is an EventEmitter; the pinned 2.x declaration omits its base class.
+        const zip = new ZipFile() as ZipFile & EventEmitter;
+        const abort = new AbortController();
+        const cancel = () => abort.abort(signal.reason);
+        signal.addEventListener('abort', cancel, { once: true });
+        if (signal.aborted) cancel();
+        const hash = createHash('sha256');
+        let size = 0;
+        const meter = new Transform({
+            transform(chunk: Buffer, _encoding, callback) {
+                size += chunk.length;
+                if (!Number.isSafeInteger(size)) {
+                    callback(
+                        new FileError(
+                            'FILE_TOO_LARGE',
+                            'Archive size is not a safe integer',
+                        ),
+                    );
+                    return;
+                }
+                hash.update(chunk);
+                callback(null, chunk);
+            },
+        });
+        const output = createWriteStream(destination, {
+            // O_EXCL refuses an existing leaf, including a symlink.
+            flags: 'wx',
+            mode: 0o600,
+        });
+        zip.on('error', (error: Error) => meter.destroy(error));
+        const writing = pipeline(zip.outputStream, meter, output, {
+            signal: abort.signal,
+        });
+        // Observe failures immediately and interrupt a pending source snapshot/read.
+        void writing.catch((error) => abort.abort(error));
+        const temporary = path.join(path.dirname(destination), 'archive-entry');
+        const walk = async (file: string, entry: string): Promise<void> => {
+            abort.signal.throwIfAborted();
+            const full = await this.resolve(rootId, file);
+            const before = await fs.lstat(full);
+            if (!before.isDirectory())
+                fail('NOT_DIRECTORY', 'Expected a directory');
+            zip.addEmptyDirectory(entry, {
+                mtime: before.mtime,
+                mode: before.mode,
+            });
+            // No filtered listing: links, protected staging, special objects and
+            // unrepresentable names fail the whole archive instead of silently omitting data.
+            const children = await fs.opendir(full);
+            for await (const child of children) {
+                abort.signal.throwIfAborted();
+                const childPath = `${file}/${child.name}`;
+                const childFull = await this.resolve(rootId, childPath);
+                const stat = await fs.lstat(childFull);
+                const childEntry = `${entry}/${child.name}`;
+                if (stat.isDirectory()) await walk(childPath, childEntry);
+                else if (stat.isFile()) {
+                    const snapshot = await this.snapshot(
+                        rootId,
+                        childPath,
+                        temporary,
+                        abort.signal,
+                    );
+                    const input = (
+                        await fs.open(
+                            temporary,
+                            constants.O_RDONLY | constants.O_NOFOLLOW,
+                        )
+                    ).createReadStream({
+                        highWaterMark: 65536,
+                        signal: abort.signal,
+                    });
+                    // Observe end/close before giving the stream to the ZIP writer.
+                    const reading = finished(input);
+                    void reading.catch(() => {});
+                    try {
+                        zip.addReadStream(input, childEntry, {
+                            size: snapshot.size,
+                            mtime: stat.mtime,
+                            mode: stat.mode,
+                        });
+                        await reading;
+                    } finally {
+                        input.destroy();
+                        await reading.catch(() => {});
+                    }
+                    await fs.unlink(temporary);
+                } else
+                    fail(
+                        'NOT_FILE',
+                        'Special filesystem objects are not supported',
+                    );
+            }
+            abort.signal.throwIfAborted();
+            const current = await this.resolve(rootId, file);
+            const after = await fs.lstat(current);
+            if (
+                before.dev !== after.dev ||
+                before.ino !== after.ino ||
+                before.mtimeMs !== after.mtimeMs ||
+                before.ctimeMs !== after.ctimeMs
+            )
+                fail(
+                    'VERSION_CONFLICT',
+                    'Directory changed while preparing archive',
+                );
+        };
+        try {
+            await walk(directory, name);
+            abort.signal.throwIfAborted();
+            zip.end();
+            await writing;
+            return { name: `${name}.zip`, size, version: hash.digest('hex') };
+        } catch (error) {
+            abort.abort(error);
+            meter.destroy();
+            await writing.catch(() => {});
+            throw fileError(abort.signal.reason ?? error, 'archive');
+        } finally {
+            signal.removeEventListener('abort', cancel);
+            // The enclosing TransferManager owns cleanup of this known private directory.
+        }
     }
     async snapshot(
         rootId: string,

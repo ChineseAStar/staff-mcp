@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { bridge, BridgeError, errorMessage } from './bridge';
 import type { TransferProgress } from './bridge';
+import { validUploadPath } from './tree-input';
 
 // Numeric validity boundary, also used by the upload retry button; not a byte budget.
 export const MAX_FILE_SIZE = Number.MAX_SAFE_INTEGER;
@@ -37,6 +38,10 @@ export interface TransferJob {
     overwrite?: boolean;
     expectedVersion?: string;
     cancelRequested?: boolean;
+    uploadDirectory?: string;
+    invalidUpload?: boolean;
+    archive?: 'zip';
+    saveRequested?: boolean;
 }
 
 export const transferLabels: Record<TransferStatus, string> = {
@@ -133,6 +138,13 @@ export function useTransfers(
             )
                 return;
             if (!transferActive(job)) return;
+            // A delayed preparation event cannot reopen an already-started GET.
+            if (
+                job.saveRequested &&
+                progress.status === 'ready' &&
+                progress.manualStart !== true
+            )
+                return;
             if (job.direction === 'upload') {
                 // The upload promise, not a byte-progress event, confirms commit.
                 change(job.id, {
@@ -209,6 +221,64 @@ export function useTransfers(
                     ?.cancelRequested;
             change(job.id, { status: 'checking', error: undefined });
             try {
+                // Keep directory creation in the existing serial upload runner:
+                // no recursive scan, parallel mkdir queue or file-byte buffering.
+                if (job.uploadDirectory !== undefined) {
+                    const relative = job.path.slice(
+                        job.uploadDirectory
+                            ? job.uploadDirectory.length + 1
+                            : 0,
+                    );
+                    const parents = relative.split('/').slice(0, -1);
+                    let directory = job.uploadDirectory;
+                    for (const part of parents) {
+                        if (cancelled()) throw new Error('已取消');
+                        directory = directory ? `${directory}/${part}` : part;
+                        try {
+                            const entry = await bridge.request<{
+                                type: string;
+                            }>('stat', {
+                                rootId: job.rootId,
+                                path: directory,
+                            });
+                            if (entry.type !== 'directory')
+                                throw new Error(
+                                    `父路径不是文件夹：${directory}`,
+                                );
+                        } catch (error) {
+                            if (
+                                !(error instanceof BridgeError) ||
+                                error.code !== 'NOT_FOUND'
+                            )
+                                throw error;
+                            if (cancelled()) throw new Error('已取消');
+                            try {
+                                await bridge.request('mkdir', {
+                                    rootId: job.rootId,
+                                    path: directory,
+                                });
+                                onUploadedRef.current(job.rootId, directory);
+                            } catch (mkdirError) {
+                                if (
+                                    !(mkdirError instanceof BridgeError) ||
+                                    mkdirError.code !== 'ALREADY_EXISTS'
+                                )
+                                    throw mkdirError;
+                                const entry = await bridge.request<{
+                                    type: string;
+                                }>('stat', {
+                                    rootId: job.rootId,
+                                    path: directory,
+                                });
+                                if (entry.type !== 'directory')
+                                    throw new Error(
+                                        `父路径不是文件夹：${directory}`,
+                                    );
+                            }
+                        }
+                    }
+                }
+                if (cancelled()) throw new Error('已取消');
                 if (!job.overwrite) {
                     try {
                         const existing = await bridge.request<{
@@ -295,7 +365,9 @@ export function useTransfers(
                     error:
                         current?.cancelRequested && enabledRef.current
                             ? undefined
-                            : errorMessage(error),
+                            : job.uploadDirectory !== undefined && !transferId
+                              ? `文件未提交；已创建的文件夹会保留：${errorMessage(error)}`
+                              : errorMessage(error),
                     // Every explicit retry rechecks the destination and asks again.
                     overwrite: false,
                 });
@@ -342,25 +414,41 @@ export function useTransfers(
         void run();
     }, [available, jobs, change]);
 
-    const upload = (files: File[], rootId: string, directory: string) => {
-        for (const file of files) {
+    const upload = (
+        files: File[],
+        rootId: string,
+        directory: string,
+        folder = false,
+    ) => {
+        const batch = files.map((file): TransferJob => {
+            const relative = folder ? file.webkitRelativePath : file.name;
+            const invalidPath =
+                !validUploadPath(relative) ||
+                (!!directory && !validUploadPath(directory)) ||
+                (!folder && relative.includes('/'));
             const invalidSize =
                 !Number.isSafeInteger(file.size) || file.size < 0;
-            add({
+            return {
                 id: `transfer-${++sequence.current}`,
                 direction: 'upload',
                 rootId,
-                path: directory ? `${directory}/${file.name}` : file.name,
-                name: file.name,
+                path: directory ? `${directory}/${relative}` : relative,
+                name: relative || file.name,
                 file,
+                ...(folder ? { uploadDirectory: directory } : {}),
+                invalidUpload: invalidPath || invalidSize,
                 size: file.size,
                 loaded: 0,
-                status: invalidSize ? 'error' : 'queued',
-                error: invalidSize
-                    ? '文件大小必须是非负安全整数，未开始上传。'
-                    : undefined,
-            });
-        }
+                status: invalidPath || invalidSize ? 'error' : 'queued',
+                error: invalidPath
+                    ? '路径无效（禁止绝对路径、空段、../、反斜杠）；此文件未提交。'
+                    : invalidSize
+                      ? '文件大小必须是非负安全整数，未开始上传。'
+                      : undefined,
+            };
+        });
+        jobsRef.current = [...jobsRef.current, ...batch];
+        setJobs(jobsRef.current);
     };
 
     const discardDownload = async (job: TransferJob) => {
@@ -378,6 +466,7 @@ export function useTransfers(
             error: undefined,
             cancelRequested: false,
             transferId: undefined,
+            saveRequested: false,
         });
         let transferId: string | undefined;
         let cleanupAttempted = false;
@@ -392,15 +481,21 @@ export function useTransfers(
                 change(job.id, { status: 'cancelled' });
                 return;
             }
-            const result = await bridge.request<{ transferId: string }>(
-                'download',
-                {
-                    rootId: job.rootId,
-                    path: job.path,
-                },
-            );
+            const result = await bridge.request<{
+                transferId: string;
+                name: string;
+                size: number;
+            }>('download', {
+                rootId: job.rootId,
+                path: job.path,
+                ...(job.archive ? { archive: job.archive } : {}),
+            });
             transferId = result.transferId;
-            change(job.id, { transferId });
+            change(job.id, {
+                transferId,
+                name: result.name,
+                size: result.size,
+            });
             if (cancelled()) {
                 // Prepare can finish after the user cancelled. Release the new
                 // handle before acknowledging cancellation; never receive bytes.
@@ -423,6 +518,14 @@ export function useTransfers(
                 });
             }
             await bridge.request('downloadReceive', { transferId });
+            if (cancelled()) return;
+            const current = jobsRef.current.find(
+                (entry) => entry.id === job.id,
+            );
+            if (!current || !['preparing', 'ready'].includes(current.status))
+                return;
+            change(job.id, { status: 'ready' });
+            await save(job.id);
         } catch (error) {
             if (cleanupAttempted) {
                 change(job.id, {
@@ -465,12 +568,12 @@ export function useTransfers(
     const save = async (id: string) => {
         const job = jobsRef.current.find((entry) => entry.id === id);
         if (!job || job.status !== 'ready' || !enabledRef.current) return;
-        change(id, { status: 'saving', error: undefined });
+        change(id, { status: 'saving', error: undefined, saveRequested: true });
         try {
-            const result = await bridge.request<{ receiving?: boolean }>(
-                'downloadSave',
-                { transferId: job.transferId },
-            );
+            const result = await bridge.request<{
+                receiving?: boolean;
+                manualStart?: boolean;
+            }>('downloadSave', { transferId: job.transferId });
             const current = jobsRef.current.find((entry) => entry.id === id);
             // Progress/cancellation may settle before the native GET ack arrives.
             // Only this attempt's still-pending save can be advanced by its reply.
@@ -482,7 +585,14 @@ export function useTransfers(
             )
                 return;
             change(id, {
-                status: result?.receiving ? 'running' : 'handed-off',
+                status: result?.manualStart
+                    ? 'ready'
+                    : result?.receiving
+                      ? 'running'
+                      : 'handed-off',
+                error: result?.manualStart
+                    ? '浏览器尚未开始下载，请手动开始；不会自动重放。'
+                    : undefined,
             });
         } catch (error) {
             const current = jobsRef.current.find((entry) => entry.id === id);
@@ -501,13 +611,21 @@ export function useTransfers(
         }
     };
 
-    const download = (rootId: string, path: string, size = 0) => {
+    const download = (
+        rootId: string,
+        path: string,
+        size = 0,
+        archive?: 'zip',
+    ) => {
         const job: TransferJob = {
             id: `transfer-${++sequence.current}`,
             direction: 'download',
             rootId,
             path,
-            name: path.split('/').pop() ?? path,
+            archive,
+            name: archive
+                ? `${path.split('/').pop() || '目录'}（ZIP 准备中）`
+                : (path.split('/').pop() ?? path),
             size,
             loaded: 0,
             status: 'preparing',
@@ -632,7 +750,11 @@ export function useTransfers(
             return;
         if (job.direction === 'download') {
             void runDownload(job);
-        } else if (Number.isSafeInteger(job.size) && job.size >= 0) {
+        } else if (
+            !job.invalidUpload &&
+            Number.isSafeInteger(job.size) &&
+            job.size >= 0
+        ) {
             change(id, {
                 status: 'queued',
                 overwrite,

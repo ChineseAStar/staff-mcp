@@ -44,11 +44,8 @@ for (const app of values.app ? [values.app] : ['file-manager', 'terminal']) {
         : '';
     const title = app === 'terminal' ? '终端' : '文件';
     const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"><title>${title}</title><style>${css.replace(/<\/style/gi, '<\\/style')}</style></head><body><div id="root"></div><script>${js.replace(/<\/script/gi, '<\\/script')}</script>${licenseTag}</body></html>`;
-    if (
-        app === 'terminal' &&
-        Buffer.byteLength(html, 'utf8') > 4 * 1024 * 1024
-    ) {
-        throw new Error('Terminal HTML exceeds the 4 MiB Resource limit.');
+    if (Buffer.byteLength(html, 'utf8') > 4 * 1024 * 1024) {
+        throw new Error(`${app} HTML exceeds the 4 MiB Resource limit.`);
     }
     const directory = join(values.outdir, app, 'ui');
     await mkdir(directory, { recursive: true });

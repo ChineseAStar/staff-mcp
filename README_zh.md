@@ -1,5 +1,7 @@
 # staff-mcp
 
+> 开发分支：`2.0.6-dev.0` 是尚未发布的本地测试包。文件引用、Markdown 预览、文件夹上传和 ZIP 下载需配套新版 chat-ai，见[文件管理说明](docs/file-manager.md)。不代表 npm 发布，也不会自动升级远程实例。
+
 [English](./README.md) | [简体中文](./README_zh.md)
 
 新一代模型上下文协议 (MCP) 服务器，它将普通的 AI 助手转变为一位极具能力的、支持容器化和按角色动态适配的“数字员工”。
