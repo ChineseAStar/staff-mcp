@@ -129,6 +129,7 @@ select:disabled {
     opacity: 0.42;
 }
 button:focus-visible,
+summary:focus-visible,
 select:focus-visible,
 input:focus-visible,
 textarea:focus-visible {
@@ -524,14 +525,33 @@ input[type='checkbox'] {
     min-width: 0;
     min-height: 0;
 }
+.document-header {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    min-height: 36px;
+    flex: none;
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border-light);
+}
+.document-actions {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    flex: none;
+    padding: 0 6px;
+}
+.document-header > .pane-back {
+    flex: none;
+    margin-left: 4px;
+}
 .tab-list {
     display: flex;
     min-height: 36px;
     overflow: auto;
-    flex: none;
-    padding: 0 5px;
-    background: var(--color-surface);
-    border-bottom: 1px solid var(--color-border);
+    flex: 1;
+    min-width: 0;
+    padding: 0 4px;
     scrollbar-width: thin;
 }
 .file-tab {
@@ -604,8 +624,8 @@ input[type='checkbox'] {
     flex-wrap: nowrap;
     align-items: center;
     gap: 3px;
-    min-height: 39px;
-    padding: 4px 7px;
+    min-height: 36px;
+    padding: 3px 8px;
     border-bottom: 1px solid var(--color-border-light);
     background: var(--bg-primary);
     flex: none;
@@ -614,22 +634,17 @@ input[type='checkbox'] {
 .editor-toolbar > * {
     flex-shrink: 0;
 }
-.editor-toolbar > .menu-anchor {
-    margin-left: auto;
+.editor-toolbar .icon-button {
+    width: 28px;
+    height: 28px;
+    min-height: 28px;
 }
 .preview-context {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 3px;
     min-width: 0;
-    flex-shrink: 1;
-}
-.editor-toolbar .preview-hint {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 11px;
-    color: var(--text-muted);
+    margin-left: auto;
 }
 .readonly-label {
     font-size: 10px;
@@ -638,9 +653,49 @@ input[type='checkbox'] {
 }
 .save-button {
     min-height: 28px;
-    padding: 4px 9px;
+    width: 68px;
+    padding: 3px 6px;
+    font-size: 12px;
+    border: 0;
+    background: transparent;
+    color: var(--text-secondary);
+}
+.save-button.dirty:not(:disabled) {
+    color: var(--color-primary);
+    background: var(--color-primary-light);
+}
+.workspace-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex: none;
+    height: 28px;
+    padding: 0 8px;
+    border-top: 1px solid var(--color-border-light);
+    background: var(--bg-secondary);
+    color: var(--text-tertiary);
     font-size: 11px;
 }
+.workspace-transfers {
+    min-width: 0;
+    min-height: 24px;
+    padding: 2px 5px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 11px;
+    gap: 5px;
+}
+.workspace-transfers[aria-expanded='true'] {
+    background: var(--interactive-active);
+}
+.transfer-count {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-tertiary);
+}
+
 .tab-panel {
     display: flex;
     flex-direction: column;
@@ -787,18 +842,14 @@ input[type='checkbox'] {
     padding: 2px 8px;
     flex: none;
 }
-.transfer-toggle {
+.transfer-title-summary {
+    display: flex;
+    align-items: center;
     flex: 1;
-    justify-content: flex-start;
-    border: 0;
-    background: transparent;
+    gap: 8px;
     padding: 5px 3px;
-    min-height: 29px;
     font-size: 11px;
     color: var(--text-secondary);
-}
-.transfer-toggle > svg:last-child {
-    margin-left: auto;
 }
 .queue-attention {
     color: var(--color-primary);
@@ -1245,22 +1296,23 @@ progress::-moz-progress-bar {
 
 .preview-segment {
     display: inline-flex;
-    border: 1px solid var(--color-border);
-    border-radius: var(--app-radius-control);
-    overflow: hidden;
+    border: 0;
+    border-radius: 5px;
+    padding: 2px;
+    background: var(--bg-secondary);
     flex: none;
 }
 .preview-segment button {
     border: 0;
-    border-radius: 0;
-    min-height: 26px;
+    border-radius: 3px;
+    min-height: 24px;
     padding: 3px 8px;
-    font-size: 11px;
+    font-size: 12px;
     background: transparent;
 }
 .preview-segment button[aria-pressed='true'] {
-    background: var(--color-primary-light);
-    color: var(--color-primary);
+    background: var(--bg-primary);
+    color: var(--text-primary);
 }
 .text-editor-pane {
     display: flex;
@@ -1280,24 +1332,81 @@ progress::-moz-progress-bar {
     color: var(--text-primary);
     background: var(--app-panel-solid);
 }
+.font-settings {
+    position: relative;
+}
+.font-settings summary {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 28px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--text-secondary);
+    list-style: none;
+}
+.font-settings summary::-webkit-details-marker {
+    display: none;
+}
+.font-settings summary:hover,
+.font-settings[open] summary {
+    background: var(--interactive-hover);
+}
+.font-settings-popup {
+    position: absolute;
+    z-index: 20;
+    top: calc(100% + 5px);
+    right: 0;
+    width: 246px;
+    padding: 12px;
+    border: 1px solid var(--color-border-light);
+    border-radius: 8px;
+    box-shadow: 0 6px 22px rgb(0 0 0 / 12%);
+    background: var(--app-panel-solid);
+}
+.font-settings-heading {
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
 .markdown-font-controls {
     display: flex;
     align-items: center;
-    gap: 2px;
-    flex: none;
+    gap: 4px;
 }
 .markdown-font-controls :is(button, select) {
     min-height: 28px;
     height: 28px;
-    padding: 2px 5px;
+    padding: 2px 6px;
     font-size: 12px;
 }
 .markdown-font-controls select {
-    width: 60px;
+    width: 64px;
+}
+.markdown-font-controls .font-reset {
+    border: 0;
+    background: transparent;
+    margin-left: auto;
+}
+.font-settings-popup p {
+    margin: 10px 0 0;
+    font-size: 11px;
+    line-height: 1.65;
+    color: var(--text-tertiary);
 }
 .outline-toggle {
-    padding-inline: 6px;
+    min-height: 28px;
+    padding: 2px 6px;
+    border: 0;
+    background: transparent;
+    color: var(--text-secondary);
     font-size: 12px;
+    gap: 4px;
+}
+.outline-toggle[aria-expanded='true'] {
+    color: var(--text-primary);
 }
 .markdown-preview-scroll {
     flex: 1;
@@ -1310,7 +1419,7 @@ progress::-moz-progress-bar {
 .markdown-body {
     max-width: 80ch;
     margin: 0 auto;
-    padding: 20px 28px 48px;
+    padding: 18px 28px 48px;
     font-size: var(--markdown-font-size);
     line-height: 1.8;
     overflow-wrap: anywhere;
@@ -1324,6 +1433,9 @@ progress::-moz-progress-bar {
     margin: 1.5em 0 0.65em;
     font-weight: 650;
     color: var(--text-primary);
+}
+.markdown-body > :first-child {
+    margin-top: 0;
 }
 .markdown-body :is(h1, h2) {
     padding-bottom: 0.3em;
@@ -1419,13 +1531,14 @@ progress::-moz-progress-bar {
     flex: none;
     overflow: auto;
     overscroll-behavior: contain;
-    padding: 8px;
-    font-size: 12px;
-    background: var(--app-panel-solid);
+    padding: 12px 10px;
+    font-size: 11px;
+    line-height: 1.5;
+    background: var(--bg-primary);
     scrollbar-gutter: stable;
 }
 .markdown-outline.docked {
-    border-left: 1px solid var(--color-border);
+    border-left: 1px solid var(--color-border-light);
 }
 .markdown-outline.popover {
     position: absolute;
@@ -1443,8 +1556,8 @@ progress::-moz-progress-bar {
     justify-content: space-between;
     align-items: center;
     gap: 8px;
-    padding: 0 4px 6px;
-    color: var(--text-secondary);
+    padding: 0 6px 8px;
+    color: var(--text-tertiary);
 }
 .outline-heading button {
     min-height: 28px;
@@ -1466,14 +1579,20 @@ progress::-moz-progress-bar {
     width: 100%;
     text-align: left;
     border: 0;
-    border-radius: 4px;
-    padding: 6px;
+    border-left: 2px solid transparent;
+    border-radius: 0 3px 3px 0;
+    min-height: 28px;
+    padding: 4px 7px;
     background: transparent;
-    color: var(--text-secondary);
+    color: var(--text-tertiary);
     overflow-wrap: anywhere;
 }
-.markdown-outline nav button:hover,
+.markdown-outline nav button:hover {
+    background: var(--interactive-hover);
+    color: var(--text-primary);
+}
 .markdown-outline nav button[aria-current='location'] {
+    border-left-color: var(--color-primary);
     background: var(--color-primary-light);
     color: var(--color-primary);
 }
@@ -1523,39 +1642,21 @@ progress::-moz-progress-bar {
 .markdown-body .tok-emphasis {
     font-style: italic;
 }
-@container document (max-width: 680px) {
-    .editor-toolbar .preview-hint,
-    .markdown-font-controls .font-step {
-        display: none;
-    }
-}
 @container document (max-width: 440px) {
     .editor-toolbar {
         gap: 2px;
-        padding-inline: 4px;
-    }
-    .editor-toolbar .save-button {
-        padding-inline: 5px;
-        gap: 3px;
-    }
-    .editor-toolbar .save-button svg {
-        display: none;
+        padding-inline: 6px;
     }
     .preview-segment button {
-        padding-inline: 5px;
+        padding-inline: 7px;
     }
-    .preview-context {
-        gap: 2px;
-    }
-    .markdown-font-controls select {
-        width: 57px;
-        padding-inline: 1px;
+    .document-actions {
+        padding-inline: 4px;
     }
     .readonly-label {
-        padding: 1px 2px;
         font-size: 10px;
     }
     .markdown-body {
-        padding: 14px 16px 32px;
+        padding: 16px 16px 32px;
     }
 }

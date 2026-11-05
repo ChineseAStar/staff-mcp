@@ -11,6 +11,7 @@ import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { remarkPreview } from './markdown';
+import { Icon } from './ui';
 
 export function isMarkdown(name: string) {
     return /\.(md|markdown)$/i.test(name);
@@ -19,6 +20,97 @@ export function isMarkdown(name: string) {
 const DEFAULT_FONT_SIZE = 15;
 const MIN_FONT_SIZE = 12;
 const MAX_FONT_SIZE = 24;
+
+function FontSettings({
+    fontSize,
+    onChange,
+}: {
+    fontSize: number;
+    onChange: (size: number) => void;
+}) {
+    const details = useRef<HTMLDetailsElement>(null);
+    useEffect(() => {
+        const node = details.current!;
+        const close = (event: KeyboardEvent) => {
+            if (!node.open || event.key !== 'Escape') return;
+            event.preventDefault();
+            event.stopPropagation();
+            node.open = false;
+            node.querySelector('summary')?.focus();
+        };
+        const outside = (event: Event) => {
+            if (!node.contains(event.target as Node)) node.open = false;
+        };
+        window.addEventListener('keydown', close, true);
+        window.addEventListener('pointerdown', outside, true);
+        window.addEventListener('focusin', outside);
+        return () => {
+            window.removeEventListener('keydown', close, true);
+            window.removeEventListener('pointerdown', outside, true);
+            window.removeEventListener('focusin', outside);
+        };
+    }, []);
+    return (
+        <details className="font-settings" ref={details}>
+            <summary aria-label="阅读字号设置" title="阅读字号设置">
+                Aa
+            </summary>
+            <div
+                className="font-settings-popup"
+                role="group"
+                aria-label="阅读字号设置"
+            >
+                <div className="font-settings-heading">阅读字号</div>
+                <div className="markdown-font-controls">
+                    <button
+                        type="button"
+                        aria-label="减小预览字号"
+                        disabled={fontSize <= MIN_FONT_SIZE}
+                        onClick={() =>
+                            onChange(Math.max(MIN_FONT_SIZE, fontSize - 1))
+                        }
+                    >
+                        A−
+                    </button>
+                    <select
+                        aria-label="预览字号"
+                        value={fontSize}
+                        onChange={(event) =>
+                            onChange(Number(event.target.value))
+                        }
+                    >
+                        {Array.from(
+                            { length: MAX_FONT_SIZE - MIN_FONT_SIZE + 1 },
+                            (_, index) => MIN_FONT_SIZE + index,
+                        ).map((size) => (
+                            <option key={size} value={size}>
+                                {size}px
+                            </option>
+                        ))}
+                    </select>
+                    <button
+                        type="button"
+                        aria-label="增大预览字号"
+                        disabled={fontSize >= MAX_FONT_SIZE}
+                        onClick={() =>
+                            onChange(Math.min(MAX_FONT_SIZE, fontSize + 1))
+                        }
+                    >
+                        A+
+                    </button>
+                    <button
+                        type="button"
+                        className="font-reset"
+                        onClick={() => onChange(DEFAULT_FONT_SIZE)}
+                    >
+                        重置
+                    </button>
+                </div>
+                <p>预览当前草稿，未自动保存。图片不加载，链接仅展示。</p>
+            </div>
+        </details>
+    );
+}
 
 // No raw HTML, image sources, active links or embedded media cross this view.
 // In particular, previewing a draft never asks the host to read another file.
@@ -212,65 +304,17 @@ export function MarkdownPreview({
                 toolbarTarget &&
                 createPortal(
                     <>
-                        <div
-                            className="markdown-font-controls"
-                            role="group"
-                            aria-label="预览字号"
-                        >
-                            <button
-                                type="button"
-                                className="font-step"
-                                aria-label="减小预览字号"
-                                disabled={fontSize <= MIN_FONT_SIZE}
-                                onClick={() =>
-                                    setFontSize((size) =>
-                                        Math.max(MIN_FONT_SIZE, size - 1),
-                                    )
-                                }
-                            >
-                                A−
-                            </button>
-                            <select
-                                aria-label="预览字号"
-                                title="预览字号（默认 15px）"
-                                value={fontSize}
-                                onChange={(event) =>
-                                    setFontSize(Number(event.target.value))
-                                }
-                            >
-                                {Array.from(
-                                    {
-                                        length:
-                                            MAX_FONT_SIZE - MIN_FONT_SIZE + 1,
-                                    },
-                                    (_, index) => MIN_FONT_SIZE + index,
-                                ).map((size) => (
-                                    <option key={size} value={size}>
-                                        {size}px
-                                    </option>
-                                ))}
-                            </select>
-                            <button
-                                type="button"
-                                className="font-step"
-                                aria-label="增大预览字号"
-                                disabled={fontSize >= MAX_FONT_SIZE}
-                                onClick={() =>
-                                    setFontSize((size) =>
-                                        Math.min(MAX_FONT_SIZE, size + 1),
-                                    )
-                                }
-                            >
-                                A+
-                            </button>
-                        </div>
+                        <FontSettings
+                            fontSize={fontSize}
+                            onChange={setFontSize}
+                        />
                         {headings.length > 0 && (
                             <button
                                 ref={trigger}
                                 type="button"
                                 className="outline-toggle"
                                 aria-label="Markdown 目录"
-                                title={`当前草稿 · ${headings.length} 个标题 · 图片不加载，链接仅展示`}
+                                title={`目录 · ${headings.length} 个标题`}
                                 aria-expanded={outlineVisible}
                                 aria-controls={`${prefix}-outline`}
                                 aria-haspopup={wide ? undefined : 'dialog'}
@@ -280,15 +324,10 @@ export function MarkdownPreview({
                                         : setPopover((value) => !value)
                                 }
                             >
-                                目录
+                                <Icon name="list" size={15} />
+                                <span>目录</span>
                             </button>
                         )}
-                        <span
-                            className="preview-hint"
-                            title="当前草稿 · 图片不加载，链接仅展示"
-                        >
-                            草稿 · {headings.length} 个标题 · 图片/链接仅展示
-                        </span>
                     </>,
                     toolbarTarget,
                 )}

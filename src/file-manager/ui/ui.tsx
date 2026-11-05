@@ -5,6 +5,7 @@ const paths = {
     attach: 'm8 12 7-7a4 4 0 0 1 6 6L10 22a6 6 0 0 1-8-8L13 3m-8 14 10-10a2 2 0 0 1 3 3L8 20',
     back: 'm14 6-6 6 6 6',
     down: 'm6 9 6 6 6-6',
+    list: 'M4 6h.01M8 6h12M4 12h.01M8 12h12M4 18h.01M8 18h12',
     more: 'M5 12h.01M12 12h.01M19 12h.01',
     folder: 'M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z',
     file: 'M14 3H5v18h14V8Zm0 0v5h5M8 13h8M8 17h6',

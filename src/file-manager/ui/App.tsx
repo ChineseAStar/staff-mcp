@@ -1351,7 +1351,6 @@ export function App() {
             job.status,
         ),
     );
-    const queueVisible = showTransfers || activeTransfers > 0 || transferErrors;
     const parentDirectory = directory.split('/').slice(0, -1).join('/');
 
     const contextEntry =
@@ -1796,13 +1795,6 @@ export function App() {
                             disabled={!available}
                             onClick={refresh}
                         />
-                        <IconButton
-                            name="transfers"
-                            title="传输记录"
-                            aria-expanded={showTransfers}
-                            aria-controls="transfer-records"
-                            onClick={() => setShowTransfers((value) => !value)}
-                        />
                         <input
                             ref={uploadInput}
                             type="file"
@@ -1979,388 +1971,383 @@ export function App() {
                     aria-label="编辑器"
                 >
                     {tabs.length > 0 && (
-                        <div
-                            className="tab-list"
-                            role="tablist"
-                            aria-label="文件标签"
-                        >
-                            {tabs.map((tab) => (
-                                <div
-                                    key={tab.id}
-                                    className={`file-tab ${activeTabId === tab.id ? 'active' : ''}`}
-                                    onContextMenu={(event) => {
-                                        event.preventDefault();
-                                        showTabMenu(
-                                            tab.id,
-                                            event.currentTarget.querySelector<HTMLElement>(
-                                                '[role="tab"]',
-                                            )!,
-                                            event.clientX,
-                                            event.clientY,
-                                        );
-                                    }}
-                                >
-                                    <button
-                                        id={`${tab.id}-label`}
-                                        role="tab"
-                                        aria-selected={activeTabId === tab.id}
-                                        aria-controls={`${tab.id}-panel`}
-                                        tabIndex={
-                                            activeTabId === tab.id ? 0 : -1
-                                        }
-                                        title={`${tab.rootId}:/${tab.path}${isDirty(tab) ? '（未保存）' : ''}`}
-                                        onClick={() => {
-                                            revealTab(tab);
-                                        }}
-                                        onKeyDown={(event) => {
-                                            if (
-                                                event.key === 'ContextMenu' ||
-                                                (event.shiftKey &&
-                                                    event.key === 'F10')
-                                            ) {
-                                                event.preventDefault();
-                                                const bounds =
-                                                    event.currentTarget.getBoundingClientRect();
-                                                showTabMenu(
-                                                    tab.id,
-                                                    event.currentTarget,
-                                                    bounds.left,
-                                                    bounds.bottom,
-                                                );
-                                                return;
-                                            }
-                                            if (
-                                                ![
-                                                    'ArrowLeft',
-                                                    'ArrowRight',
-                                                    'Home',
-                                                    'End',
-                                                ].includes(event.key)
-                                            )
-                                                return;
-                                            event.preventDefault();
-                                            const index = tabs.findIndex(
-                                                (item) => item.id === tab.id,
-                                            );
-                                            let next =
-                                                index +
-                                                (event.key === 'ArrowRight'
-                                                    ? 1
-                                                    : -1);
-                                            if (event.key === 'Home') next = 0;
-                                            if (event.key === 'End')
-                                                next = tabs.length - 1;
-                                            const target =
-                                                tabs[
-                                                    (next + tabs.length) %
-                                                        tabs.length
-                                                ];
-                                            revealTab(target);
-                                            document
-                                                .getElementById(
-                                                    `${target.id}-label`,
-                                                )
-                                                ?.focus();
-                                        }}
-                                    >
-                                        <Icon
-                                            name={
-                                                tab.kind === 'text'
-                                                    ? 'code'
-                                                    : tab.kind === 'image'
-                                                      ? 'image'
-                                                      : 'file'
-                                            }
-                                            size={14}
-                                        />
-                                        <span className="tab-name">
-                                            {tab.name}
-                                        </span>
-                                        {tab.readOnly && (
-                                            <Icon name="lock" size={11} />
-                                        )}
-                                        {isDirty(tab) && (
-                                            <span
-                                                className="dirty-dot"
-                                                aria-label="未保存"
-                                            />
-                                        )}
-                                    </button>
-                                    <button
-                                        className="tab-close icon-button"
-                                        title={`关闭 ${tab.name}`}
-                                        aria-label={`关闭 ${tab.name}`}
-                                        disabled={tabBusy(tab)}
-                                        onClick={() => closeTabs([tab])}
-                                    >
-                                        <Icon name="close" size={12} />
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                    {activeTab && (
-                        <div
-                            className="editor-toolbar"
-                            role="toolbar"
-                            aria-label="编辑操作"
-                        >
-                            <IconButton
-                                name="back"
-                                title="返回文件列表"
-                                className="pane-back"
-                                onClick={() => setMobileView('files')}
-                            />
-                            {activeTab.readOnly && (
-                                <span className="readonly-label">只读</span>
-                            )}
-                            {activeTab.kind === 'text' && (
-                                <>
-                                    {hasMarkdownPreview(activeTab) && (
-                                        <div
-                                            className="preview-segment"
-                                            role="group"
-                                            aria-label="Markdown 视图"
-                                        >
-                                            <button
-                                                aria-pressed={
-                                                    !activeTab.preview
-                                                }
-                                                onClick={() =>
-                                                    updateTab(activeTab.id, {
-                                                        preview: false,
-                                                    })
-                                                }
-                                            >
-                                                编辑
-                                            </button>
-                                            <button
-                                                aria-pressed={
-                                                    !!activeTab.preview
-                                                }
-                                                title="预览当前草稿，包括未保存内容"
-                                                onClick={() =>
-                                                    updateTab(activeTab.id, {
-                                                        preview: true,
-                                                    })
-                                                }
-                                            >
-                                                预览
-                                            </button>
-                                        </div>
-                                    )}
-                                    {hasMarkdownPreview(activeTab) &&
-                                    activeTab.preview ? (
-                                        <div
-                                            className="preview-context"
-                                            ref={setPreviewToolbar}
-                                        />
-                                    ) : (
-                                        <>
-                                            <IconButton
-                                                name="search"
-                                                title="查找与替换（Ctrl/Cmd+F）"
-                                                onClick={() =>
-                                                    editorCommand('search')
-                                                }
-                                            />
-                                            <IconButton
-                                                name="undo"
-                                                title="撤销（Ctrl/Cmd+Z）"
-                                                disabled={
-                                                    !available ||
-                                                    activeTab.readOnly
-                                                }
-                                                onClick={() =>
-                                                    editorCommand('undo')
-                                                }
-                                            />
-                                        </>
-                                    )}
-                                    <button
-                                        className="primary save-button"
-                                        title="保存（Ctrl/Cmd+S）"
-                                        disabled={
-                                            !available ||
-                                            activeTab.readOnly ||
-                                            !canWrite(activeTab.rootId) ||
-                                            activeTab.busy ||
-                                            activeTab.conflict ||
-                                            !isDirty(activeTab)
-                                        }
-                                        onClick={() =>
-                                            void saveTab(activeTab.id)
-                                        }
-                                    >
-                                        <Icon name="save" size={14} />
-                                        {activeTab.busy ? '处理中' : '保存'}
-                                    </button>
-                                </>
-                            )}
-                            <IconButton
-                                name="transfers"
-                                title="传输记录"
-                                aria-expanded={showTransfers}
-                                aria-controls="transfer-records"
-                                onClick={() =>
-                                    setShowTransfers((value) => !value)
-                                }
-                            />
-                            <div className="menu-anchor">
+                        <div className="document-header">
+                            {activeTab && (
                                 <IconButton
-                                    name="more"
-                                    title="更多编辑操作"
-                                    aria-haspopup="menu"
-                                    aria-expanded={menu === 'editor'}
-                                    onClick={() =>
-                                        setMenu(
-                                            menu === 'editor' ? null : 'editor',
-                                        )
-                                    }
+                                    name="back"
+                                    title="返回文件列表"
+                                    className="pane-back"
+                                    onClick={() => setMobileView('files')}
                                 />
-                                {menu === 'editor' && (
-                                    <Menu
-                                        label="更多编辑操作"
-                                        onClose={() => setMenu(null)}
+                            )}
+                            <div
+                                className="tab-list"
+                                role="tablist"
+                                aria-label="文件标签"
+                            >
+                                {tabs.map((tab) => (
+                                    <div
+                                        key={tab.id}
+                                        className={`file-tab ${activeTabId === tab.id ? 'active' : ''}`}
+                                        onContextMenu={(event) => {
+                                            event.preventDefault();
+                                            showTabMenu(
+                                                tab.id,
+                                                event.currentTarget.querySelector<HTMLElement>(
+                                                    '[role="tab"]',
+                                                )!,
+                                                event.clientX,
+                                                event.clientY,
+                                            );
+                                        }}
                                     >
                                         <button
-                                            type="button"
-                                            role="menuitem"
-                                            disabled={
-                                                !available ||
-                                                !!attaching ||
-                                                activeTab.busy ||
-                                                isDirty(activeTab)
+                                            id={`${tab.id}-label`}
+                                            role="tab"
+                                            aria-selected={
+                                                activeTabId === tab.id
                                             }
-                                            title={
-                                                isDirty(activeTab)
-                                                    ? '请先保存编辑，再引用文件；不会自动保存'
-                                                    : '只引用文件，未附加正文；不会自动发送'
+                                            aria-controls={`${tab.id}-panel`}
+                                            tabIndex={
+                                                activeTabId === tab.id ? 0 : -1
                                             }
-                                            onClick={() =>
-                                                fileMenuAction(
-                                                    () =>
-                                                        void attachFile(
-                                                            activeTab.rootId,
-                                                            activeTab.path,
-                                                            activeTab.name,
-                                                            activeTab.size,
-                                                        ),
+                                            title={`${tab.rootId}:/${tab.path}${isDirty(tab) ? '（未保存）' : ''}`}
+                                            onClick={() => {
+                                                revealTab(tab);
+                                            }}
+                                            onKeyDown={(event) => {
+                                                if (
+                                                    event.key ===
+                                                        'ContextMenu' ||
+                                                    (event.shiftKey &&
+                                                        event.key === 'F10')
+                                                ) {
+                                                    event.preventDefault();
+                                                    const bounds =
+                                                        event.currentTarget.getBoundingClientRect();
+                                                    showTabMenu(
+                                                        tab.id,
+                                                        event.currentTarget,
+                                                        bounds.left,
+                                                        bounds.bottom,
+                                                    );
+                                                    return;
+                                                }
+                                                if (
+                                                    ![
+                                                        'ArrowLeft',
+                                                        'ArrowRight',
+                                                        'Home',
+                                                        'End',
+                                                    ].includes(event.key)
                                                 )
-                                            }
+                                                    return;
+                                                event.preventDefault();
+                                                const index = tabs.findIndex(
+                                                    (item) =>
+                                                        item.id === tab.id,
+                                                );
+                                                let next =
+                                                    index +
+                                                    (event.key === 'ArrowRight'
+                                                        ? 1
+                                                        : -1);
+                                                if (event.key === 'Home')
+                                                    next = 0;
+                                                if (event.key === 'End')
+                                                    next = tabs.length - 1;
+                                                const target =
+                                                    tabs[
+                                                        (next + tabs.length) %
+                                                            tabs.length
+                                                    ];
+                                                revealTab(target);
+                                                document
+                                                    .getElementById(
+                                                        `${target.id}-label`,
+                                                    )
+                                                    ?.focus();
+                                            }}
                                         >
-                                            <Icon name="attach" size={14} />
-                                            {attaching?.rootId ===
-                                                activeTab.rootId &&
-                                            attaching.path === activeTab.path
-                                                ? '添加中…'
-                                                : isDirty(activeTab)
-                                                  ? '先保存再引用'
-                                                  : '引用文件'}
+                                            <Icon
+                                                name={
+                                                    tab.kind === 'text'
+                                                        ? 'code'
+                                                        : tab.kind === 'image'
+                                                          ? 'image'
+                                                          : 'file'
+                                                }
+                                                size={14}
+                                            />
+                                            <span className="tab-name">
+                                                {tab.name}
+                                            </span>
+                                            {tab.readOnly && (
+                                                <Icon name="lock" size={11} />
+                                            )}
+                                            {isDirty(tab) && (
+                                                <span
+                                                    className="dirty-dot"
+                                                    aria-label="未保存"
+                                                />
+                                            )}
                                         </button>
                                         <button
-                                            role="menuitem"
+                                            className="tab-close icon-button"
+                                            title={`关闭 ${tab.name}`}
+                                            aria-label={`关闭 ${tab.name}`}
+                                            disabled={tabBusy(tab)}
+                                            onClick={() => closeTabs([tab])}
+                                        >
+                                            <Icon name="close" size={12} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                            {activeTab && (
+                                <div
+                                    className="document-actions"
+                                    role="group"
+                                    aria-label="当前文件操作"
+                                >
+                                    {activeTab.readOnly && (
+                                        <span className="readonly-label">
+                                            只读
+                                        </span>
+                                    )}
+                                    {activeTab.kind === 'text' && (
+                                        <button
+                                            className={`save-button ${isDirty(activeTab) ? 'dirty' : ''}`}
+                                            title="保存（Ctrl/Cmd+S）"
+                                            aria-label="保存（Ctrl/Cmd+S）"
                                             disabled={
                                                 !available ||
-                                                !!attaching ||
+                                                activeTab.readOnly ||
+                                                !canWrite(activeTab.rootId) ||
                                                 activeTab.busy ||
-                                                isDirty(activeTab) ||
-                                                activeTab.size > 256 * 1024
+                                                activeTab.conflict ||
+                                                !isDirty(activeTab)
                                             }
-                                            title="附加已保存的内容，上限 256 KiB；不会自动保存或发送"
                                             onClick={() =>
-                                                fileMenuAction(
-                                                    () =>
-                                                        void attachFile(
-                                                            activeTab.rootId,
-                                                            activeTab.path,
-                                                            activeTab.name,
-                                                            activeTab.size,
-                                                            'content',
-                                                        ),
-                                                )
+                                                void saveTab(activeTab.id)
                                             }
                                         >
-                                            <Icon name="attach" />
-                                            附加内容（≤256 KiB）
+                                            <Icon name="save" size={14} />
+                                            {activeTab.busy ? '处理中' : '保存'}
                                         </button>
-                                        {activeTab.kind === 'text' && (
-                                            <>
+                                    )}
+                                    <div className="menu-anchor">
+                                        <IconButton
+                                            name="more"
+                                            title="更多文件操作"
+                                            aria-haspopup="menu"
+                                            aria-expanded={menu === 'editor'}
+                                            onClick={() =>
+                                                setMenu(
+                                                    menu === 'editor'
+                                                        ? null
+                                                        : 'editor',
+                                                )
+                                            }
+                                        />
+                                        {menu === 'editor' && (
+                                            <Menu
+                                                label="更多文件操作"
+                                                onClose={() => setMenu(null)}
+                                            >
                                                 <button
+                                                    type="button"
                                                     role="menuitem"
                                                     disabled={
                                                         !available ||
-                                                        activeTab.readOnly ||
-                                                        (hasMarkdownPreview(
-                                                            activeTab,
-                                                        ) &&
-                                                            activeTab.preview)
+                                                        !!attaching ||
+                                                        activeTab.busy ||
+                                                        isDirty(activeTab)
                                                     }
-                                                    onClick={() =>
-                                                        fileMenuAction(() =>
-                                                            editorCommand(
-                                                                'redo',
-                                                            ),
-                                                        )
+                                                    title={
+                                                        isDirty(activeTab)
+                                                            ? '请先保存编辑，再引用文件；不会自动保存'
+                                                            : '只引用文件，未附加正文；不会自动发送'
                                                     }
-                                                >
-                                                    <Icon name="redo" />
-                                                    重做
-                                                </button>
-                                                <button
-                                                    role="menuitem"
                                                     onClick={() =>
                                                         fileMenuAction(
                                                             () =>
-                                                                void copy(
-                                                                    activeTab.text,
+                                                                void attachFile(
+                                                                    activeTab.rootId,
+                                                                    activeTab.path,
+                                                                    activeTab.name,
+                                                                    activeTab.size,
                                                                 ),
                                                         )
                                                     }
                                                 >
-                                                    <Icon name="copy" />
-                                                    {activeTab.readOnly
-                                                        ? '复制完整文本'
-                                                        : '复制完整草稿'}
+                                                    <Icon
+                                                        name="attach"
+                                                        size={14}
+                                                    />
+                                                    {attaching?.rootId ===
+                                                        activeTab.rootId &&
+                                                    attaching.path ===
+                                                        activeTab.path
+                                                        ? '添加中…'
+                                                        : isDirty(activeTab)
+                                                          ? '先保存再引用'
+                                                          : '引用文件'}
                                                 </button>
                                                 <button
                                                     role="menuitem"
                                                     disabled={
                                                         !available ||
-                                                        activeTab.busy
+                                                        !!attaching ||
+                                                        activeTab.busy ||
+                                                        isDirty(activeTab) ||
+                                                        activeTab.size >
+                                                            256 * 1024
                                                     }
+                                                    title="附加已保存的内容，上限 256 KiB；不会自动保存或发送"
+                                                    onClick={() =>
+                                                        fileMenuAction(
+                                                            () =>
+                                                                void attachFile(
+                                                                    activeTab.rootId,
+                                                                    activeTab.path,
+                                                                    activeTab.name,
+                                                                    activeTab.size,
+                                                                    'content',
+                                                                ),
+                                                        )
+                                                    }
+                                                >
+                                                    <Icon name="attach" />
+                                                    附加内容（≤256 KiB）
+                                                </button>
+                                                {activeTab.kind === 'text' && (
+                                                    <>
+                                                        <button
+                                                            role="menuitem"
+                                                            onClick={() =>
+                                                                fileMenuAction(
+                                                                    () =>
+                                                                        void copy(
+                                                                            activeTab.text,
+                                                                        ),
+                                                                )
+                                                            }
+                                                        >
+                                                            <Icon name="copy" />
+                                                            {activeTab.readOnly
+                                                                ? '复制完整文本'
+                                                                : '复制完整草稿'}
+                                                        </button>
+                                                        <button
+                                                            role="menuitem"
+                                                            disabled={
+                                                                !available ||
+                                                                activeTab.busy
+                                                            }
+                                                            onClick={() =>
+                                                                fileMenuAction(
+                                                                    () =>
+                                                                        beginReread(
+                                                                            activeTab,
+                                                                        ),
+                                                                )
+                                                            }
+                                                        >
+                                                            <Icon name="refresh" />
+                                                            重新读取…
+                                                        </button>
+                                                    </>
+                                                )}
+                                                <button
+                                                    role="menuitem"
+                                                    disabled={!available}
                                                     onClick={() =>
                                                         fileMenuAction(() =>
-                                                            beginReread(
-                                                                activeTab,
+                                                            download(
+                                                                activeTab.rootId,
+                                                                activeTab.path,
+                                                                activeTab.size,
                                                             ),
                                                         )
                                                     }
                                                 >
-                                                    <Icon name="refresh" />
-                                                    重新读取…
+                                                    <Icon name="download" />
+                                                    下载服务器文件
                                                 </button>
-                                            </>
+                                            </Menu>
                                         )}
-                                        <button
-                                            role="menuitem"
-                                            disabled={!available}
-                                            onClick={() =>
-                                                fileMenuAction(() =>
-                                                    download(
-                                                        activeTab.rootId,
-                                                        activeTab.path,
-                                                        activeTab.size,
-                                                    ),
-                                                )
-                                            }
-                                        >
-                                            <Icon name="download" />
-                                            下载服务器文件
-                                        </button>
-                                    </Menu>
-                                )}
-                            </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {activeTab?.kind === 'text' && (
+                        <div
+                            className="editor-toolbar"
+                            role="toolbar"
+                            aria-label="文档视图与工具"
+                        >
+                            {hasMarkdownPreview(activeTab) && (
+                                <div
+                                    className="preview-segment"
+                                    role="group"
+                                    aria-label="Markdown 视图"
+                                >
+                                    <button
+                                        aria-pressed={!!activeTab.preview}
+                                        title="预览当前草稿，包括未保存内容"
+                                        onClick={() =>
+                                            updateTab(activeTab.id, {
+                                                preview: true,
+                                            })
+                                        }
+                                    >
+                                        阅读
+                                    </button>
+                                    <button
+                                        aria-pressed={!activeTab.preview}
+                                        onClick={() =>
+                                            updateTab(activeTab.id, {
+                                                preview: false,
+                                            })
+                                        }
+                                    >
+                                        编辑
+                                    </button>
+                                </div>
+                            )}
+                            {hasMarkdownPreview(activeTab) &&
+                            activeTab.preview ? (
+                                <div
+                                    className="preview-context"
+                                    ref={setPreviewToolbar}
+                                />
+                            ) : (
+                                <>
+                                    <IconButton
+                                        name="search"
+                                        title="查找与替换（Ctrl/Cmd+F）"
+                                        onClick={() => editorCommand('search')}
+                                    />
+                                    <IconButton
+                                        name="undo"
+                                        title="撤销（Ctrl/Cmd+Z）"
+                                        disabled={
+                                            !available || activeTab.readOnly
+                                        }
+                                        onClick={() => editorCommand('undo')}
+                                    />
+                                    <IconButton
+                                        name="redo"
+                                        title="重做（Ctrl/Cmd+Shift+Z）"
+                                        disabled={
+                                            !available || activeTab.readOnly
+                                        }
+                                        onClick={() => editorCommand('redo')}
+                                    />
+                                </>
+                            )}
                         </div>
                     )}
                     {!tabs.length && (
@@ -2541,31 +2528,22 @@ export function App() {
                 </section>
             </div>
 
-            {queueVisible && (
+            {showTransfers && (
                 <section
                     id="transfer-records"
-                    className={`transfers ${showTransfers ? 'expanded' : ''}`}
+                    className="transfers expanded"
                     aria-label="传输队列"
                 >
                     <div className="transfer-heading">
-                        <button
-                            className="transfer-toggle"
-                            aria-expanded={showTransfers}
-                            onClick={() => setShowTransfers((value) => !value)}
-                        >
-                            <Icon name="transfers" size={14} />
-                            <span>
-                                传输
-                                {activeTransfers ? ` · ${activeTransfers}` : ''}
-                            </span>
+                        <div className="transfer-title-summary">
+                            <span>传输记录 · {transfers.jobs.length}</span>
+                            {activeTransfers > 0 && (
+                                <span>{activeTransfers} 进行中</span>
+                            )}
                             {transferErrors && (
                                 <span className="queue-attention">需处理</span>
                             )}
-                            <Icon
-                                name={showTransfers ? 'down' : 'chevron'}
-                                size={12}
-                            />
-                        </button>
+                        </div>
                         {showTransfers && (
                             <>
                                 <button
@@ -2781,6 +2759,31 @@ export function App() {
                     )}
                 </section>
             )}
+            <footer className="workspace-status" aria-label="工作区状态">
+                <span className="connection-status">
+                    {available ? '已连接' : '连接不可用'}
+                </span>
+                <button
+                    className="workspace-transfers"
+                    aria-label={`传输记录（${transfers.jobs.length}）`}
+                    aria-expanded={showTransfers}
+                    aria-controls="transfer-records"
+                    onClick={() => setShowTransfers((value) => !value)}
+                >
+                    <Icon name="transfers" size={13} />
+                    <span>传输记录</span>
+                    <span className="transfer-count">
+                        {transfers.jobs.length}
+                    </span>
+                    {activeTransfers > 0 && (
+                        <span>· {activeTransfers} 进行中</span>
+                    )}
+                    {transferErrors && (
+                        <span className="queue-attention">需处理</span>
+                    )}
+                </button>
+            </footer>
+
             {dialog && (
                 <Modal
                     key={dialog.kind}
