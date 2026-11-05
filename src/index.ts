@@ -273,8 +273,6 @@ program
                 command.error((error as Error).message);
                 return;
             }
-            const dataAuto =
-                options.transport === 'stdio' && extensions.enabled.length > 0;
 
             // 1. Locate the package root (where package.json is)
             const pkgRoot = STAFF_MCP_PACKAGE_ROOT;
@@ -406,16 +404,12 @@ program
                     '--reverse-stable-time',
                     String(options.reverseStableTime),
                 );
-            } else {
+            } else if (options.transport === 'http') {
                 dockerArgs.push('-p', String(options.port));
                 // Inside container, we must listen on all interfaces for HTTP to be exposed
-                if (options.transport === 'http') {
-                    dockerArgs.push('-h', '0.0.0.0');
-                    if (options.httpToken !== undefined) {
-                        dockerArgs.push('--http-token', options.httpToken);
-                    }
-                } else {
-                    dockerArgs.push('-h', options.host);
+                dockerArgs.push('-h', '0.0.0.0');
+                if (options.httpToken !== undefined) {
+                    dockerArgs.push('--http-token', options.httpToken);
                 }
             }
 
@@ -454,7 +448,6 @@ program
                 dockerArgs,
                 options.transport,
                 {
-                    dataAuto,
                     nameHint: buildDockerNameHint({
                         workspaceDir: hostCwd,
                         transport: options.transport,

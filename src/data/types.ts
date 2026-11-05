@@ -67,3 +67,52 @@ export interface HttpDataSessionOptions {
     openTimeoutMs?: number;
     idleTimeoutMs?: number;
 }
+
+/** Transport-neutral byte session; HTTP links are never valid on stdio. */
+export interface DataSession {
+    supports(purpose: ChannelPurpose, direction: Direction): boolean;
+    openChannel(
+        open: ChannelOpen,
+        receiver: ChannelReceiver,
+        link?: DataLink,
+        signal?: AbortSignal,
+    ): Promise<DataChannel>;
+    acceptOpen(raw: unknown): Promise<DataOpenResult>;
+    close(reason?: string): void;
+}
+
+export interface StdioDataOpenParams {
+    binding: string;
+    channel: number;
+    open: ChannelOpen;
+}
+
+export type StdioDataFrame = {
+    binding: string;
+    channel: number;
+} & (
+    | { type: 'data'; sequence: number; offset: number; data: string }
+    | { type: 'end'; sequence: number; offset: number }
+    | { type: 'ack'; sequence: number; offset: number; ended: boolean }
+    | { type: 'close'; code: string }
+);
+
+export interface StdioDataSessionOptions {
+    role: 'host' | 'remote';
+    binding: string;
+    supportsPurpose: (purpose: string) => boolean;
+    /** Send frame params as cc.qqxing/data/v1/frame through the FIFO transport. */
+    sendNotification: (params: StdioDataFrame) => Promise<void>;
+    requestOpen?: (
+        params: StdioDataOpenParams,
+        signal?: AbortSignal,
+    ) => Promise<DataOpenResult>;
+    accept?: (
+        open: ChannelOpen,
+        channel: DataChannel,
+    ) => Promise<ChannelReceiver>;
+    maxChannels?: number;
+    openTimeoutMs?: number;
+    /** Consumption progress deadline only while there is outstanding work. */
+    idleTimeoutMs?: number;
+}

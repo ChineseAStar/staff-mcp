@@ -136,9 +136,6 @@ export function loadTerminalRuntime(
             const internal = new Set([
                 'STAFF_GLOBAL_DIR',
                 'STAFF_MCP_IS_DOCKER',
-                'STAFF_MCP_DATA_BOOTSTRAP',
-                'STAFF_MCP_DATA_HOST',
-                'STAFF_MCP_DATA_PORT',
                 'MCP_REVERSE_URL',
                 'MCP_REVERSE_TOKEN',
                 'MCP_REVERSE_NAME',

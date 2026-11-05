@@ -1,12 +1,13 @@
-import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { HttpDataSession } from '../data/HttpDataSession.js';
-import { handleNodeRequest } from '../data/node.js';
-import { readDockerDataBaseUrl } from '../data-stdio-docker.js';
+import { z } from 'zod';
+import { FifoTransport } from '../data/FifoTransport.js';
+import {
+    DATA_FRAME_METHOD,
+    StdioDataSession,
+} from '../data/StdioDataSession.js';
 import { configureExtensionData } from '../extensions/runtime.js';
-import { extensionError } from '../extensions/protocol.js';
+import { registerServerCleanup } from '../utils/server-lifecycle.js';
 
 export function redirectStdioLogsToStderr(): void {
     // MCP stdio reserves stdout for JSON-RPC frames.
@@ -14,95 +15,41 @@ export function redirectStdioLogsToStderr(): void {
 }
 
 export async function startStdioServer(server: McpServer) {
-    configureExtensionData(
-        server,
-        async (binding, accept, signal, origin, supportsPurpose) => {
-            if (origin !== undefined)
-                extensionError(
-                    'INVALID_PARAMS',
-                    'Stdio data does not accept an advertised origin',
-                );
-            const dockerBase = await readDockerDataBaseUrl();
-            signal.throwIfAborted();
-            const host = dockerBase
-                ? process.env.STAFF_MCP_DATA_HOST
-                : '127.0.0.1';
-            const port = dockerBase
-                ? Number(process.env.STAFF_MCP_DATA_PORT)
-                : 0;
-            if (dockerBase && (host !== '0.0.0.0' || port !== 39173))
-                throw new Error('Invalid Docker data listener configuration.');
-            let session: HttpDataSession | undefined;
-            const listener = createServer((request, response) => {
-                if (!session) {
-                    response.writeHead(503);
-                    response.end();
-                    return;
-                }
-                void handleNodeRequest(session, request, response).then(
-                    (handled) => {
-                        if (!handled) {
-                            response.writeHead(404);
-                            response.end();
-                        }
-                    },
-                );
-            });
-            const close = () =>
-                new Promise<void>((resolve) => {
-                    listener.closeAllConnections();
-                    listener.close(() => resolve());
-                });
-            const onAbort = () => {
-                void close();
-            };
-            signal.addEventListener('abort', onAbort, { once: true });
-            try {
-                await new Promise<void>((resolve, reject) => {
-                    listener.once('error', reject);
-                    listener.listen(port, host, () => {
-                        listener.removeListener('error', reject);
-                        resolve();
-                    });
-                });
-                signal.throwIfAborted();
-                const localBase = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
-                const endpoint = `${dockerBase ?? localBase}/mcp/data/${binding}`;
-                session = new HttpDataSession({
-                    role: 'remote',
-                    binding,
-                    endpoint,
-                    accept,
-                    supportsPurpose,
-                    // Listener mode must never follow a peer-supplied outbound descriptor.
-                    fetch: async () => {
-                        throw new Error(
-                            'Outbound data is unavailable in stdio listener mode',
-                        );
-                    },
-                    validateEndpoint: () => {
-                        throw new Error(
-                            'Outbound data endpoint is unavailable in stdio listener mode',
-                        );
-                    },
-                });
-                return {
-                    session,
-                    endpoint,
-                    close: () => {
-                        signal.removeEventListener('abort', onAbort);
-                        return close();
-                    },
-                };
-            } catch (error) {
-                signal.removeEventListener('abort', onAbort);
-                session?.close();
-                await close();
-                throw error;
-            }
+    let session: StdioDataSession | undefined;
+    server.server.setNotificationHandler(
+        z.object({
+            method: z.literal(DATA_FRAME_METHOD),
+            params: z.unknown(),
+        }),
+        (notification) => {
+            session?.handleNotification(notification.params);
         },
     );
-    const transport = new StdioServerTransport();
+    registerServerCleanup(server, () => {
+        server.server.removeNotificationHandler(DATA_FRAME_METHOD);
+        session?.close();
+        session = undefined;
+    });
+    configureExtensionData(
+        server,
+        (binding, accept, signal, _origin, supportsPurpose) => {
+            signal.throwIfAborted();
+            session = new StdioDataSession({
+                role: 'remote',
+                binding,
+                accept,
+                supportsPurpose,
+                sendNotification: (params) =>
+                    server.server.notification({
+                        method: DATA_FRAME_METHOD,
+                        params,
+                    }),
+            });
+            return { session };
+        },
+        'stdio',
+    );
+    const transport = new FifoTransport(new StdioServerTransport());
     let resolveClosed!: () => void;
     let rejectClosed!: (error: unknown) => void;
     const closed = new Promise<void>((resolve, reject) => {

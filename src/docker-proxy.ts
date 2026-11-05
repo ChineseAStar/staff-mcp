@@ -1,16 +1,8 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import {
-    assertLocalDockerDaemon,
-    assertLinuxDockerDaemon,
-    DOCKER_DATA_STARTUP_TIMEOUT_MS,
-    prepareDockerDataArgs,
-    publishDockerDataBaseUrl,
-    failDockerDataBootstrap,
-} from './data-stdio-docker.js';
 import type { ExtensionFeature } from './extensions/config.js';
 import { terminalStartupError } from './terminal/pty.js';
 
@@ -27,8 +19,6 @@ interface SignalSource {
 }
 
 export interface DockerProxyOptions {
-    /** Publish a private stdio data endpoint; HTTP/reverse do not use it. */
-    dataAuto?: boolean;
     command?: string;
     commandPrefixArgs?: readonly string[];
     input?: NodeJS.ReadableStream;
@@ -208,22 +198,9 @@ function isMissingContainerError(stderr: string): boolean {
  * user-supplied Docker options only, because the command executed inside the
  * container can legitimately contain similarly named flags.
  */
-export function validateAdditionalDockerArgs(
-    args: readonly string[],
-    dataAuto = false,
-): void {
-    for (const [index, arg] of args.entries()) {
+export function validateAdditionalDockerArgs(args: readonly string[]): void {
+    for (const arg of args) {
         const normalized = arg.toLowerCase();
-        if (
-            dataAuto &&
-            (/STAFF_MCP_DATA_(?:BOOTSTRAP|HOST|PORT)/i.test(arg) ||
-                arg.includes('/run/staff-mcp-data.json') ||
-                /(?:^|[^0-9])39173(?:[^0-9]|$)/.test(arg))
-        ) {
-            throw new Error(
-                'Docker data bootstrap environment, mount and port are managed internally.',
-            );
-        }
         const isShortDetachOption =
             (/^-[^-][a-z]*$/i.test(arg) && arg.slice(1).includes('d')) ||
             normalized.startsWith('-d=');
@@ -280,14 +257,73 @@ export function validateAdditionalDockerArgs(
     }
 }
 
-/** Topology is a capability limit, not permission to bypass managed options. */
-function unsupportedDataNetwork(args: readonly string[]): boolean {
-    return args.some(
-        (arg, index) =>
-            /^(?:--network|--net)=(?:host$|container:|none$)/i.test(arg) ||
-            (/^(?:--network|--net)$/i.test(arg) &&
-                /^(?:host$|container:|none$)/i.test(args[index + 1] ?? '')),
-    );
+/** Docker output/argv can contain credentials. Never include either in errors. */
+async function dockerOutput(
+    command: string,
+    prefix: readonly string[],
+    args: string[],
+): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const fail = () =>
+            reject(
+                new Error('Docker daemon check failed (details suppressed).'),
+            );
+        execFile(
+            command,
+            [...prefix, ...args],
+            {
+                timeout: 2_000,
+                killSignal: 'SIGKILL',
+                maxBuffer: 1024 * 1024,
+                encoding: 'utf8',
+            },
+            (error, stdout) => {
+                if (error) fail();
+                else resolve(stdout.trim());
+            },
+        );
+    });
+}
+
+/** Docker Desktop's local named pipes are valid; remote named pipes are not. */
+async function assertLocalDockerDaemon(
+    command: string,
+    prefix: readonly string[],
+): Promise<void> {
+    // Match Docker CLI precedence: an explicit context overrides DOCKER_HOST.
+    const endpoint =
+        !process.env.DOCKER_CONTEXT && process.env.DOCKER_HOST
+            ? process.env.DOCKER_HOST
+            : await dockerOutput(command, prefix, [
+                  'context',
+                  'inspect',
+                  '--format',
+                  '{{.Endpoints.docker.Host}}',
+              ]);
+    const normalizedEndpoint = endpoint.replace(/\\/g, '/');
+    const localUnix =
+        endpoint.startsWith('unix:///') && endpoint === normalizedEndpoint;
+    const localPipe =
+        normalizedEndpoint.startsWith('npipe:////./pipe/') &&
+        !normalizedEndpoint.slice('npipe:////./pipe/'.length).includes('/') &&
+        normalizedEndpoint.length > 'npipe:////./pipe/'.length;
+    if (!localUnix && !localPipe) {
+        throw new Error('Docker extensions require a verified local daemon.');
+    }
+}
+
+async function assertLinuxDockerDaemon(
+    command: string,
+    prefix: readonly string[],
+): Promise<void> {
+    const osType = await dockerOutput(command, prefix, [
+        'info',
+        '--format',
+        '{{.OSType}}',
+    ]);
+    if (osType !== 'linux') {
+        throw new Error('Docker extensions require a Linux container daemon.');
+    }
 }
 
 /** Validate requested permissions before reducing optional capabilities. */
@@ -296,40 +332,32 @@ export async function preflightDockerExtensions(
     transport: string,
     additionalArgs: readonly string[],
 ): Promise<ExtensionFeature[]> {
-    const requestedDataAuto = transport === 'stdio' && requested.length > 0;
-    validateAdditionalDockerArgs(additionalArgs, requestedDataAuto);
+    validateAdditionalDockerArgs(additionalArgs);
     if (!requested.length) return [];
 
     let reason: string | undefined;
     let terminalReason:
         | 'DOCKER_UNSUPPORTED_PLATFORM'
-        | 'DOCKER_UNSUPPORTED_NETWORK'
         | 'DOCKER_LOCAL_DAEMON_REQUIRED'
         | undefined;
-    if (requestedDataAuto && unsupportedDataNetwork(additionalArgs)) {
-        reason =
-            'Docker stdio data auto does not support host/container/none networking';
-        terminalReason = 'DOCKER_UNSUPPORTED_NETWORK';
-    } else {
-        // HTTP and stdio advertise a host-local data endpoint. Reverse uses the
-        // peer's endpoint and needs no Docker-published application data port.
-        if (transport === 'stdio' || transport === 'http') {
-            try {
-                await assertLocalDockerDaemon('docker', []);
-            } catch {
-                reason =
-                    'Docker extension data requires a verified local daemon; remote/TCP/SSH or unavailable contexts are unsupported';
-                terminalReason = 'DOCKER_LOCAL_DAEMON_REQUIRED';
-            }
+    // Keep daemon/mount prerequisites. Stdio data uses the control pipe and
+    // needs no loopback publication or particular container network mode.
+    if (transport === 'stdio' || transport === 'http') {
+        try {
+            await assertLocalDockerDaemon('docker', []);
+        } catch {
+            reason =
+                'Docker extensions require a verified local daemon; remote/TCP/SSH or unavailable contexts are unsupported';
+            terminalReason = 'DOCKER_LOCAL_DAEMON_REQUIRED';
         }
-        if (!reason) {
-            try {
-                await assertLinuxDockerDaemon('docker', []);
-            } catch {
-                reason =
-                    'Docker extensions require a verified Linux container daemon';
-                terminalReason = 'DOCKER_UNSUPPORTED_PLATFORM';
-            }
+    }
+    if (!reason) {
+        try {
+            await assertLinuxDockerDaemon('docker', []);
+        } catch {
+            reason =
+                'Docker extensions require a verified Linux container daemon';
+            terminalReason = 'DOCKER_UNSUPPORTED_PLATFORM';
         }
     }
     if (reason) {
@@ -373,37 +401,12 @@ export async function runDockerProxy(
     const forceKillTimeoutMs =
         options.forceKillTimeoutMs ?? DEFAULT_FORCE_KILL_TIMEOUT_MS;
 
-    if (
-        options.dataAuto &&
-        (transport !== 'stdio' || unsupportedDataNetwork(dockerArgs))
-    ) {
-        console.error(
-            '[staff-mcp] Docker data auto requires stdio with supported publication networking.',
-        );
-        return 1;
-    }
-
-    let metadataPath: string | undefined;
     let containerIdentity: ContainerIdentityConfig;
     try {
         containerIdentity = prepareContainerIdentity(
             dockerArgs,
             options.nameHint,
         );
-        if (options.dataAuto) {
-            try {
-                metadataPath = prepareDockerDataArgs(
-                    containerIdentity.args,
-                    containerIdentity.ownedDirectory,
-                );
-            } catch (error) {
-                fs.rmSync(containerIdentity.ownedDirectory, {
-                    recursive: true,
-                    force: true,
-                });
-                throw error;
-            }
-        }
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[staff-mcp] Failed to prepare Docker proxy: ${message}`);
@@ -427,10 +430,7 @@ export async function runDockerProxy(
         let postCleanupTimer: NodeJS.Timeout | undefined;
         let postCleanupFinalTimer: NodeJS.Timeout | undefined;
         let cidPollTimer: NodeJS.Timeout | undefined;
-        let startupTimer: NodeJS.Timeout | undefined;
         let parentWatch: NodeJS.Timeout | undefined;
-        let bootstrapPending = metadataPath !== undefined;
-        const startupAbort = new AbortController();
 
         const signalHandlers = new Map<NodeJS.Signals, () => void>();
 
@@ -459,7 +459,7 @@ export async function runDockerProxy(
                 input.removeListener('end', handleInputEnd);
                 input.removeListener('error', handleInputError);
             }
-            if (metadataPath) {
+            if (transport === 'stdio') {
                 process.stdout.removeListener('error', handleOutputError);
                 process.stderr.removeListener('error', handleOutputError);
             }
@@ -470,7 +470,6 @@ export async function runDockerProxy(
                 return;
             }
             settled = true;
-            startupAbort.abort();
 
             if (gracefulTimer) {
                 clearTimeout(gracefulTimer);
@@ -485,7 +484,6 @@ export async function runDockerProxy(
                 clearInterval(cidPollTimer);
             }
 
-            if (startupTimer) clearTimeout(startupTimer);
             if (parentWatch) clearInterval(parentWatch);
             removeListeners();
 
@@ -767,7 +765,6 @@ export async function runDockerProxy(
 
             if (!shutdownStarted) {
                 shutdownStarted = true;
-                startupAbort.abort();
                 console.error(
                     `[staff-mcp] Docker proxy shutdown requested: ${reason}`,
                 );
@@ -811,42 +808,7 @@ export async function runDockerProxy(
             signalSource.on(signal, handler);
         }
 
-        const failBootstrap = () => {
-            if (!bootstrapPending || settled || shutdownStarted) return;
-            bootstrapPending = false;
-            if (startupTimer) clearTimeout(startupTimer);
-            startupAbort.abort();
-            try {
-                failDockerDataBootstrap(metadataPath!);
-            } catch {
-                // The reader also fails closed on unreadable/missing metadata or timeout.
-                console.error(
-                    '[staff-mcp] Could not record Docker data bootstrap failure (details suppressed).',
-                );
-            }
-            console.error(
-                '[staff-mcp] Docker data bootstrap unavailable; extension data configure will fail. Basic MCP tools/control remain enabled (details suppressed).',
-            );
-        };
-
-        const start = async () => {
-            if (metadataPath) {
-                try {
-                    // Recheck at launch: never publish a remote daemon's loopback as ours.
-                    await assertLocalDockerDaemon(
-                        command,
-                        commandPrefixArgs,
-                        startupAbort.signal,
-                    );
-                    await assertLinuxDockerDaemon(
-                        command,
-                        commandPrefixArgs,
-                        startupAbort.signal,
-                    );
-                } catch {
-                    failBootstrap();
-                }
-            }
+        const start = () => {
             if (settled || shutdownStarted) {
                 finish(0);
                 return;
@@ -969,42 +931,11 @@ export async function runDockerProxy(
             // A signal source can synchronously request shutdown while handlers are
             // being installed (and a real OS signal can arrive during startup).
             activateShutdown();
-
-            if (metadataPath) {
-                const cancelled = () =>
-                    !bootstrapPending ||
-                    settled ||
-                    shutdownStarted ||
-                    !isChildRunning();
-                while (!cancelled()) {
-                    const containerId = captureContainerId();
-                    if (
-                        containerId &&
-                        (await publishDockerDataBaseUrl(
-                            command,
-                            commandPrefixArgs,
-                            containerId,
-                            metadataPath,
-                            cancelled,
-                            startupAbort.signal,
-                        ))
-                    ) {
-                        bootstrapPending = false;
-                        clearTimeout(startupTimer);
-                        return;
-                    }
-                    await delay(CONTAINER_ID_POLL_INTERVAL_MS);
-                }
-            }
         };
 
-        if (metadataPath) {
+        if (transport === 'stdio') {
             process.stdout.on('error', handleOutputError);
             process.stderr.on('error', handleOutputError);
-            startupTimer = setTimeout(
-                failBootstrap,
-                DOCKER_DATA_STARTUP_TIMEOUT_MS,
-            );
             const parentPid = process.ppid;
             parentWatch = setInterval(() => {
                 let parentAlive = process.ppid === parentPid;
@@ -1018,14 +949,6 @@ export async function runDockerProxy(
             parentWatch.unref();
         }
 
-        void start().catch(() => {
-            if (settled) return;
-            if (shutdownStarted) {
-                if (!child) finish(0);
-                return;
-            }
-            // Helper failures may include credentials; expose only a fixed diagnostic.
-            failBootstrap();
-        });
+        start();
     });
 }

@@ -3,11 +3,11 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { McpError } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { DATA_OPEN_METHOD } from '../data/HttpDataSession.js';
-import type { HttpDataSession } from '../data/HttpDataSession.js';
 import type {
     ChannelOpen,
     ChannelReceiver,
     DataChannel,
+    DataSession,
 } from '../data/types.js';
 import { FileCore, FileError } from '../file-manager/file-core.js';
 import { registerFileManager } from '../file-manager/extension.js';
@@ -28,7 +28,7 @@ import { registerApps } from './apps.js';
 import { registerServerCleanup } from '../utils/server-lifecycle.js';
 
 export interface ExtensionDataBinding {
-    session: HttpDataSession;
+    session: DataSession;
     endpoint?: string;
     /** Listener/route ownership stays with the transport, not the data core. */
     close?: () => void | Promise<void>;
@@ -43,17 +43,21 @@ export type ExtensionDataFactory = (
     origin: string | undefined,
     supportsPurpose: (purpose: string) => boolean,
 ) => ExtensionDataBinding | Promise<ExtensionDataBinding>;
-const dataFactories = new WeakMap<McpServer, ExtensionDataFactory>();
+const dataFactories = new WeakMap<
+    McpServer,
+    { factory: ExtensionDataFactory; transport: 'http' | 'stdio' }
+>();
 
 /** Configure before connect; the factory runs only on a negotiated data/v1/configure. */
 export function configureExtensionData(
     server: McpServer,
     factory: ExtensionDataFactory,
+    transport: 'http' | 'stdio' = 'http',
 ) {
-    dataFactories.set(server, factory);
+    dataFactories.set(server, { factory, transport });
 }
 
-/** Attach business lifecycle only. The official SDK receives the original transport unchanged. */
+/** Attach business lifecycle without intercepting SDK protocol messages. */
 export function installExtensions(
     server: McpServer,
     core: FileCore | undefined,
@@ -204,15 +208,34 @@ export function installExtensions(
         const configure = async (params: unknown) => {
             if (closed)
                 extensionError('STALE_CONNECTION', 'Data connection closed');
-            const { binding, origin } = parse(
+            const { binding, origin, transport } = parse(
                 z
                     .object({
                         binding: z.string().regex(/^[A-Za-z0-9_-]{16,256}$/),
                         origin: z.string().max(2048).optional(),
+                        transport: z.literal('stdio').optional(),
                     })
                     .strict(),
                 params,
             );
+            const registration = dataFactories.get(server);
+            if (!registration)
+                extensionError(
+                    'CAPABILITY_UNAVAILABLE',
+                    'Data endpoint is not configured',
+                );
+            if (registration.transport === 'stdio') {
+                if (transport !== 'stdio' || origin !== undefined)
+                    extensionError(
+                        'INVALID_PARAMS',
+                        "Stdio data requires transport:'stdio' without an origin",
+                    );
+            } else if (transport !== undefined) {
+                extensionError(
+                    'INVALID_PARAMS',
+                    'HTTP data does not accept a stdio transport',
+                );
+            }
             if (origin !== undefined) {
                 let endpoint: URL;
                 try {
@@ -242,14 +265,8 @@ export function installExtensions(
                     'Data session is already configured',
                 );
             configurationAttempted = true;
-            const factory = dataFactories.get(server);
-            if (!factory)
-                extensionError(
-                    'CAPABILITY_UNAVAILABLE',
-                    'Data endpoint is not configured',
-                );
             configuration = Promise.resolve().then(() =>
-                factory(
+                registration.factory(
                     binding,
                     accept,
                     lifetime.signal,
@@ -286,6 +303,8 @@ export function installExtensions(
                     );
                 }
                 data = owned;
+                if (registration.transport === 'stdio')
+                    return { transport: 'stdio' };
                 return owned.endpoint ? { endpoint: owned.endpoint } : {};
             } finally {
                 // Keep only a pending setup, not a completed configuration receipt.
