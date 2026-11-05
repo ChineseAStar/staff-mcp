@@ -1,4 +1,8 @@
-import { StreamLanguage } from '@codemirror/language';
+import {
+    Language,
+    LanguageSupport,
+    StreamLanguage,
+} from '@codemirror/language';
 import { json } from '@codemirror/lang-json';
 import { markdown } from '@codemirror/lang-markdown';
 import { html } from '@codemirror/lang-html';
@@ -47,4 +51,61 @@ export function language(name: string, size: number) {
         return StreamLanguage.define(dockerFile);
     }
     return [];
+}
+
+// Fence aliases select only the parsers already bundled for the editor.
+const fenceExtensions: Record<string, string> = {
+    js: 'js',
+    javascript: 'js',
+    jsx: 'jsx',
+    ts: 'ts',
+    typescript: 'ts',
+    tsx: 'tsx',
+    json: 'json',
+    jsonc: 'jsonc',
+    md: 'md',
+    markdown: 'md',
+    html: 'html',
+    htm: 'html',
+    xml: 'xml',
+    svg: 'svg',
+    css: 'css',
+    py: 'py',
+    python: 'py',
+    sh: 'sh',
+    bash: 'sh',
+    shell: 'sh',
+    zsh: 'sh',
+    ksh: 'sh',
+    yml: 'yaml',
+    yaml: 'yaml',
+    toml: 'toml',
+    sql: 'sql',
+    c: 'c',
+    h: 'h',
+    cpp: 'cpp',
+    'c++': 'cpp',
+    cxx: 'cpp',
+    java: 'java',
+    go: 'go',
+    golang: 'go',
+    rs: 'rs',
+    rust: 'rs',
+    dockerfile: 'dockerfile',
+    docker: 'dockerfile',
+};
+const fenceLanguages = new Map<string, Language>();
+
+export function fenceLanguage(info: string): Language | undefined {
+    const alias = info.trim().split(/\s+/, 1)[0].toLowerCase();
+    if (!Object.hasOwn(fenceExtensions, alias)) return undefined;
+    const extension = fenceExtensions[alias];
+    const cached = fenceLanguages.get(extension);
+    if (cached) return cached;
+    const support = language(`fence.${extension}`, 0);
+    const parser =
+        support instanceof LanguageSupport ? support.language : support;
+    if (!(parser instanceof Language)) return undefined;
+    fenceLanguages.set(extension, parser);
+    return parser;
 }

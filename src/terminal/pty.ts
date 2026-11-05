@@ -7,6 +7,7 @@ import { accessSync, constants, statSync, write } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { IPty } from 'node-pty';
 import { extensionError } from '../extensions/protocol.js';
+import { createShellInitRcfile, shellInitPath } from '../shell-init.js';
 
 export type LinuxPty = IPty & { readonly fd: number };
 /** The platform adapter owns input acceptance and process cleanup, not the wire. */
@@ -78,8 +79,11 @@ export function loadTerminalRuntime(
             throw new Error('Shell must be a file');
         return candidate;
     };
+    const init = shellInitPath();
     let selectedShell: string;
-    if (process.platform === 'win32') {
+    if (init) {
+        selectedShell = '/bin/bash';
+    } else if (process.platform === 'win32') {
         // ConPTY requires a supported Windows build; never select legacy winpty.
         if (!(Number(release().split('.')[2]) >= 18309))
             throw terminalStartupError('UNSUPPORTED_PLATFORM');
@@ -180,15 +184,34 @@ export function loadTerminalRuntime(
                     throw terminalStartupError('NATIVE_SPAWN_FAILED');
                 }
             }
-            // Linux startup files and raw-byte behavior remain unchanged.
-            const child = pty.spawn(selectedShell, ['-i'], {
-                cwd,
-                cols,
-                rows,
-                env,
-                encoding: null,
-                handleFlowControl: false,
-            });
+            // Only new PTYs source the deployment script; existing shells are untouched.
+            // Revalidate at spawn in case the mounted script became unavailable.
+            if (init) {
+                shellInitPath();
+                env.STAFF_MCP_SHELL_INIT = init;
+                delete env.BASH_ENV;
+            }
+            const rcfile = init ? createShellInitRcfile() : undefined;
+            let child: IPty;
+            try {
+                child = pty.spawn(
+                    selectedShell,
+                    rcfile ? ['--rcfile', rcfile.path, '-i'] : ['-i'],
+                    {
+                        cwd,
+                        cols,
+                        rows,
+                        env,
+                        encoding: null,
+                        handleFlowControl: false,
+                    },
+                );
+            } catch (error) {
+                rcfile?.cleanup();
+                if (!init) throw error;
+                throw terminalStartupError('NATIVE_SPAWN_FAILED');
+            }
+            if (rcfile) child.onExit(() => rcfile.cleanup());
             if (
                 !('fd' in child) ||
                 typeof child.fd !== 'number' ||

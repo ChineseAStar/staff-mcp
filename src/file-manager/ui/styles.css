@@ -1259,72 +1259,249 @@ progress::-moz-progress-bar {
     min-width: 0;
     overflow: hidden;
 }
+/* Markdown stays inside the file App; all colors use its semantic tokens. */
 .markdown-preview {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    background: var(--app-panel-solid);
+}
+.markdown-preview-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--color-border);
+}
+.markdown-font-controls {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+}
+.markdown-font-controls button {
+    min-width: 32px;
+    min-height: 30px;
+    padding: 3px 7px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-surface);
+    font-size: 12px;
+}
+.markdown-font-controls button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+.markdown-preview-scroll {
     flex: 1;
     min-height: 0;
     overflow: auto;
     overscroll-behavior: contain;
-    padding: 12px 16px;
-    font-size: 13px;
-    line-height: 1.65;
+    scrollbar-gutter: stable;
+}
+.markdown-body {
+    max-width: 80ch;
+    margin: 0 auto;
+    padding: 20px 28px 48px;
+    font-size: var(--markdown-font-size);
+    line-height: 1.8;
     overflow-wrap: anywhere;
-    background: var(--app-panel-solid);
 }
-.preview-hint,
-.markdown-image-placeholder {
-    font-size: 11px;
-    color: var(--text-muted);
-}
-.markdown-preview :is(h1, h2, h3, h4, h5, h6) {
-    line-height: 1.35;
-    margin: 16px 0 8px;
-}
-.markdown-preview h1 {
-    font-size: 22px;
-}
-.markdown-preview h2 {
-    font-size: 19px;
-}
-.markdown-preview h3 {
-    font-size: 16px;
-}
-.markdown-preview :is(p, ul, ol, pre, blockquote, table) {
-    margin: 8px 0;
-}
-.markdown-preview :is(pre, code) {
-    font-family: var(--font-code-family);
+.markdown-preview .preview-hint,
+.markdown-preview .markdown-image-placeholder {
     font-size: 12px;
-    background: var(--bg-secondary);
-    border-radius: var(--app-radius-control);
+    color: var(--text-tertiary);
 }
-.markdown-preview code {
-    padding: 1px 4px;
+.markdown-body :is(h1, h2, h3, h4, h5, h6) {
+    line-height: 1.35;
+    margin: 1.5em 0 0.65em;
+    font-weight: 650;
+    color: var(--text-primary);
 }
-.markdown-preview pre {
-    padding: 10px;
-    overflow: auto;
+.markdown-body :is(h1, h2) {
+    padding-bottom: 0.3em;
+    border-bottom: 1px solid var(--color-border);
 }
-.markdown-preview pre code {
-    padding: 0;
+.markdown-body h1 {
+    font-size: 2em;
 }
-.markdown-preview blockquote {
-    border-left: 3px solid var(--color-border);
-    padding-left: 10px;
+.markdown-body h2 {
+    font-size: 1.6em;
+}
+.markdown-body h3 {
+    font-size: 1.3em;
+}
+.markdown-body h4 {
+    font-size: 1.15em;
+}
+.markdown-body h5 {
+    font-size: 1em;
+}
+.markdown-body h6 {
+    font-size: 0.9em;
     color: var(--text-secondary);
 }
-.markdown-preview table {
+.markdown-body :is(p, ul, ol, pre, blockquote, table) {
+    margin: 0.9em 0;
+}
+.markdown-body :is(ul, ol) {
+    padding-left: 1.7em;
+}
+.markdown-body li + li {
+    margin-top: 0.25em;
+}
+.markdown-body li > :is(ul, ol) {
+    margin: 0.25em 0;
+}
+.markdown-body :is(pre, code) {
+    font-family: var(--font-code-family);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    /* Explicit fallback also covers text/plain and unknown fence languages. */
+    color: var(--text-primary);
+}
+.markdown-body code {
+    font-size: 0.88em;
+    padding: 0.15em 0.35em;
+}
+.markdown-body pre {
+    padding: 14px 16px;
+    border: 1px solid var(--color-border);
+    overflow: auto;
+    line-height: 1.65;
+    overflow-wrap: normal;
+    tab-size: 4;
+}
+.markdown-body pre code {
+    padding: 0;
+    font-size: 0.88em;
+    white-space: pre;
+}
+.markdown-body blockquote {
+    margin-left: 0;
+    margin-right: 0;
+    border-left: 3px solid var(--color-border);
+    padding-left: 1em;
+    color: var(--text-secondary);
+}
+.markdown-body table {
     border-collapse: collapse;
     display: block;
+    max-width: 100%;
     overflow: auto;
+    font-size: 0.93em;
 }
-.markdown-preview :is(th, td) {
+.markdown-body :is(th, td) {
     border: 1px solid var(--color-border);
-    padding: 4px 8px;
+    padding: 6px 12px;
 }
-.markdown-preview th {
+.markdown-body th {
     background: var(--bg-secondary);
 }
-.markdown-link {
+.markdown-body hr {
+    border: 0;
+    border-top: 1px solid var(--color-border);
+    margin: 1.8em 0;
+}
+.markdown-preview .markdown-link {
     color: var(--color-primary);
     text-decoration: underline dotted;
+}
+.markdown-toc {
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 0.9em;
+    background: var(--color-surface);
+}
+.markdown-toc summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+}
+.markdown-toc nav {
+    max-height: 18em;
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+.markdown-toc ol {
+    list-style: none;
+    padding: 0;
+    margin: 8px 0 0;
+}
+.markdown-toc li {
+    margin: 0;
+}
+.markdown-toc button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    border-radius: 4px;
+    padding: 4px 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+}
+.markdown-toc button:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-primary);
+}
+.markdown-toc-level-2 {
+    padding-left: 0.7em;
+}
+.markdown-toc-level-3 {
+    padding-left: 1.4em;
+}
+.markdown-toc-level-4 {
+    padding-left: 2.1em;
+}
+.markdown-toc-level-5 {
+    padding-left: 2.8em;
+}
+.markdown-toc-level-6 {
+    padding-left: 3.5em;
+}
+.markdown-body :is(.tok-keyword, .tok-operator) {
+    color: var(--syntax-keyword);
+}
+.markdown-body :is(.tok-string, .tok-string2, .tok-inserted) {
+    color: var(--syntax-string);
+}
+.markdown-body :is(.tok-number, .tok-bool, .tok-null, .tok-atom) {
+    color: var(--syntax-number);
+}
+.markdown-body
+    :is(
+        .tok-typeName,
+        .tok-className,
+        .tok-labelName,
+        .tok-namespace,
+        .tok-macroName
+    ) {
+    color: var(--syntax-function);
+}
+.markdown-body :is(.tok-comment, .tok-meta) {
+    color: var(--text-tertiary);
+}
+.markdown-body :is(.tok-invalid, .tok-deleted) {
+    color: var(--syntax-invalid);
+}
+.markdown-body :is(.tok-heading, .tok-strong) {
+    font-weight: bold;
+}
+.markdown-body .tok-emphasis {
+    font-style: italic;
+}
+@media (max-width: 599px) {
+    .markdown-body {
+        padding: 14px 16px 32px;
+    }
+    .markdown-preview-toolbar {
+        padding: 6px 10px;
+    }
 }

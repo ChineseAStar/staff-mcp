@@ -5,7 +5,6 @@ import { keymap } from '@codemirror/view';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { indentWithTab } from '@codemirror/commands';
-import { TEXT_AUTO_LIMIT } from '../text-limits';
 import { language } from './languages';
 
 interface Props {
@@ -52,7 +51,6 @@ export function TextEditor(props: Props) {
     const container = useRef<HTMLDivElement>(null);
     const view = useRef<EditorView | null>(null);
     const editable = useRef(new Compartment());
-    const wrapping = useRef(new Compartment());
     const nameConfiguration = useRef(new Compartment());
     const current = useRef(props);
     current.current = props;
@@ -60,9 +58,6 @@ export function TextEditor(props: Props) {
     useEffect(() => {
         if (!container.current) return;
         const initial = current.current;
-        const compact = window.matchMedia(
-            '(max-width: 599px), (max-width: 1000px) and (max-height: 500px)',
-        );
         const lineBreak = initial.text.match(/\r\n|\r|\n/)?.[0] ?? '\n';
         const instance = new EditorView({
             parent: container.current,
@@ -115,11 +110,7 @@ export function TextEditor(props: Props) {
                             },
                         ]),
                     ),
-                    wrapping.current.of(
-                        compact.matches && initial.size < TEXT_AUTO_LIMIT
-                            ? EditorView.lineWrapping
-                            : [],
-                    ),
+                    EditorView.lineWrapping,
                     EditorState.lineSeparator.of(lineBreak),
                     EditorState.phrases.of(chinesePhrases),
                     nameConfiguration.current.of([
@@ -205,19 +196,8 @@ export function TextEditor(props: Props) {
             }),
         });
         view.current = instance;
-        const updateWrapping = () => {
-            instance.dispatch({
-                effects: wrapping.current.reconfigure(
-                    compact.matches && initial.size < TEXT_AUTO_LIMIT
-                        ? EditorView.lineWrapping
-                        : [],
-                ),
-            });
-        };
-        compact.addEventListener('change', updateWrapping);
         initial.onView(initial.id, instance);
         return () => {
-            compact.removeEventListener('change', updateWrapping);
             initial.onView(initial.id, null);
             view.current = null;
             instance.destroy();

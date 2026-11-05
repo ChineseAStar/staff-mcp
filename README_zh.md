@@ -166,7 +166,7 @@ node /path/to/staff-mcp/dist/src/index.js --extensions files -d /
 
 files 启用时直接复用标准工具目录授权：`main` 是 `--working-dir`，其后按解析、去重后的 `--allowed-dir` 顺序生成 `extra1`、`extra2` 等根。显式 `-d` 授权因此也在文件 UI 可见，不自动添加系统根。相对目录按启动进程 cwd 解析。`-d /` 是向工具及文件应用显式授权 staff 身份可见的文件系统，仍受 OS 权限约束，不提权，也不是 shell 沙箱。库接口 [`ExtensionOptions`](src/extensions/config.ts) 为 `{enabled?:('files'|'terminal')[]}`，默认 `[]`。
 
-`--file-root`、`--shell`、`--http-max-sessions`、`--http-session-idle-ms` 已删除，传入时明确报 unknown option。请从启动配置移除，文件目录改用 `-w` / `-d`；Linux 使用正常的 `SHELL` 环境变量，Windows 按下文规则自动选择 PowerShell 或 CMD；不提供兼容回退。
+`--file-root`、`--shell`、`--http-max-sessions`、`--http-session-idle-ms` 已删除，传入时明确报 unknown option。请从启动配置移除，文件目录改用 `-w` / `-d`；未配置 shell 初始化时，Linux 使用正常的 `SHELL` 环境变量，Windows 按下文规则自动选择 PowerShell 或 CMD；不提供兼容回退。
 
 ### 独立文件工作区
 
@@ -176,7 +176,9 @@ files 启用时直接复用标准工具目录授权：`main` 是 `--working-dir`
 
 ### 人工终端（显式启用扩展）
 
-`--extensions terminal` 须 Linux 或 Windows（build >= 18309）、可加载的 optional `node-pty`、可执行 shell 及协商 streams/data v1 后可用的 duplex dataSession，可经受支持的本机 stdio/本地 Docker、direct HTTP 或 reverse 接入。显式请求 terminal 但平台/native PTY/shell 不可用时明确报错并启动失败，即使同时请求 files 也不静默移除 terminal。默认关闭时不加载原生 PTY。Linux 自动使用有效的绝对可执行 `$SHELL`，否则 `/bin/bash`，以 `-i` 启动，正常 profile 行为不变；若不可用则失败，不再尝试其他 shell。Windows 使用原生 ConPTY，优先可执行 `pwsh.exe`、其次 `powershell.exe`（`-NoLogo -NoProfile`），再 `ComSpec`/系统 `cmd.exe`（`/d`），无公共 `--shell` 参数。继承 staff 环境，仅排除[终端合同](docs/terminal.md)列出的精确内部控制 key。Windows 不加载 profile，但不保证 shell、程序或系统完全不记录 history。chat-ai 沿用当前会话 MCP 授权及同源浏览器请求，不另设终端权限开关或高危确认。终端遵循宿主站点统一的 HTTP/HTTPS 部署策略，不另设终端专用 TLS 门槛或 origin 白名单。建议全站使用 HTTPS 保护登录会话、工具调用及终端流量；允许 HTTP 不代表这些请求已加密。
+`--extensions terminal` 须 Linux 或 Windows（build >= 18309）、可加载的 optional `node-pty`、可执行 shell 及协商 streams/data v1 后可用的 duplex dataSession，可经受支持的本机 stdio/本地 Docker、direct HTTP 或 reverse 接入。显式请求 terminal 但平台/native PTY/shell 不可用时明确报错并启动失败，即使同时请求 files 也不静默移除 terminal。默认关闭时不加载原生 PTY。未配置 shell 初始化时，Linux 自动使用有效的绝对可执行 `$SHELL`，否则 `/bin/bash`，以 `-i` 启动，正常 profile 行为不变；若不可用则失败，不再尝试其他 shell。Windows 使用原生 ConPTY，优先可执行 `pwsh.exe`、其次 `powershell.exe`（`-NoLogo -NoProfile`），再 `ComSpec`/系统 `cmd.exe`（`/d`），无公共 `--shell` 参数。继承 staff 环境，仅排除[终端合同](docs/terminal.md)列出的精确内部控制 key。Windows 不加载 profile，但不保证 shell、程序或系统完全不记录 history。chat-ai 沿用当前会话 MCP 授权及同源浏览器请求，不另设终端权限开关或高危确认。终端遵循宿主站点统一的 HTTP/HTTPS 部署策略，不另设终端专用 TLS 门槛或 origin 白名单。建议全站使用 HTTPS 保护登录会话、工具调用及终端流量；允许 HTTP 不代表这些请求已加密。
+
+部署可设置 `STAFF_MCP_SHELL_INIT` 为 staff 环境内绝对、可读的 Bash 脚本路径（不是 MCP 参数）。配置后必须使用 Linux `/bin/bash`，不静默回退 `sh`；每次 `execute_command` 和每个新 PTY 都先 source 同一文件，alias、function、export 和 `cd` 在该 shell 内生效。初始化 stdout 转 stderr，不污染 MCP 协议 stdout；source 诊断被固定失败消息替代，返回非零则不执行用户命令或进入交互提示。PTY 使用私有 bootstrap 替代正常的用户 Bash rc 文件；清除 `BASH_ENV`，保留初始化路径标记供后代使用。management Node 主进程不 source 文件。脚本修改仅影响后续命令/新 PTY，不更新已有 shell；这是重复执行的初始化代码，不是一次性安装或键值解析。不新增自动重试/重放；未配置时包括 Windows 在内的既有 shell 选择及启动行为不变。详见[终端合同](docs/terminal.md#shared-shell-initialization)。
 
 PTY 默认从 staff 工作区 `main` 启动，与文件 roots 独立，以 staff 的运行 OS 身份运行；root/cwd 只是起始目录，**不是 sandbox**；shell 的文件和网络副作用不受文件工具路径检查约束。终端输入输出不进入模型或聊天历史。每个 stream 的浏览器到 chat-ai 交互使用一条同源 WebSocket（`/api/mcp/app-stream`，`chat-app-stream-v1`），输入、输出、resize、presence 和真实 xterm 消费 ACK 共用连接，后端仍是公共 DataSession（stdio 帧或 raw HTTP）。浏览器每 10 秒刷新独立的 120 秒 host presence；host 通用 streams 模块按远端每次返回的租约调度续租，staff 默认 30 秒。点击 Shell App 自动启动一次 PTY，无额外打开按钮或确认；退出、PTY 错误或真实断链后保留 App 壳供手动重连。普通隐藏视图保留 read/ACK/presence，但拒绝新输入和 resize；真正离页、关闭、撤权或到期才清理，清理 best effort，不撤销副作用。Linux 保留 TERM-to-KILL，Windows 关闭自有 ConPTY console；均不保证全部 detached 后代结束或文件/网络副作用回滚。
 

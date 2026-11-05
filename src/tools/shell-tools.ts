@@ -4,6 +4,7 @@ import * as fs from "fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SecurityManager } from "../security.js";
+import { shellInitPath, SHELL_INIT_COMMAND } from "../shell-init.js";
 import {
   DEFAULT_TIMEOUT,
   MAX_WAIT_TIMEOUT,
@@ -125,11 +126,18 @@ function evictOldExitedTasks(): void {
  */
 export function spawnTask(command: string, cwd: string): BackgroundTask {
   ensureExitCleanupHook();
-  const child = spawn(command, {
-    cwd,
-    shell: DEFAULT_SHELL || true,
-    detached: !IS_WIN,
-  });
+  const init = shellInitPath();
+  const child = init
+    ? spawn("/bin/bash", ["-O", "expand_aliases", "-c", SHELL_INIT_COMMAND, "staff-mcp", init, command], {
+        cwd,
+        env: { ...process.env, BASH_ENV: undefined },
+        detached: !IS_WIN,
+      })
+    : spawn(command, {
+        cwd,
+        shell: DEFAULT_SHELL || true,
+        detached: !IS_WIN,
+      });
 
   const task: BackgroundTask = {
     id: newTaskId(),
