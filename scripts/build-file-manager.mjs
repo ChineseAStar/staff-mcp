@@ -32,15 +32,17 @@ for (const app of values.app ? [values.app] : ['file-manager', 'terminal']) {
         result.outputFiles.find((file) => file.path.endsWith('.css'))?.text ??
         '';
     let licenses = '';
-    if (app === 'terminal') {
-        // xterm's complete MIT notices must survive minification and travel
-        // inside the single HTML Resource, not just in the npm dependency tree.
-        for (const dependency of ['@xterm/xterm', '@xterm/addon-fit']) {
-            licenses += `${dependency}\n${await readFile(join('node_modules', dependency, 'LICENSE'), 'utf8')}\n`;
-        }
+    // Dependencies with standalone notices must travel inside the HTML Resource,
+    // not just in build-time node_modules removed from the installed package.
+    const licensedDependencies =
+        app === 'terminal'
+            ? ['@xterm/xterm', '@xterm/addon-fit']
+            : ['@codemirror/legacy-modes'];
+    for (const dependency of licensedDependencies) {
+        licenses += `${dependency}\n${await readFile(join('node_modules', dependency, 'LICENSE'), 'utf8')}\n`;
     }
     const licenseTag = licenses
-        ? `<script type="text/plain" id="terminal-licenses">${licenses.replace(/<\/script/gi, '<\\/script')}</script>`
+        ? `<script type="text/plain" id="${app}-licenses">${licenses.replace(/<\/script/gi, '<\\/script')}</script>`
         : '';
     const title = app === 'terminal' ? '终端' : '文件';
     const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"><title>${title}</title><style>${css.replace(/<\/style/gi, '<\\/style')}</style></head><body><div id="root"></div><script>${js.replace(/<\/script/gi, '<\\/script')}</script>${licenseTag}</body></html>`;

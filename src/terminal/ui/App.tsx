@@ -213,29 +213,18 @@ export function App() {
                 </div>
                 <div className="actions">
                     {active ? (
-                        <>
-                            <button
-                                type="button"
-                                disabled={
-                                    view.phase !== 'running' || !available
-                                }
-                                onClick={() => {
-                                    if (!available) return;
-                                    terminal.current?.clear();
-                                    terminal.current?.focus();
-                                }}
-                                title="仅清除本地屏幕与回滚，不向 shell 发送命令"
-                            >
-                                清屏
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => session.current?.close()}
-                                title="请求关闭远端终端"
-                            >
-                                关闭终端
-                            </button>
-                        </>
+                        <button
+                            type="button"
+                            disabled={view.phase !== 'running' || !available}
+                            onClick={() => {
+                                if (!available) return;
+                                terminal.current?.clear();
+                                terminal.current?.focus();
+                            }}
+                            title="仅清除本地屏幕与回滚，不向 shell 发送命令"
+                        >
+                            清屏
+                        </button>
                     ) : view.phase === 'stopped' ? (
                         <button
                             className="primary"
@@ -263,7 +252,7 @@ export function App() {
                     : view.message}
             </div>
             <div className="terminal-surface" ref={mount} />
-            <footer>回滚保留最近 2000 行 · 关闭不撤销已执行的操作</footer>
+            <footer>回滚保留最近 2000 行 · 关闭应用不撤销已执行的操作</footer>
         </main>
     );
 }

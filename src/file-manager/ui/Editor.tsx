@@ -5,12 +5,8 @@ import { keymap } from '@codemirror/view';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { indentWithTab } from '@codemirror/commands';
-import { json } from '@codemirror/lang-json';
-import { markdown } from '@codemirror/lang-markdown';
-import { html } from '@codemirror/lang-html';
-import { javascript } from '@codemirror/lang-javascript';
-import { css } from '@codemirror/lang-css';
 import { TEXT_AUTO_LIMIT } from '../text-limits';
+import { language } from './languages';
 
 interface Props {
     id: string;
@@ -50,22 +46,6 @@ const chinesePhrases = {
     'replaced $ matches': '已替换 $ 处匹配',
     'replaced match on line $': '已替换第 $ 行的匹配',
 };
-
-function language(name: string, size: number) {
-    // Large, explicitly loaded documents stay plain text: no full syntax parse.
-    if (size >= TEXT_AUTO_LIMIT) return [];
-    if (/\.(json|jsonc)$/i.test(name)) return json();
-    if (/\.(md|markdown)$/i.test(name)) return markdown();
-    if (/\.(html?|svg|xml)$/i.test(name)) return html();
-    if (/\.(jsx?|tsx?|mjs|cjs)$/i.test(name)) {
-        return javascript({
-            typescript: /\.(ts|tsx)$/i.test(name),
-            jsx: /\.[jt]sx$/i.test(name),
-        });
-    }
-    if (/\.css$/i.test(name)) return css();
-    return [];
-}
 
 // Each tab keeps its own mounted editor, including selection and undo history.
 export function TextEditor(props: Props) {

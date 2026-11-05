@@ -536,6 +536,7 @@ input[type='checkbox'] {
     align-items: center;
     position: relative;
     flex: none;
+    min-width: 0;
     max-width: 205px;
     margin: 0 2px;
     color: var(--text-tertiary);
@@ -554,6 +555,8 @@ input[type='checkbox'] {
     border-radius: 2px;
 }
 .file-tab > [role='tab'] {
+    flex: 1 1 auto;
+    overflow: hidden;
     border: 0;
     background: transparent;
     min-width: 0;
@@ -564,16 +567,27 @@ input[type='checkbox'] {
     color: inherit;
     font-size: 12px;
 }
-.file-tab > [role='tab'] > span:not(.dirty-dot) {
+.file-tab .tab-name {
+    min-width: 0;
     white-space: nowrap;
     text-overflow: ellipsis;
     overflow: hidden;
 }
 .file-tab .tab-close {
+    flex: none;
     width: 24px;
     height: 25px;
     min-height: 25px;
     margin-right: 2px;
+}
+.file-tab > [role='tab'] > svg {
+    flex: none;
+}
+.closing-files {
+    max-height: 180px;
+    overflow: auto;
+    padding-left: 22px;
+    overflow-wrap: anywhere;
 }
 .dirty-dot {
     width: 6px;
@@ -1152,10 +1166,6 @@ progress::-moz-progress-bar {
 }
 .tree-chevron.expanded {
     transform: rotate(90deg);
-}
-.file-row.target-directory {
-    background: var(--color-surface-active);
-    border-color: var(--color-border);
 }
 .file-row.current-file {
     color: var(--color-primary);

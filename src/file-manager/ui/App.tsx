@@ -92,14 +92,15 @@ type Dialog =
           rootId: string;
           target: FileStat & { name: string; version: string };
       }
-    | { kind: 'close' | 'reread'; tabId: string }
+    | { kind: 'close'; tabIds: string[] }
+    | { kind: 'reread'; tabId: string }
     | { kind: 'copy'; text: string };
 
 const dialogTitles: Record<Dialog['kind'], string> = {
     rename: '重命名',
     move: '移动到同一根目录',
     delete: '确认删除',
-    close: '此文件有未保存的修改',
+    close: '关闭文件：有未保存的修改',
     reread: '重新读取服务器文件',
     copy: '手动复制',
 };
@@ -237,6 +238,12 @@ export function App() {
         y: number;
         trigger: HTMLElement;
     }>();
+    const [tabMenu, setTabMenu] = useState<{
+        tabId: string;
+        x: number;
+        y: number;
+        trigger: HTMLElement;
+    }>();
     const [notice, setNotice] = useState<{
         kind: 'error' | 'success' | 'info';
         text: string;
@@ -369,6 +376,7 @@ export function App() {
 
     useEffect(() => {
         setContextMenu(undefined);
+        setTabMenu(undefined);
         if (mobilePane === 'editor') cancelCreation();
         actionIntent.current++;
         setStatLoading(false);
@@ -389,6 +397,15 @@ export function App() {
         }
     }, [mobilePane, activeTabId]);
 
+    useEffect(() => {
+        document
+            .getElementById(`${activeTabId}-label`)
+            ?.parentElement?.scrollIntoView({
+                block: 'nearest',
+                inline: 'nearest',
+            });
+    }, [activeTabId]);
+
     const selectEntry = (entry: Entry) => {
         cancelCreation();
         actionIntent.current++;
@@ -400,7 +417,7 @@ export function App() {
         );
     };
 
-    // Navigation chooses a mutation/upload destination; the tree root is fixed.
+    // Navigation reveals a location; actions capture their own explicit target.
     const navigate = (path: string, nextRoot = rootId) => {
         cancelCreation();
         actionIntent.current++;
@@ -419,6 +436,7 @@ export function App() {
         actionIntent.current++;
         setStatLoading(false);
         setContextMenu(undefined);
+        setTabMenu(undefined);
         setActiveTabId(tab.id);
         setMobileView('editor');
         const parent = parentPath(tab.path);
@@ -531,7 +549,9 @@ export function App() {
                 size: result.size,
                 readOnly: stat.readOnly || result.size > TEXT_LIMIT,
                 conflict: false,
-                preview: false,
+                preview: replacingText
+                    ? tab.preview
+                    : isMarkdown(tab.name) && result.size <= TEXT_LIMIT,
                 revision: tab.revision + 1,
             });
         } catch (error) {
@@ -775,25 +795,41 @@ export function App() {
         return () => window.removeEventListener('keydown', keydown, true);
     }, []);
 
-    const removeTab = (id: string) => {
-        setTabs((current) => {
-            const remaining = current.filter((tab) => tab.id !== id);
-            if (activeTabId === id) {
-                const index = current.findIndex((tab) => tab.id === id);
-                setActiveTabId(
-                    remaining[Math.min(index, remaining.length - 1)]?.id ?? '',
-                );
-            }
-            return remaining;
+    const removeTabs = (ids: string[]) => {
+        const closing = new Set(ids);
+        const current = tabsRef.current;
+        const remaining = current.filter((tab) => !closing.has(tab.id));
+        setTabs(remaining);
+        setActiveTabId((active) => {
+            if (!closing.has(active)) return active;
+            const index = current.findIndex((tab) => tab.id === active);
+            return remaining[Math.min(index, remaining.length - 1)]?.id ?? '';
         });
     };
 
-    const closeTab = (tab: FileTab) => {
-        if (tab.busy && tab.kind !== 'pending') return;
-        if (isDirty(tab)) {
-            setDialog({ kind: 'close', tabId: tab.id });
+    const tabBusy = (tab: FileTab) =>
+        (tab.busy && tab.kind !== 'pending') || savingTabs.current.has(tab.id);
+
+    const closeTabs = (targets: FileTab[]) => {
+        setTabMenu(undefined);
+        if (!targets.length || targets.some(tabBusy)) return;
+        const tabIds = targets.map((tab) => tab.id);
+        if (targets.some(isDirty)) {
+            // Capture the requested set; cancellation closes none of its files.
+            setDialog({ kind: 'close', tabIds });
             setDialogError('');
-        } else removeTab(tab.id);
+        } else removeTabs(tabIds);
+    };
+
+    const showTabMenu = (
+        tabId: string,
+        trigger: HTMLElement,
+        x: number,
+        y: number,
+    ) => {
+        setContextMenu(undefined);
+        setMenu(null);
+        setTabMenu({ tabId, trigger, x, y });
     };
 
     const beginAction = async (
@@ -867,7 +903,12 @@ export function App() {
         actionIntent.current++;
         setStatLoading(false);
         setMenu(null);
+        setTabMenu(undefined);
         if (target.kind === 'entry') selectEntry(target.entry);
+        else {
+            setSelected(undefined);
+            setDirectory(target.directory);
+        }
         setContextMenu({ rootId, target, trigger, x, y });
     };
 
@@ -935,8 +976,8 @@ export function App() {
 
     const beginCreate = (
         kind: 'create' | 'mkdir',
-        targetRoot = rootId,
-        parent = directory,
+        targetRoot: string,
+        parent: string,
         trigger?: HTMLElement,
     ) => {
         if (!canWrite(targetRoot)) return;
@@ -1025,7 +1066,14 @@ export function App() {
         const fields = new FormData(form);
         setDialogError('');
         if (dialog.kind === 'close') {
-            removeTab(dialog.tabId);
+            const closing = tabsRef.current.filter((tab) =>
+                dialog.tabIds.includes(tab.id),
+            );
+            if (closing.some(tabBusy)) {
+                setDialogError('文件正在读写，请等待完成后再关闭。');
+                return;
+            }
+            removeTabs(dialog.tabIds);
             setDialog(undefined);
             return;
         }
@@ -1262,6 +1310,30 @@ export function App() {
         dialog && 'tabId' in dialog
             ? tabs.find((tab) => tab.id === dialog.tabId)
             : undefined;
+    const closingDrafts =
+        dialog?.kind === 'close'
+            ? tabs.filter(
+                  (tab) => dialog.tabIds.includes(tab.id) && isDirty(tab),
+              )
+            : [];
+    const contextTabIndex = tabMenu
+        ? tabs.findIndex((tab) => tab.id === tabMenu.tabId)
+        : -1;
+    const contextTab = tabs[contextTabIndex];
+    const tabCloseActions = contextTab
+        ? [
+              { label: '关闭当前文件', targets: [contextTab] },
+              {
+                  label: '关闭其他文件',
+                  targets: tabs.filter((tab) => tab.id !== contextTab.id),
+              },
+              {
+                  label: '关闭右侧文件',
+                  targets: tabs.slice(contextTabIndex + 1),
+              },
+              { label: '关闭全部文件', targets: tabs },
+          ]
+        : [];
     const deleteDrafts =
         dialog?.kind === 'delete'
             ? tabs.filter(
@@ -1368,7 +1440,7 @@ export function App() {
                 <nav
                     className="breadcrumbs"
                     aria-label="当前位置"
-                    title={`当前目录：/${directory}；新建和上传到此目录`}
+                    title={`所选位置：/${directory}；右键项目操作，空白处操作根目录`}
                 >
                     <button
                         title="返回根目录"
@@ -1489,12 +1561,33 @@ export function App() {
                 </div>
             )}
 
+            {tabMenu && contextTab && (
+                <FileContextMenu
+                    label={`${contextTab.name} 的标签操作`}
+                    x={tabMenu.x}
+                    y={tabMenu.y}
+                    trigger={tabMenu.trigger}
+                    onClose={() => setTabMenu(undefined)}
+                >
+                    {tabCloseActions.map(({ label, targets }) => (
+                        <button
+                            key={label}
+                            type="button"
+                            role="menuitem"
+                            disabled={!targets.length || targets.some(tabBusy)}
+                            onClick={() => closeTabs(targets)}
+                        >
+                            {label}
+                        </button>
+                    ))}
+                </FileContextMenu>
+            )}
             {contextMenu && (
                 <FileContextMenu
                     label={
                         contextEntry
                             ? `${contextEntry.name} 的操作`
-                            : '当前目录的操作'
+                            : '根目录的操作'
                     }
                     x={contextMenu.x}
                     y={contextMenu.y}
@@ -1749,33 +1842,19 @@ export function App() {
                     <DirectoryTree
                         tree={tree}
                         available={available}
-                        directory={directory}
                         activePath={
                             activeTab?.rootId === rootId
                                 ? activeTab.path
                                 : undefined
                         }
-                        selectedPath={
-                            selected?.path ??
-                            (activeTab?.rootId === rootId
-                                ? activeTab.path
-                                : undefined)
-                        }
+                        selectedPath={selected?.path}
                         interactionEpoch={actionIntent.current}
                         uploadAllowed={canWrite(rootId)}
                         onUpload={(files, path) =>
                             chooseFiles(files, rootId, path)
                         }
-                        onPasteFiles={(files) =>
-                            chooseFiles(
-                                files,
-                                rootId,
-                                selected
-                                    ? selected.type === 'directory'
-                                        ? selected.path
-                                        : parentPath(selected.path)
-                                    : directory,
-                            )
+                        onPasteFiles={(files, path) =>
+                            chooseFiles(files, rootId, path)
                         }
                         onDirectoryDrop={() =>
                             setNotice({
@@ -1795,7 +1874,7 @@ export function App() {
                         }
                         onBlankMenu={(trigger, x, y) =>
                             showContextMenu(
-                                { kind: 'folder', directory },
+                                { kind: 'folder', directory: '' },
                                 trigger,
                                 x,
                                 y,
@@ -1905,6 +1984,17 @@ export function App() {
                                 <div
                                     key={tab.id}
                                     className={`file-tab ${activeTabId === tab.id ? 'active' : ''}`}
+                                    onContextMenu={(event) => {
+                                        event.preventDefault();
+                                        showTabMenu(
+                                            tab.id,
+                                            event.currentTarget.querySelector<HTMLElement>(
+                                                '[role="tab"]',
+                                            )!,
+                                            event.clientX,
+                                            event.clientY,
+                                        );
+                                    }}
                                 >
                                     <button
                                         id={`${tab.id}-label`}
@@ -1919,6 +2009,22 @@ export function App() {
                                             revealTab(tab);
                                         }}
                                         onKeyDown={(event) => {
+                                            if (
+                                                event.key === 'ContextMenu' ||
+                                                (event.shiftKey &&
+                                                    event.key === 'F10')
+                                            ) {
+                                                event.preventDefault();
+                                                const bounds =
+                                                    event.currentTarget.getBoundingClientRect();
+                                                showTabMenu(
+                                                    tab.id,
+                                                    event.currentTarget,
+                                                    bounds.left,
+                                                    bounds.bottom,
+                                                );
+                                                return;
+                                            }
                                             if (
                                                 ![
                                                     'ArrowLeft',
@@ -1963,7 +2069,9 @@ export function App() {
                                             }
                                             size={14}
                                         />
-                                        <span>{tab.name}</span>
+                                        <span className="tab-name">
+                                            {tab.name}
+                                        </span>
                                         {tab.readOnly && (
                                             <Icon name="lock" size={11} />
                                         )}
@@ -1978,10 +2086,8 @@ export function App() {
                                         className="tab-close icon-button"
                                         title={`关闭 ${tab.name}`}
                                         aria-label={`关闭 ${tab.name}`}
-                                        disabled={
-                                            tab.busy && tab.kind !== 'pending'
-                                        }
-                                        onClick={() => closeTab(tab)}
+                                        disabled={tabBusy(tab)}
+                                        onClick={() => closeTabs([tab])}
                                     >
                                         <Icon name="close" size={12} />
                                     </button>
@@ -2754,15 +2860,29 @@ export function App() {
                             {dialog.kind === 'close' && (
                                 <>
                                     <p className="modal-description">
-                                        <strong>{dialogTab?.name}</strong>{' '}
-                                        的修改尚未写入服务器。关闭后，当前草稿将丢失。
+                                        以下 {closingDrafts.length}{' '}
+                                        个文件的修改尚未写入服务器。
+                                        关闭后，这些草稿将丢失；取消会保留本次所有标签。
+                                    </p>
+                                    <ul className="closing-files">
+                                        {closingDrafts.map((tab) => (
+                                            <li key={tab.id}>
+                                                {tab.rootId}:/{tab.path}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                    <p className="modal-description">
+                                        不会自动保存或修改服务器文件。
                                     </p>
                                     <div className="dialog-secondary-actions">
                                         <button
                                             type="button"
                                             onClick={() =>
-                                                dialogTab &&
-                                                void copy(dialogTab.text)
+                                                closingDrafts.length === 1 &&
+                                                void copy(closingDrafts[0].text)
+                                            }
+                                            disabled={
+                                                closingDrafts.length !== 1
                                             }
                                         >
                                             <Icon name="copy" />

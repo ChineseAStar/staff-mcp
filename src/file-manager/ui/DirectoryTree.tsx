@@ -16,13 +16,12 @@ import type { DirectoryTree as TreeState } from './useDirectoryTree';
 interface Props {
     tree: TreeState;
     available: boolean;
-    directory: string;
     selectedPath?: string;
     activePath?: string;
     interactionEpoch: number;
     uploadAllowed: boolean;
     onUpload: (files: File[], directory: string) => void;
-    onPasteFiles: (files: File[]) => void;
+    onPasteFiles: (files: File[], directory: string) => void;
     onDirectoryDrop: () => void;
     onSelect: (entry: Entry) => void;
     onOpen: (entry: Entry) => void;
@@ -44,7 +43,6 @@ interface Props {
 export function DirectoryTree({
     tree,
     available,
-    directory,
     selectedPath,
     activePath,
     interactionEpoch,
@@ -269,7 +267,7 @@ export function DirectoryTree({
                     entry.type === 'directory' &&
                     tree.expanded.has(entry.path)
                 ) {
-                    if (withinPath(directory, entry.path)) onSelect(entry);
+                    onSelect(entry);
                     tree.collapse(entry.path);
                 } else
                     focus(
@@ -334,7 +332,7 @@ export function DirectoryTree({
             '.file-row[data-upload-directory]',
         );
         return {
-            directory: row?.dataset.uploadDirectory ?? directory,
+            directory: row?.dataset.uploadDirectory ?? '',
             row: row?.dataset.entryPath,
         };
     };
@@ -486,7 +484,7 @@ export function DirectoryTree({
                             onKeyDown={(event) => keyboard(event, entry)}
                         >
                             <div
-                                className={`file-row ${selectedPath === entry.path ? 'selected' : ''} ${isDirectory && directory === entry.path ? 'target-directory' : ''} ${activePath === entry.path ? 'current-file' : ''} ${dropTarget?.row === entry.path ? 'drop-target' : ''}`}
+                                className={`file-row ${selectedPath === entry.path ? 'selected' : ''} ${activePath === entry.path ? 'current-file' : ''} ${dropTarget?.row === entry.path ? 'drop-target' : ''}`}
                                 data-entry-path={entry.path}
                                 data-upload-directory={
                                     isDirectory
@@ -617,7 +615,16 @@ export function DirectoryTree({
                 if (!files.length) return;
                 event.preventDefault();
                 event.stopPropagation();
-                onPasteFiles(namePastedFiles(files));
+                // Keyboard focus is on treeitem, while pointer targets are on
+                // its own row. Do not resolve an expanded descendant or selection.
+                const focused = event.target as HTMLElement;
+                const target = focused.matches('[role="treeitem"]')
+                    ? focused.querySelector<HTMLElement>(':scope > .file-row')!
+                    : focused;
+                onPasteFiles(
+                    namePastedFiles(files),
+                    dragTarget(target).directory,
+                );
             }}
             onDragOver={(event) => {
                 if (!hasFilePayload(event.dataTransfer)) return;
