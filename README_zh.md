@@ -10,7 +10,11 @@
 
 ## 兼容性与配套升级
 
-**未发布分支：** 无端口 stdio data 需配套 chat-ai 宿主和开发包（本地集成使用 `2.0.7-dev.0`），不代表 2.0.7 已发布。chat-ai 默认内置 registry 依赖仍为 2.0.6，等待用户确认发版后再更新；正式 CLI 远程命令生成器不改。HTTP/reverse wire 与业务授权保持不变。
+**2.0.7 版本：** 本机与 Docker stdio 使用有界、无端口的数据帧，不自动回退 HTTP 或重放。请配套 chat-ai 提交 `5bfa6a4321d258e5129b250da248adff96b6ad42` 或兼容后继版本，以获得匹配的协议与权限处理；宿主正式内置依赖将在兼容后继版本中更新，仅安装此 npm 包不会更新宿主依赖。HTTP/reverse wire 与业务授权保持不变。旧 stdio 宿主可能无法使用可选的 data Apps/传输，但健康的标准 MCP tools/resources/prompts 仍可用。
+
+本版还新增 `STAFF_MCP_SHELL_INIT`，供命令与新 PTY 共用 Bash 初始化（management Node 主进程不 source）；文件 App 增加常用语言语法及 Markdown 代码高亮、本地阅读字号、右侧自适应目录/窄屏下拉、文本软换行，并整理工作区/文件/阅读工具栏层级、以根目录为目标的菜单与文件标签。终端 App 移除重复关闭按钮，沿用宿主 App 生命周期。详见[文件管理](docs/file-manager.md)、[终端](docs/terminal.md)与 [CHANGELOG](CHANGELOG.md)。
+
+Docker 模板/用户脚本编排、受管 staff 短命令与聊天深色渲染属于宿主功能，不由 npm 包单独提供。本次发布验证覆盖 Linux x64 与 Chromium，不新增 Windows/macOS/musl 实测或支持承诺；远程网络的流式传输与可用性仍需在目标部署中验证。
 
 **2.0.6 版本：** 新增文件仅引用、Markdown 草稿预览、文件夹上传与 ZIP 下载，以及大文本手动加载（≤512 KiB 自动加载、>2 MiB 只读、≥5 MiB 仅下载）。二进制文件使用中性预览提示，读取失败保留未保存草稿。请配套 chat-ai 提交 `972d26e2df5998f67dbcbab96685f72ef1fadf3cbbf` 或兼容后继版本；终端后台心跳、上传 HTTP 诊断、命令编辑及 Apps 合并属于宿主更新，不由 npm 包单独提供。详见[文件管理说明](docs/file-manager.md)与 [CHANGELOG](CHANGELOG.md)。
 
@@ -27,7 +31,7 @@
 无需进行 Chat8/schema9/format7/分享 protocol2 数据迁移。
 
 1. 结束在途操作，备份正常配置；无需转换数据。
-2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.6，并协调 reverse 连接的停机窗口。
+2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.7，并协调 reverse 连接的停机窗口。
 3. 重新连接 MCP、重新打开 App，仅显式启用需要的扩展。
 
 发布摘要见 [CHANGELOG](CHANGELOG.md)。
@@ -41,7 +45,7 @@
 使用明确版本运行 staff-mcp：
 
 ```bash
-npx --yes staff-mcp@2.0.6 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.0.7 --working-dir /path/to/your/project
 ```
 
 从源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口：
@@ -148,7 +152,7 @@ Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Ser
 
 ## 🛠️ 核心能力
 
-以下描述当前分支源码，包括未发布的 stdio 变更；扩展仍须显式启用。
+以下描述 staff-mcp 2.0.7；扩展仍须显式启用。
 
 扩展**默认全关**。通过 `--extensions files`、`--extensions terminal` 或 `--extensions files,terminal` 启用；apps/data 依赖及 terminal 对 streams v1 的声明自动计算，无需单独选择。禁用能力不声明对应 manifest 条目、不注册对应 UI Resource 或业务 handler；全关时无扩展 manifest、应用数据 listener/session，普通 MCP 工具和非 UI Resources 保留。HTTP 模式仍监听原 MCP 服务。
 
@@ -315,13 +319,14 @@ files-v1 跨 MCP 中转与文件应用上传不再设置 100 MiB 单文件硬限
 ## 发版流程
 
 1. 在临时开发分支完成改动、补齐 CHANGELOG 发布日期，确认 `package.json`、`package-lock.json` 顶层及 `packages[""].version` 都是本次目标版本，提交并推送该分支。
-2. 运行以下 **Bash** 检查流程。先将 `VERSION` 和 `RELEASE_BRANCH` 改为本次已验收、尚未发布的版本与分支。示例为 2.0.6；它发布后不可原样重跑。任何一步失败都应先排查，不要跳过检查继续打标签。
+2. 运行以下 **Bash** 检查流程。先核对 `VERSION`、`RELEASE_BRANCH` 与实现提交 `TARGET`，并确认该分支头已包含发布文档与版本变更。示例为 2.0.7；它发布后不可原样重跑。任何一步失败都应先排查，不要跳过检查继续打标签。
 
 ```bash
 (
 set -euo pipefail
-VERSION=2.0.6
-RELEASE_BRANCH=tmp/file-workspace-improvements
+VERSION=2.0.7
+RELEASE_BRANCH=tmp/stdio-data-session
+TARGET=28b253079fa242e679cee62b09459129a9760b65
 
 git fetch origin --tags
 test -z "$(git status --porcelain)"
@@ -329,6 +334,8 @@ git switch master
 git pull --ff-only origin master
 # 必须实际合入新功能；只检查 HEAD 属于 master 不能证明功能已合入。
 git merge --ff-only "origin/$RELEASE_BRANCH"
+# 同时校验最新实现提交及已审阅的发布分支头（含文档/版本变更）。
+git merge-base --is-ancestor "$TARGET" HEAD
 git merge-base --is-ancestor "origin/$RELEASE_BRANCH" HEAD
 
 RELEASE_VERSION="$VERSION" node --input-type=commonjs <<'JS'
@@ -369,7 +376,7 @@ git push origin "refs/tags/v$VERSION"
 
 标签触发 `.github/workflows/publish.yml` 的 **Publish to npm**。工作流使用 Node 24、OIDC trusted publishing 和 `npm publish --provenance --access public`；npm 包设置中的 trusted publisher 必须对应仓库和 `publish.yml` 工作流文件。发布任务会验证标签对应提交已包含于远端 `master`，并校验三处版本；仅 push/合并 `master` 不会发布 npm。禁止从未合入的开发分支发版、移动已发布标签或重用已发布版本。
 
-成功后检查 Actions 和 `npm view staff-mcp@2.0.6 version`，再按原安装方式更新（如 `npm install -g staff-mcp@2.0.6` 或 `npx -y staff-mcp@2.0.6 ...`），并重启各 MCP 进程；已运行进程和已打开的 App 不会自动替换。版本号与标签示例需随每次后续发布更新。
+成功后检查 Actions 和 `npm view staff-mcp@2.0.7 version`，再按原安装方式更新（如 `npm install -g staff-mcp@2.0.7` 或 `npx -y staff-mcp@2.0.7 ...`），并重启各 MCP 进程；已运行进程和已打开的 App 不会自动替换。版本号与标签示例需随每次后续发布更新。
 
 ## 📄 License
 

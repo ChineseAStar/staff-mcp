@@ -10,7 +10,11 @@ It provides secure file management, shell execution, LSP-powered code intelligen
 
 ## Compatibility and coordinated upgrades
 
-**Unreleased branch:** no-port stdio data requires a matching chat-ai host and paired development package (`2.0.7-dev.0` for local integration). This is not a published 2.0.7 release. chat-ai's default bundled registry dependency remains 2.0.6 pending release approval; the official remote CLI command generator is unchanged. HTTP/reverse wire and business authorization remain unchanged.
+**Version 2.0.7:** adds bounded, no-port stdio data frames for local and Docker connections, with no automatic HTTP fallback or replay. Pair with chat-ai commit `5bfa6a4321d258e5129b250da248adff96b6ad42` or a compatible descendant for the matching protocol and permissions. The host's formal bundled dependency update will follow in a compatible descendant; installing this npm package alone does not update it. HTTP/reverse wire and business authorization remain unchanged. With an older stdio host, optional data-dependent Apps/transfers may be unavailable while healthy standard MCP tools/resources/prompts remain usable.
+
+The release also adds shared Bash initialization through `STAFF_MCP_SHELL_INIT` for commands and new PTYs (never sourced by the management Node process), common-language syntax and Markdown code highlighting, local reading fonts and an adaptive right-side outline/narrow-view dropdown, soft-wrapped text, and cleaner workspace/file/reading toolbars, root-targeted menus and file tabs. The terminal App removes its duplicate close button in favor of the host App lifecycle. See [file manager](docs/file-manager.md), [terminal](docs/terminal.md) and [CHANGELOG](CHANGELOG.md).
+
+Docker template/user-script orchestration, short managed staff commands and dark chat rendering are host features, not capabilities supplied by this npm package alone. Release verification covers Linux x64 with Chromium; it adds no Windows/macOS/musl validation or support claims. Remote-network availability must still be verified in the target deployment.
 
 **Version 2.0.6:** adds reference-only attachments, Markdown draft previews, directory uploads/ZIP downloads and opt-in large-text previews (automatic up to 512 KiB, read-only above 2 MiB, download-only at or above 5 MiB). Binary files use a neutral preview state and failed rereads preserve unsaved drafts. Pair with chat-ai commit `972d26e2df5998f67dbcbab96685f72ef1fadf3cbbf` or a compatible descendant. Background terminal heartbeats, upload HTTP diagnostics, command editing and App merging are host updates, not features supplied by this npm package alone. See [file manager](docs/file-manager.md) and [CHANGELOG](CHANGELOG.md).
 
@@ -27,7 +31,7 @@ Standard stdio/Streamable HTTP tools, resources and prompts remain supported. Ex
 No Chat8/schema9/format7/share protocol2 data migration is required.
 
 1. Finish in-flight operations and back up your normal configuration; no data conversion is needed.
-2. Upgrade the matching chat-ai host first, then staff-mcp 2.0.6, coordinating downtime for reverse connections.
+2. Upgrade the matching chat-ai host first, then staff-mcp 2.0.7, coordinating downtime for reverse connections.
 3. Reconnect MCP, reopen Apps and explicitly enable only the extensions you want.
 
 See [CHANGELOG](CHANGELOG.md) for the release summary.
@@ -41,7 +45,7 @@ Current source supports Linux PTY and Windows native ConPTY, subject to native l
 Run staff-mcp with an explicit package version:
 
 ```bash
-npx --yes staff-mcp@2.0.6 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.0.7 --working-dir /path/to/your/project
 ```
 
 For a source checkout, install dependencies and build before using the absolute entrypoint in the examples:
@@ -153,7 +157,7 @@ The two reverse transport sources (`src/reverse/SseTransport.ts` and chat-ai's `
 
 ## 🛠️ Core Capabilities
 
-The behavior below describes this source branch, including unreleased stdio changes. Extensions remain opt-in.
+The behavior below describes staff-mcp 2.0.7. Extensions remain opt-in.
 
 Extensions are **all off by default**. Use `--extensions files`, `--extensions terminal`, or `--extensions files,terminal`; apps/data dependencies and terminal's streams v1 manifest are added automatically, not selected separately. Disabled features advertise no manifest entry and register no corresponding UI Resource or business handler. With both off there is no extension manifest or application data listener/session; ordinary MCP tools and non-UI Resources remain. HTTP mode still opens its normal MCP listener.
 
@@ -318,7 +322,7 @@ Upgrade the host and all participating endpoints, reconnect MCP and reopen Apps.
 
 ## Release workflow
 
-Merge the verified release changes into `master` first. From an up-to-date `master` checkout, confirm that the intended feature commit is included and all three package/lock versions equal the explicit target version, not merely each other; finalize the changelog, then create and push the new version tag. A check that HEAD belongs to master alone does not prove the feature branch was merged. The checklist stops on any failed command and rejects an existing version/tag. The npm workflow rejects a tag whose commit is not contained in remote `master`. Do not publish from a development branch or move an existing release tag. Merging code alone does not publish to npm. `.github/workflows/publish.yml` runs Node 24 and OIDC trusted publishing with provenance; npm must trust the matching repository/workflow. Run `npm ci`, `npm run build` and `npm pack --dry-run` in the release checkout before tagging. After Actions succeeds, verify the exact version with `npm view staff-mcp@2.0.6 version`, update the package at each endpoint and restart it. See the [step-by-step release checklist](README_zh.md#发版流程); version/tag examples must be advanced for later releases.
+Merge the verified release changes into `master` first. From an up-to-date `master` checkout, confirm that implementation commit `28b253079fa242e679cee62b09459129a9760b65` and the reviewed release-branch head are included and all three package/lock versions equal the explicit target version, not merely each other; finalize the changelog, then create and push the new version tag. A check that HEAD belongs to master alone does not prove the feature branch was merged. The checklist stops on any failed command and rejects an existing version/tag. The npm workflow rejects a tag whose commit is not contained in remote `master`. Do not publish from a development branch or move an existing release tag. Merging code alone does not publish to npm. `.github/workflows/publish.yml` runs Node 24 and OIDC trusted publishing with provenance; npm must trust the matching repository/workflow. Run `npm ci`, `npm run build` and `npm pack --dry-run` in the release checkout before tagging. After Actions succeeds, verify the exact version with `npm view staff-mcp@2.0.7 version`, update the package at each endpoint and restart it. See the [step-by-step release checklist](README_zh.md#发版流程); version/tag examples must be advanced for later releases.
 
 ## 📄 License
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.7 — 2026-11-06
+
+- Carry local/Docker stdio extension data in bounded same-connection Base64 frames: at most 64 KiB decoded per frame and a 256 KiB consumption window per channel/direction. Control and data share one FIFO writer; ACK follows actual consumption, and file ACK is not commit. No data port, listener, endpoint, HTTP ticket, fallback or replay is added. Direct HTTP/reverse configure/open and raw HTTP wire remain unchanged.
+- Add optional Linux Bash initialization through `STAFF_MCP_SHELL_INIT`, sourced before each command and new PTY so aliases, functions, exports and directory changes share that shell. The management Node process never sources it; failures prevent user input, and changes affect only subsequent commands/new PTYs. Without the variable, previous startup behavior is unchanged.
+- Expand bundled editor syntax coloring to common languages and reuse bounded parsers for Markdown code fences; unknown/large documents and over-budget fences remain plain text. Soft-wrap editor lines at all widths, including explicitly loaded large text, without modifying saved content or undo history.
+- Improve Markdown reading with local font controls, a heading outline docked on the right when space permits and a bounded dropdown in narrow views. Preserve current-draft previews, parsing budgets and the isolated no-network/no-raw-HTML policy.
+- Separate workspace navigation/transfer history, current-file actions and reading/editing controls. Simplify the tree and empty workspace, keep blank-area actions targeted at the displayed root, and improve bounded file tabs and explicit dirty-draft close confirmations. Existing path/version checks, authorization and text/attachment limits are unchanged.
+- Remove the terminal App's duplicate close button; the host close-App action retains existing lifecycle cleanup. Closing does not roll back side effects or guarantee termination of detached descendants.
+- Pair with chat-ai commit `5bfa6a4321d258e5129b250da248adff96b6ad42` or a compatible descendant for the matching protocol and permissions. The host's formal bundled dependency update will follow in a compatible descendant. Older stdio hosts may lose optional data-dependent Apps/transfers, not healthy standard MCP tools/resources/prompts. Upgrade both endpoints, reconnect MCP and reopen Apps; running processes/assets do not update automatically.
+- Docker template/user-script orchestration, short managed staff commands and dark chat rendering are host-only changes, not features delivered by this npm package alone. All extensions remain explicit opt-in; no persistent data migration, transfer resumption or automatic replay is introduced.
+
+Release verification covers Linux x64 with Chromium, not new Windows/macOS/musl validation or support. Existing Docker ownership/mount/native prerequisites, permissions, leases, commit uncertainty and resource limits remain. Remote-network streaming and I/O remain deployment-specific and require verification in the target network.
+
 ## 2.0.6 — 2026-11-04
 
 - Add reference-only file attachments, with a separate bounded content-attachment action. A matching chat-ai host preserves source metadata in formal messages, history, sharing and export; references do not read or copy file contents.
