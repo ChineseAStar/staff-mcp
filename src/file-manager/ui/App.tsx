@@ -153,7 +153,7 @@ function entryIcon(entry: Pick<Entry, 'type' | 'name'>): IconName {
 
 const DEFAULT_TREE_WIDTH = 270;
 const MIN_TREE_WIDTH = 180;
-const MIN_EDITOR_WIDTH = 240;
+const MIN_EDITOR_WIDTH = 360;
 
 export function App() {
     const lifecycle = useSyncExternalStore(bridge.subscribe, bridge.snapshot);
@@ -172,6 +172,9 @@ export function App() {
     const pendingTabReveal = useRef<
         { rootId: string; path: string } | undefined
     >(undefined);
+    const [previewToolbar, setPreviewToolbar] = useState<HTMLDivElement | null>(
+        null,
+    );
     const [mobileView, setMobileView] = useState<'files' | 'editor'>('files');
     // Keep the requested width when the host temporarily shrinks or hides the App.
     const [requestedTreeWidth, setRequestedTreeWidth] =
@@ -1391,151 +1394,6 @@ export function App() {
                     event.preventDefault();
             }}
         >
-            <header className="topbar">
-                <IconButton
-                    name="back"
-                    title={
-                        mobilePane === 'editor' ? '返回文件列表' : '上一级目录'
-                    }
-                    className={mobilePane === 'editor' ? 'pane-back' : ''}
-                    disabled={
-                        mobilePane !== 'editor' && (!directory || !available)
-                    }
-                    onClick={() =>
-                        mobilePane === 'editor'
-                            ? setMobileView('files')
-                            : navigate(parentDirectory)
-                    }
-                />
-                {mobilePane === 'editor' && (
-                    <IconButton
-                        name="back"
-                        title="上一级目录"
-                        className="wide-up"
-                        disabled={!directory || !available}
-                        onClick={() => navigate(parentDirectory)}
-                    />
-                )}
-                {roots.length === 1 ? (
-                    <span className="root-label" title={roots[0].name}>
-                        {roots[0].name}
-                    </span>
-                ) : (
-                    <select
-                        aria-label="根目录"
-                        className="root-select"
-                        value={rootId}
-                        disabled={!available || rootsLoading || !roots.length}
-                        onChange={(event) => navigate('', event.target.value)}
-                    >
-                        {!roots.length && <option value="">文件</option>}
-                        {roots.map((item) => (
-                            <option key={item.rootId} value={item.rootId}>
-                                {item.name}
-                                {item.readOnly ? ' · 只读' : ''}
-                            </option>
-                        ))}
-                    </select>
-                )}
-                <nav
-                    className="breadcrumbs"
-                    aria-label="当前位置"
-                    title={`所选位置：/${directory}；右键项目操作，空白处操作根目录`}
-                >
-                    <button
-                        title="返回根目录"
-                        disabled={!available}
-                        onClick={() => navigate('')}
-                    >
-                        /
-                    </button>
-                    {directory
-                        .split('/')
-                        .filter(Boolean)
-                        .map((part, index, parts) => (
-                            <button
-                                key={index}
-                                title={parts.slice(0, index + 1).join('/')}
-                                onClick={() =>
-                                    navigate(
-                                        parts.slice(0, index + 1).join('/'),
-                                    )
-                                }
-                                disabled={!available}
-                                aria-current={
-                                    index === parts.length - 1
-                                        ? 'page'
-                                        : undefined
-                                }
-                            >
-                                {part}
-                                {index < parts.length - 1 ? ' /' : ''}
-                            </button>
-                        ))}
-                </nav>
-                {readOnly && root && (
-                    <span className="root-lock" title="此根目录只读">
-                        <Icon name="lock" size={13} />
-                    </span>
-                )}
-                {(opening || statLoading) && (
-                    <span className="file-operation-status" role="status">
-                        {opening ? '正在打开…' : '读取中…'}
-                    </span>
-                )}
-                {tabs.length > 0 && mobilePane === 'files' && (
-                    <button
-                        className="icon-button show-editor"
-                        onClick={() => setMobileView('editor')}
-                        title="返回已打开文件"
-                        aria-label="返回已打开文件"
-                    >
-                        <Icon name="code" size={14} />
-                        {dirty && <span className="dirty-dot" />}
-                    </button>
-                )}
-                <IconButton
-                    name="refresh"
-                    title="刷新当前目录"
-                    disabled={!available}
-                    onClick={refresh}
-                />
-                <IconButton
-                    name="transfers"
-                    title="传输记录"
-                    aria-expanded={showTransfers}
-                    aria-controls="transfer-records"
-                    onClick={() => setShowTransfers((value) => !value)}
-                />
-                <input
-                    ref={uploadInput}
-                    type="file"
-                    multiple
-                    hidden
-                    aria-label="选择上传文件"
-                    onChange={(event) => {
-                        const target = uploadTarget.current;
-                        uploadTarget.current = undefined;
-                        const files = Array.from(event.target.files ?? []);
-                        event.target.value = '';
-                        if (!target || !files.length) return;
-                        if (target.epoch !== actionContext.current.epoch) {
-                            setNotice({
-                                kind: 'error',
-                                text: '连接或根目录已变化，请重新选择上传文件。',
-                            });
-                            return;
-                        }
-                        chooseFiles(
-                            files,
-                            target.rootId,
-                            target.directory,
-                            target.folder,
-                        );
-                    }}
-                />
-            </header>
-
             {!available && (
                 <div className="connection-notice" role="status">
                     <Icon name="warning" size={14} />
@@ -1831,6 +1689,152 @@ export function App() {
                     className="directory-panel"
                     aria-label="文件列表"
                 >
+                    <header className="topbar">
+                        <IconButton
+                            name="back"
+                            title="上一级目录"
+                            disabled={!directory || !available}
+                            onClick={() => navigate(parentDirectory)}
+                        />
+                        {roots.length === 1 ? (
+                            <span className="root-label" title={roots[0].name}>
+                                {roots[0].name}
+                            </span>
+                        ) : (
+                            <select
+                                aria-label="根目录"
+                                className="root-select"
+                                value={rootId}
+                                disabled={
+                                    !available || rootsLoading || !roots.length
+                                }
+                                onChange={(event) =>
+                                    navigate('', event.target.value)
+                                }
+                            >
+                                {!roots.length && (
+                                    <option value="">文件</option>
+                                )}
+                                {roots.map((item) => (
+                                    <option
+                                        key={item.rootId}
+                                        value={item.rootId}
+                                    >
+                                        {item.name}
+                                        {item.readOnly ? ' · 只读' : ''}
+                                    </option>
+                                ))}
+                            </select>
+                        )}
+                        <nav
+                            className="breadcrumbs"
+                            aria-label="当前位置"
+                            title={`所选位置：/${directory}；右键项目操作，空白处操作根目录`}
+                        >
+                            <button
+                                title="返回根目录"
+                                disabled={!available}
+                                onClick={() => navigate('')}
+                            >
+                                /
+                            </button>
+                            {directory
+                                .split('/')
+                                .filter(Boolean)
+                                .map((part, index, parts) => (
+                                    <button
+                                        key={index}
+                                        title={parts
+                                            .slice(0, index + 1)
+                                            .join('/')}
+                                        onClick={() =>
+                                            navigate(
+                                                parts
+                                                    .slice(0, index + 1)
+                                                    .join('/'),
+                                            )
+                                        }
+                                        disabled={!available}
+                                        aria-current={
+                                            index === parts.length - 1
+                                                ? 'page'
+                                                : undefined
+                                        }
+                                    >
+                                        {part}
+                                        {index < parts.length - 1 ? ' /' : ''}
+                                    </button>
+                                ))}
+                        </nav>
+                        {readOnly && root && (
+                            <span className="root-lock" title="此根目录只读">
+                                <Icon name="lock" size={13} />
+                            </span>
+                        )}
+                        {(opening || statLoading) && (
+                            <span
+                                className="file-operation-status"
+                                role="status"
+                            >
+                                {opening ? '正在打开…' : '读取中…'}
+                            </span>
+                        )}
+                        {tabs.length > 0 && mobilePane === 'files' && (
+                            <button
+                                className="icon-button show-editor"
+                                onClick={() => setMobileView('editor')}
+                                title="返回已打开文件"
+                                aria-label="返回已打开文件"
+                            >
+                                <Icon name="code" size={14} />
+                                {dirty && <span className="dirty-dot" />}
+                            </button>
+                        )}
+                        <IconButton
+                            name="refresh"
+                            title="刷新当前目录"
+                            disabled={!available}
+                            onClick={refresh}
+                        />
+                        <IconButton
+                            name="transfers"
+                            title="传输记录"
+                            aria-expanded={showTransfers}
+                            aria-controls="transfer-records"
+                            onClick={() => setShowTransfers((value) => !value)}
+                        />
+                        <input
+                            ref={uploadInput}
+                            type="file"
+                            multiple
+                            hidden
+                            aria-label="选择上传文件"
+                            onChange={(event) => {
+                                const target = uploadTarget.current;
+                                uploadTarget.current = undefined;
+                                const files = Array.from(
+                                    event.target.files ?? [],
+                                );
+                                event.target.value = '';
+                                if (!target || !files.length) return;
+                                if (
+                                    target.epoch !== actionContext.current.epoch
+                                ) {
+                                    setNotice({
+                                        kind: 'error',
+                                        text: '连接或根目录已变化，请重新选择上传文件。',
+                                    });
+                                    return;
+                                }
+                                chooseFiles(
+                                    files,
+                                    target.rootId,
+                                    target.directory,
+                                    target.folder,
+                                );
+                            }}
+                        />
+                    </header>
                     {rootsError && (
                         <div className="list-error" role="alert">
                             <p>{rootsError}</p>
@@ -2101,6 +2105,12 @@ export function App() {
                             role="toolbar"
                             aria-label="编辑操作"
                         >
+                            <IconButton
+                                name="back"
+                                title="返回文件列表"
+                                className="pane-back"
+                                onClick={() => setMobileView('files')}
+                            />
                             {activeTab.readOnly && (
                                 <span className="readonly-label">只读</span>
                             )}
@@ -2139,26 +2149,34 @@ export function App() {
                                             </button>
                                         </div>
                                     )}
-                                    <IconButton
-                                        name="search"
-                                        title="查找与替换（Ctrl/Cmd+F）"
-                                        disabled={
-                                            hasMarkdownPreview(activeTab) &&
-                                            activeTab.preview
-                                        }
-                                        onClick={() => editorCommand('search')}
-                                    />
-                                    <IconButton
-                                        name="undo"
-                                        title="撤销（Ctrl/Cmd+Z）"
-                                        disabled={
-                                            !available ||
-                                            activeTab.readOnly ||
-                                            (hasMarkdownPreview(activeTab) &&
-                                                activeTab.preview)
-                                        }
-                                        onClick={() => editorCommand('undo')}
-                                    />
+                                    {hasMarkdownPreview(activeTab) &&
+                                    activeTab.preview ? (
+                                        <div
+                                            className="preview-context"
+                                            ref={setPreviewToolbar}
+                                        />
+                                    ) : (
+                                        <>
+                                            <IconButton
+                                                name="search"
+                                                title="查找与替换（Ctrl/Cmd+F）"
+                                                onClick={() =>
+                                                    editorCommand('search')
+                                                }
+                                            />
+                                            <IconButton
+                                                name="undo"
+                                                title="撤销（Ctrl/Cmd+Z）"
+                                                disabled={
+                                                    !available ||
+                                                    activeTab.readOnly
+                                                }
+                                                onClick={() =>
+                                                    editorCommand('undo')
+                                                }
+                                            />
+                                        </>
+                                    )}
                                     <button
                                         className="primary save-button"
                                         title="保存（Ctrl/Cmd+S）"
@@ -2179,37 +2197,15 @@ export function App() {
                                     </button>
                                 </>
                             )}
-                            <button
-                                type="button"
-                                className="attach-button"
-                                disabled={
-                                    !available ||
-                                    !!attaching ||
-                                    activeTab.busy ||
-                                    isDirty(activeTab)
-                                }
-                                title={
-                                    isDirty(activeTab)
-                                        ? '请先保存编辑，再引用文件；不会自动保存'
-                                        : '只引用文件，未附加正文；不会自动发送'
-                                }
+                            <IconButton
+                                name="transfers"
+                                title="传输记录"
+                                aria-expanded={showTransfers}
+                                aria-controls="transfer-records"
                                 onClick={() =>
-                                    void attachFile(
-                                        activeTab.rootId,
-                                        activeTab.path,
-                                        activeTab.name,
-                                        activeTab.size,
-                                    )
+                                    setShowTransfers((value) => !value)
                                 }
-                            >
-                                <Icon name="attach" size={14} />
-                                {attaching?.rootId === activeTab.rootId &&
-                                attaching.path === activeTab.path
-                                    ? '添加中…'
-                                    : isDirty(activeTab)
-                                      ? '先保存再引用'
-                                      : '引用文件'}
-                            </button>
+                            />
                             <div className="menu-anchor">
                                 <IconButton
                                     name="more"
@@ -2227,6 +2223,41 @@ export function App() {
                                         label="更多编辑操作"
                                         onClose={() => setMenu(null)}
                                     >
+                                        <button
+                                            type="button"
+                                            role="menuitem"
+                                            disabled={
+                                                !available ||
+                                                !!attaching ||
+                                                activeTab.busy ||
+                                                isDirty(activeTab)
+                                            }
+                                            title={
+                                                isDirty(activeTab)
+                                                    ? '请先保存编辑，再引用文件；不会自动保存'
+                                                    : '只引用文件，未附加正文；不会自动发送'
+                                            }
+                                            onClick={() =>
+                                                fileMenuAction(
+                                                    () =>
+                                                        void attachFile(
+                                                            activeTab.rootId,
+                                                            activeTab.path,
+                                                            activeTab.name,
+                                                            activeTab.size,
+                                                        ),
+                                                )
+                                            }
+                                        >
+                                            <Icon name="attach" size={14} />
+                                            {attaching?.rootId ===
+                                                activeTab.rootId &&
+                                            attaching.path === activeTab.path
+                                                ? '添加中…'
+                                                : isDirty(activeTab)
+                                                  ? '先保存再引用'
+                                                  : '引用文件'}
+                                        </button>
                                         <button
                                             role="menuitem"
                                             disabled={
@@ -2259,7 +2290,11 @@ export function App() {
                                                     role="menuitem"
                                                     disabled={
                                                         !available ||
-                                                        activeTab.readOnly
+                                                        activeTab.readOnly ||
+                                                        (hasMarkdownPreview(
+                                                            activeTab,
+                                                        ) &&
+                                                            activeTab.preview)
                                                     }
                                                     onClick={() =>
                                                         fileMenuAction(() =>
@@ -2380,7 +2415,8 @@ export function App() {
                                             revision={tab.revision}
                                             active={
                                                 activeTabId === tab.id &&
-                                                mobilePane === 'editor' &&
+                                                (workspaceWidth >= 900 ||
+                                                    mobilePane === 'editor') &&
                                                 !(
                                                     hasMarkdownPreview(tab) &&
                                                     tab.preview
@@ -2402,7 +2438,19 @@ export function App() {
                                         />
                                     </div>
                                     {hasMarkdownPreview(tab) && tab.preview && (
-                                        <MarkdownPreview text={tab.text} />
+                                        <MarkdownPreview
+                                            text={tab.text}
+                                            active={
+                                                activeTabId === tab.id &&
+                                                (workspaceWidth >= 900 ||
+                                                    mobilePane === 'editor')
+                                            }
+                                            toolbarTarget={
+                                                activeTabId === tab.id
+                                                    ? previewToolbar
+                                                    : null
+                                            }
+                                        />
                                     )}
                                 </>
                             ) : tab.kind === 'pending' ? (

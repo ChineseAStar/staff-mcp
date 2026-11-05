@@ -214,6 +214,7 @@ input[type='checkbox'] {
     color: var(--text-muted);
 }
 .file-app {
+    container: file-app / inline-size;
     position: relative;
     display: flex;
     flex-direction: column;
@@ -225,6 +226,7 @@ input[type='checkbox'] {
 }
 .topbar {
     display: flex;
+    flex-wrap: wrap;
     gap: 3px;
     align-items: center;
     min-height: 44px;
@@ -250,11 +252,9 @@ input[type='checkbox'] {
     top: 2px;
     right: 2px;
 }
-.wide-up {
-    display: none;
-}
 .root-label {
-    max-width: 125px;
+    flex: 1;
+    max-width: none;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -263,8 +263,9 @@ input[type='checkbox'] {
     padding: 3px;
 }
 .root-select {
-    width: auto;
-    max-width: 125px;
+    flex: 1;
+    width: 0;
+    max-width: none;
     min-width: 60px;
     height: 30px;
     border-color: transparent;
@@ -279,7 +280,8 @@ input[type='checkbox'] {
 }
 .breadcrumbs {
     display: flex;
-    flex: 1;
+    order: 1;
+    flex: 1 0 100%;
     align-items: center;
     overflow: auto;
     min-width: 20px;
@@ -515,6 +517,7 @@ input[type='checkbox'] {
     color: #fb8794;
 }
 .editor-section {
+    container: document / inline-size;
     display: flex;
     flex-direction: column;
     flex: 1;
@@ -598,16 +601,35 @@ input[type='checkbox'] {
 }
 .editor-toolbar {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
-    justify-content: flex-end;
     gap: 3px;
     min-height: 39px;
-    padding: 4px 7px 4px 12px;
+    padding: 4px 7px;
     border-bottom: 1px solid var(--color-border-light);
     background: var(--bg-primary);
     flex: none;
     z-index: 4;
+}
+.editor-toolbar > * {
+    flex-shrink: 0;
+}
+.editor-toolbar > .menu-anchor {
+    margin-left: auto;
+}
+.preview-context {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    flex-shrink: 1;
+}
+.editor-toolbar .preview-hint {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: var(--text-muted);
 }
 .readonly-label {
     font-size: 10px;
@@ -1026,18 +1048,15 @@ progress::-moz-progress-bar {
 ::-webkit-scrollbar-track {
     background: transparent;
 }
-@media (max-width: 899px) {
+@container file-app (max-width: 899px) {
     .file-app[data-mobile-view='editor'] .directory-panel {
         display: none;
     }
     .file-app[data-mobile-view='files'] .editor-section {
         display: none;
     }
-    .root-select {
-        max-width: 100px;
-    }
 }
-@media (min-width: 900px) {
+@container file-app (min-width: 900px) {
     .pane-separator {
         display: block;
     }
@@ -1049,14 +1068,11 @@ progress::-moz-progress-bar {
     .show-editor {
         display: none;
     }
-    .wide-up {
-        display: inline-flex;
-    }
     .pane-back {
         display: none;
     }
 }
-@media (max-width: 359px) {
+@container file-app (max-width: 359px) {
     .topbar {
         gap: 1px;
         padding-inline: 4px;
@@ -1126,11 +1142,6 @@ progress::-moz-progress-bar {
     left: 0;
     right: auto;
     max-height: calc(100dvh - 16px);
-}
-.attach-button {
-    flex: none;
-    font-size: 11px;
-    padding-inline: 7px;
 }
 
 /* Tree metadata stays in titles rather than competing for row width. */
@@ -1237,7 +1248,6 @@ progress::-moz-progress-bar {
     border: 1px solid var(--color-border);
     border-radius: var(--app-radius-control);
     overflow: hidden;
-    margin-right: auto;
     flex: none;
 }
 .preview-segment button {
@@ -1261,8 +1271,8 @@ progress::-moz-progress-bar {
 }
 /* Markdown stays inside the file App; all colors use its semantic tokens. */
 .markdown-preview {
+    position: relative;
     display: flex;
-    flex-direction: column;
     flex: 1;
     min-height: 0;
     min-width: 0;
@@ -1270,35 +1280,28 @@ progress::-moz-progress-bar {
     color: var(--text-primary);
     background: var(--app-panel-solid);
 }
-.markdown-preview-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 6px 12px;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--color-border);
-}
 .markdown-font-controls {
     display: flex;
-    gap: 4px;
-    margin-left: auto;
+    align-items: center;
+    gap: 2px;
+    flex: none;
 }
-.markdown-font-controls button {
-    min-width: 32px;
-    min-height: 30px;
-    padding: 3px 7px;
-    border: 1px solid var(--color-border);
-    border-radius: 6px;
-    background: var(--color-surface);
+.markdown-font-controls :is(button, select) {
+    min-height: 28px;
+    height: 28px;
+    padding: 2px 5px;
     font-size: 12px;
 }
-.markdown-font-controls button:disabled {
-    opacity: 0.45;
-    cursor: default;
+.markdown-font-controls select {
+    width: 60px;
+}
+.outline-toggle {
+    padding-inline: 6px;
+    font-size: 12px;
 }
 .markdown-preview-scroll {
     flex: 1;
+    min-width: 0;
     min-height: 0;
     overflow: auto;
     overscroll-behavior: contain;
@@ -1312,7 +1315,6 @@ progress::-moz-progress-bar {
     line-height: 1.8;
     overflow-wrap: anywhere;
 }
-.markdown-preview .preview-hint,
 .markdown-preview .markdown-image-placeholder {
     font-size: 12px;
     color: var(--text-tertiary);
@@ -1412,43 +1414,67 @@ progress::-moz-progress-bar {
     color: var(--color-primary);
     text-decoration: underline dotted;
 }
-.markdown-toc {
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    padding: 8px 12px;
-    font-size: 0.9em;
-    background: var(--color-surface);
-}
-.markdown-toc summary {
-    cursor: pointer;
-    color: var(--text-secondary);
-}
-.markdown-toc nav {
-    max-height: 18em;
+.markdown-outline {
+    width: 224px;
+    flex: none;
     overflow: auto;
     overscroll-behavior: contain;
+    padding: 8px;
+    font-size: 12px;
+    background: var(--app-panel-solid);
+    scrollbar-gutter: stable;
 }
-.markdown-toc ol {
+.markdown-outline.docked {
+    border-left: 1px solid var(--color-border);
+}
+.markdown-outline.popover {
+    position: absolute;
+    z-index: 20;
+    top: 6px;
+    right: 8px;
+    width: min(300px, calc(100% - 16px));
+    max-height: min(440px, calc(100% - 12px));
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
+}
+.outline-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 0 4px 6px;
+    color: var(--text-secondary);
+}
+.outline-heading button {
+    min-height: 28px;
+    width: 28px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
+.markdown-outline ol {
     list-style: none;
     padding: 0;
-    margin: 8px 0 0;
-}
-.markdown-toc li {
     margin: 0;
 }
-.markdown-toc button {
+.markdown-outline li {
+    margin: 0;
+}
+.markdown-outline nav button {
     display: block;
     width: 100%;
     text-align: left;
     border: 0;
     border-radius: 4px;
-    padding: 4px 6px;
+    padding: 6px;
     background: transparent;
     color: var(--text-secondary);
     overflow-wrap: anywhere;
 }
-.markdown-toc button:hover {
-    background: var(--color-surface-hover);
+.markdown-outline nav button:hover,
+.markdown-outline nav button[aria-current='location'] {
+    background: var(--color-primary-light);
     color: var(--color-primary);
 }
 .markdown-toc-level-2 {
@@ -1497,11 +1523,39 @@ progress::-moz-progress-bar {
 .markdown-body .tok-emphasis {
     font-style: italic;
 }
-@media (max-width: 599px) {
+@container document (max-width: 680px) {
+    .editor-toolbar .preview-hint,
+    .markdown-font-controls .font-step {
+        display: none;
+    }
+}
+@container document (max-width: 440px) {
+    .editor-toolbar {
+        gap: 2px;
+        padding-inline: 4px;
+    }
+    .editor-toolbar .save-button {
+        padding-inline: 5px;
+        gap: 3px;
+    }
+    .editor-toolbar .save-button svg {
+        display: none;
+    }
+    .preview-segment button {
+        padding-inline: 5px;
+    }
+    .preview-context {
+        gap: 2px;
+    }
+    .markdown-font-controls select {
+        width: 57px;
+        padding-inline: 1px;
+    }
+    .readonly-label {
+        padding: 1px 2px;
+        font-size: 10px;
+    }
     .markdown-body {
         padding: 14px 16px 32px;
-    }
-    .markdown-preview-toolbar {
-        padding: 6px 10px;
     }
 }

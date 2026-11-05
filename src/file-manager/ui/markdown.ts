@@ -1,5 +1,5 @@
 import { classHighlighter, highlightTree } from '@lezer/highlight';
-import type { Element, ElementContent } from 'hast';
+import type { ElementContent } from 'hast';
 import type { Code, Heading, PhrasingContent, Root, RootContent } from 'mdast';
 import { TEXT_AUTO_LIMIT } from '../text-limits';
 import { fenceLanguage } from './languages';
@@ -63,19 +63,10 @@ function highlightBlock(node: Code, budget: number): number {
     return bytes;
 }
 
-function element(
-    tagName: string,
-    children: ElementContent[],
-    properties: Element['properties'] = {},
-): Element {
-    return { type: 'element', tagName, properties, children };
-}
-
-// Reuse ReactMarkdown's existing AST pass: no second full-document parse or
-// DOM scanning. Generated TOC controls contain only text, never document HTML.
+// IDs and outline labels share the existing AST pass with bounded highlighting.
+// The outline is UI chrome, never injected into the article.
 export function remarkPreview({ prefix }: { prefix: string }) {
     return (tree: Root) => {
-        const headings: { id: string; label: string; depth: number }[] = [];
         const occurrences = new Map<string, number>();
         let budget = TEXT_AUTO_LIMIT;
         const visit = (nodes: RootContent[]) => {
@@ -96,9 +87,12 @@ export function remarkPreview({ prefix }: { prefix: string }) {
                     const id = `${prefix}-heading-${slug}-${occurrence}`;
                     heading.data = {
                         ...heading.data,
-                        hProperties: { id, tabIndex: -1 },
+                        hProperties: {
+                            id,
+                            tabIndex: -1,
+                            'data-outline-label': label,
+                        },
                     };
-                    headings.push({ id, label, depth: heading.depth });
                 } else if (node.type === 'code') {
                     budget -= highlightBlock(node, budget);
                 }
@@ -106,53 +100,5 @@ export function remarkPreview({ prefix }: { prefix: string }) {
             }
         };
         visit(tree.children);
-        if (!headings.length) return;
-        tree.children.unshift({
-            type: 'paragraph',
-            children: [],
-            data: {
-                hName: 'details',
-                hProperties: { className: ['markdown-toc'] },
-                hChildren: [
-                    element('summary', [
-                        { type: 'text', value: `目录 · ${headings.length}` },
-                    ]),
-                    element(
-                        'nav',
-                        [
-                            element(
-                                'ol',
-                                headings.map(({ id, label, depth }) =>
-                                    element(
-                                        'li',
-                                        [
-                                            element(
-                                                'button',
-                                                [
-                                                    {
-                                                        type: 'text',
-                                                        value: label,
-                                                    },
-                                                ],
-                                                {
-                                                    type: 'button',
-                                                    dataHeadingId: id,
-                                                },
-                                            ),
-                                        ],
-                                        {
-                                            className: [
-                                                `markdown-toc-level-${depth}`,
-                                            ],
-                                        },
-                                    ),
-                                ),
-                            ),
-                        ],
-                        { ariaLabel: 'Markdown 标题导航' },
-                    ),
-                ],
-            },
-        });
     };
 }
