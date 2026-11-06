@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Stop enumerating workspace roots and immediate files in `resources/list`; retain the standard method with an empty result and reject supplied cursors. Discovery no longer scans root directories.
+- Keep the existing file URI template per configured root, resource reads/subscriptions, and file App discovery, browsing and explicit attachments unchanged. A single-root workspace exposes one template; independently authorized roots retain separate template identities. Current chat-ai `@` menus no longer offer staff file quick picks; select the file or directory in the file App instead.
+- Pair with a host that accepts the template's exact empty expansion for root-directory attachments; update the host first rather than changing existing URI/template identities.
+- Before upgrading a chat-ai instance with legacy name-only resource denials, save its resource permissions against the old catalog to convert those rules to URI identities. Existing URI/template restrictions remain valid; no automatic permission migration, npm publication, host bundle update or endpoint reconnect is performed.
+
 ## 2.0.7 — 2026-11-06
 
 - Carry local/Docker stdio extension data in bounded same-connection Base64 frames: at most 64 KiB decoded per frame and a 256 KiB consumption window per channel/direction. Control and data share one FIFO writer; ACK follows actual consumption, and file ACK is not commit. No data port, listener, endpoint, HTTP ticket, fallback or replay is added. Direct HTTP/reverse configure/open and raw HTTP wire remain unchanged.

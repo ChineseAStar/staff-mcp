@@ -1,5 +1,4 @@
 import * as fs from 'node:fs/promises';
-import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { z } from 'zod';
@@ -240,70 +239,11 @@ export function registerFileResources(
     protocol.setRequestHandler(
         ListResourcesRequestSchema,
         guarded(async (request) => {
-            const entries: { uri: string; name: string; mimeType: string }[] =
-                [];
-            for (const root of core.roots().roots) {
-                entries.push({
-                    uri: resourceUri(root.rootId, ''),
-                    name: root.name,
-                    mimeType: 'application/json',
-                });
-                let cursor: string | undefined;
-                do {
-                    const listing = await core.list(
-                        root.rootId,
-                        '',
-                        cursor,
-                        500,
-                    );
-                    for (const child of listing.entries) {
-                        if (child.type === 'file')
-                            entries.push({
-                                uri: resourceUri(root.rootId, child.path),
-                                name: `${root.name}/${child.name}`,
-                                mimeType: mimeType(child.path),
-                            });
-                    }
-                    cursor = listing.nextCursor;
-                } while (cursor);
-            }
-            const version = createHash('sha256')
-                .update(JSON.stringify(entries))
-                .digest('hex');
-            let offset = 0;
-            if (request.params?.cursor) {
-                try {
-                    const cursor = JSON.parse(
-                        Buffer.from(
-                            request.params.cursor,
-                            'base64url',
-                        ).toString('utf8'),
-                    );
-                    if (
-                        cursor.version !== version ||
-                        !Number.isSafeInteger(cursor.offset) ||
-                        cursor.offset < 0 ||
-                        cursor.offset >= entries.length
-                    )
-                        fail(
-                            'INVALID_CURSOR',
-                            'Resource list changed; refresh',
-                        );
-                    offset = cursor.offset;
-                } catch {
-                    fail('INVALID_CURSOR', 'Invalid resource cursor; refresh');
-                }
-            }
-            return {
-                resources: entries.slice(offset, offset + 100),
-                ...(offset + 100 < entries.length
-                    ? {
-                          nextCursor: Buffer.from(
-                              JSON.stringify({ version, offset: offset + 100 }),
-                          ).toString('base64url'),
-                      }
-                    : {}),
-            };
+            if (request.params?.cursor !== undefined)
+                fail('INVALID_CURSOR', 'Resource list has no further pages');
+            // Paths are selected in the file App or addressed through the root's
+            // template. Keep this standard method without scanning the filesystem.
+            return { resources: [] };
         }),
     );
     protocol.setRequestHandler(

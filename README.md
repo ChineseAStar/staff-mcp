@@ -10,6 +10,8 @@ It provides secure file management, shell execution, LSP-powered code intelligen
 
 ## Compatibility and coordinated upgrades
 
+**Unreleased source change:** file Resource discovery is template-only, with one unchanged URI template per configured root and an empty concrete list. Use the file App's explicit file/directory actions instead of top-level `@` quick picks. This is not part of npm 2.0.7 and does not update running endpoints. See [file Resources and upgrade precautions](docs/file-manager.md#standard-file-resources-and-attachments).
+
 **Version 2.0.7:** adds bounded, no-port stdio data frames for local and Docker connections, with no automatic HTTP fallback or replay. Pair with chat-ai commit `5bfa6a4321d258e5129b250da248adff96b6ad42` or a compatible descendant for the matching protocol and permissions. The host's formal bundled dependency update will follow in a compatible descendant; installing this npm package alone does not update it. HTTP/reverse wire and business authorization remain unchanged. With an older stdio host, optional data-dependent Apps/transfers may be unavailable while healthy standard MCP tools/resources/prompts remain usable.
 
 The release also adds shared Bash initialization through `STAFF_MCP_SHELL_INIT` for commands and new PTYs (never sourced by the management Node process), common-language syntax and Markdown code highlighting, local reading fonts and an adaptive right-side outline/narrow-view dropdown, soft-wrapped text, and cleaner workspace/file/reading toolbars, root-targeted menus and file tabs. The terminal App removes its duplicate close button in favor of the host App lifecycle. See [file manager](docs/file-manager.md), [terminal](docs/terminal.md) and [CHANGELOG](CHANGELOG.md).

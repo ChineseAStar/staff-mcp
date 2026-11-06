@@ -10,6 +10,8 @@
 
 ## 兼容性与配套升级
 
+**尚未发布的源码调整：** 文件资源只通过模板发现，每个配置根保留原有模板，具体资源列表返回空数组。请在文件 App 中针对文件／目录操作，不再提供顶层文件的 `@` 快捷项。该改动不属于 npm 2.0.7，也不会自动更新正在运行的端点。升级前若仍有旧的按名称资源拒绝，请先连接旧目录显式保存权限，将规则转换为 URI；详见[文件资源与升级注意事项](docs/file-manager.md#standard-file-resources-and-attachments)。
+
 **2.0.7 版本：** 本机与 Docker stdio 使用有界、无端口的数据帧，不自动回退 HTTP 或重放。请配套 chat-ai 提交 `5bfa6a4321d258e5129b250da248adff96b6ad42` 或兼容后继版本，以获得匹配的协议与权限处理；宿主正式内置依赖将在兼容后继版本中更新，仅安装此 npm 包不会更新宿主依赖。HTTP/reverse wire 与业务授权保持不变。旧 stdio 宿主可能无法使用可选的 data Apps/传输，但健康的标准 MCP tools/resources/prompts 仍可用。
 
 本版还新增 `STAFF_MCP_SHELL_INIT`，供命令与新 PTY 共用 Bash 初始化（management Node 主进程不 source）；文件 App 增加常用语言语法及 Markdown 代码高亮、本地阅读字号、右侧自适应目录/窄屏下拉、文本软换行，并整理工作区/文件/阅读工具栏层级、以根目录为目标的菜单与文件标签。终端 App 移除重复关闭按钮，沿用宿主 App 生命周期。详见[文件管理](docs/file-manager.md)、[终端](docs/terminal.md)与 [CHANGELOG](CHANGELOG.md)。
