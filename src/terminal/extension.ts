@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import {
     TERMINAL,
@@ -11,7 +11,7 @@ import type { TerminalSession } from './session.js';
 /** Business adapter: the stream host never needs terminal dimensions or PTY state. */
 export function registerTerminal(
     server: McpServer,
-    current: () => TerminalSession | undefined,
+    current: (ctx: ServerContext, method: string) => TerminalSession | undefined,
 ) {
     const size = z.number().int().min(2).max(1000);
     const resourceId = z.string().min(1).max(256);
@@ -45,17 +45,15 @@ export function registerTerminal(
     };
     for (const method of Object.keys(params) as (keyof typeof params)[]) {
         server.server.setRequestHandler(
-            z.object({
-                method: z.literal(`${TERMINAL}/v1/${method}`),
-                params: z.unknown().optional(),
-            }),
-            async (request, extra) => {
-                if (extra.signal.aborted)
+            `${TERMINAL}/v1/${method}`,
+            { params: z.unknown().optional() },
+            async (input, ctx) => {
+                if (ctx.mcpReq.signal.aborted)
                     extensionError(
                         'STALE_CONNECTION',
                         'Terminal request connection closed',
                     );
-                const terminal = current();
+                const terminal = current(ctx, method);
                 if (!terminal)
                     extensionError(
                         'TERMINAL_DISABLED',
@@ -63,7 +61,7 @@ export function registerTerminal(
                     );
                 switch (method) {
                     case 'create': {
-                        const p = parse(params.create, request.params);
+                        const p = parse(params.create, input);
                         const result = await terminal.create({
                             operationId: p.operationId,
                             ...p.params,
@@ -85,7 +83,7 @@ export function registerTerminal(
                     }
                     case 'status': {
                         const result = terminal.status(
-                            parse(params.status, request.params).operationId,
+                            parse(params.status, input).operationId,
                         );
                         // Unknown/failed are not successful closed operations. Closing
                         // remains active until the PTY actually reports completion.
@@ -114,7 +112,7 @@ export function registerTerminal(
                         };
                     }
                     case 'resize': {
-                        const p = parse(params.resize, request.params);
+                        const p = parse(params.resize, input);
                         const result = terminal.resize(
                             p.resourceId,
                             p.params.cols,
@@ -123,7 +121,7 @@ export function registerTerminal(
                         return { cols: result.cols, rows: result.rows };
                     }
                     case 'renew': {
-                        const p = parse(params.renew, request.params);
+                        const p = parse(params.renew, input);
                         const status = terminal.status(p.operationId);
                         if (
                             !('terminalId' in status) ||
@@ -140,7 +138,7 @@ export function registerTerminal(
                         };
                     }
                     case 'close': {
-                        const p = parse(params.close, request.params);
+                        const p = parse(params.close, input);
                         return terminal.closeOperation(p.operationId, p.reason);
                     }
                 }

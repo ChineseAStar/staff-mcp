@@ -40,8 +40,7 @@ test("MCP initialize response advertises the package version", async () => {
     path.join(STAFF_MCP_PACKAGE_ROOT, "dist", "src", "package-info.js")
   ).href;
   const script = `
-    import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-    import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+    import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
     import { createServerFactory } from ${JSON.stringify(serverUrl)};
     import { STAFF_MCP_VERSION } from ${JSON.stringify(packageInfoUrl)};
 

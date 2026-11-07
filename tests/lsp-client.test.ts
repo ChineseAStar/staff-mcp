@@ -1,5 +1,5 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { Client } from "@modelcontextprotocol/client";
 import * as path from "path";
 
 async function run() {
@@ -32,7 +32,8 @@ async function run() {
         name: "get_diagnostics",
         arguments: { path: file.path }
       });
-      console.log(`Diagnostics:`, Array.isArray(diags.content) ? diags.content[0].text : "None");
+      const firstDiagnostic = diags.content[0];
+      console.log(`Diagnostics:`, firstDiagnostic?.type === "text" ? firstDiagnostic.text : "None");
 
       console.log("Testing hover...");
       const hoverInfo = await client.callTool({

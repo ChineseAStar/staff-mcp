@@ -28,7 +28,6 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.32.1",
     "@vscode/ripgrep": "1.18.0",
     "commander": "^15.0.0",
     "cors": "^2.8.6",
@@ -36,7 +35,11 @@
     "js-yaml": "^5.4.2",
     "undici": "^7.30.0",
     "yazl": "3.3.1",
-    "zod": "^4.6.5"
+    "zod": "^4.6.5",
+    "@modelcontextprotocol/server": "2.4.0",
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/core": "2.4.0",
+    "@modelcontextprotocol/node": "2.1.2"
   },
   "devDependencies": {
     "@codemirror/commands": "6.11.1",

@@ -1,19 +1,9 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import {
-  CallToolRequestSchema,
-  ListPromptsRequestSchema,
-  ListToolsRequestSchema,
-  type CallToolResult,
-  type ListToolsResult,
-  type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+import { InMemoryTransport, McpServer, Server } from "@modelcontextprotocol/server";
+import type { RequestOptions, CallToolResult, ListToolsResult, Tool } from "@modelcontextprotocol/server";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { Client } from "@modelcontextprotocol/client";
 import { registerMcpClientTools } from "../src/tools/mcp-client-tools.js";
 
 const instructions = "Use workspace paths.\nPreserve original file content.";
@@ -66,7 +56,7 @@ async function connectStaff(t: TestContext, maxSessions = 5) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   const invoke = async (name: string, args: Record<string, unknown>, options?: RequestOptions) =>
-    await client.callTool({ name, arguments: args }, undefined, options) as CallToolResult;
+    await client.callTool({ name, arguments: args }, options) as CallToolResult;
   t.after(async () => {
     try {
       await invoke("manage_mcp_session", { action: "stop", sessionId: "dev" });
@@ -87,15 +77,15 @@ async function createHarness(t: TestContext, options: {
   );
   const cursors: Array<string | undefined> = [];
   let promptCalls = 0;
-  nested.setRequestHandler(ListToolsRequestSchema, (request, extra) => {
+  nested.setRequestHandler('tools/list', (request, ctx) => {
     cursors.push(request.params?.cursor);
-    return options.page?.(request.params?.cursor, extra.signal) ?? { tools };
+    return options.page?.(request.params?.cursor, ctx.mcpReq.signal) ?? { tools };
   });
-  nested.setRequestHandler(ListPromptsRequestSchema, () => {
+  nested.setRequestHandler('prompts/list', () => {
     promptCalls++;
     return { prompts: [{ name: "review_prompt", description: "Review the current workspace." }] };
   });
-  nested.setRequestHandler(CallToolRequestSchema, (request) => options.callResult ?? {
+  nested.setRequestHandler('tools/call', (request) => options.callResult ?? {
     content: [{ type: "text", text: JSON.stringify(request.params.arguments) }],
   });
 
@@ -368,11 +358,11 @@ test("pagination forwards cancellation on every request without introducing time
     (call.arguments[0] as { method?: string }).method === "tools/list" && call.this === h.nestedClient
   );
   assert.equal(listRequests.length, 2);
-  const firstOptions = listRequests[0].arguments[2]!;
+  const firstOptions = listRequests[0].arguments[1] as RequestOptions;
   assert.ok(firstOptions.signal instanceof AbortSignal);
   assert.equal(firstOptions.signal.aborted, true);
   assert.deepEqual(Object.keys(firstOptions), ["signal"]);
-  assert.equal(listRequests[1].arguments[2]!.signal, firstOptions.signal);
+  assert.equal((listRequests[1].arguments[1] as RequestOptions).signal, firstOptions.signal);
 });
 
 test("T16: calls retain exact JSON arguments, paginated validation, timeout and caller signal", async (t) => {
@@ -394,9 +384,8 @@ test("T16: calls retain exact JSON arguments, paginated validation, timeout and 
   const nestedCall = spy.mock.calls.find((call) => call.this === h.nestedClient)!;
   assert.ok(nestedCall);
   assert.deepEqual(nestedCall.arguments[0], { name: "read_file", arguments: { path: "example.txt", startLine: 2 } });
-  assert.equal(nestedCall.arguments[1], undefined);
-  assert.equal(nestedCall.arguments[2]!.timeout, 3600000);
-  assert.ok(nestedCall.arguments[2]!.signal instanceof AbortSignal);
+  assert.equal(nestedCall.arguments[1]!.timeout, 3600000);
+  assert.ok(nestedCall.arguments[1]!.signal instanceof AbortSignal);
 });
 
 test("T16: call parameter errors and failed execution keep their existing schema feedback", async (t) => {
@@ -426,12 +415,11 @@ test("T16: management and calls work end to end with an actual local stdio subpr
   assert.deepEqual(Object.keys(discoverySchema.properties!), ["sessionId", "toolName"]);
   assert.equal(text(await invoke("manage_mcp_session", { action: "list" })), "No active MCP sessions. (Active sessions: 0/1)");
   const source = `
-    import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-    import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-    import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+    import { Server } from "@modelcontextprotocol/server";
+    import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
     const server = new Server({ name: "local-stdio-test", version: "1.0.0" }, { capabilities: { tools: {} } });
-    server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [${JSON.stringify(readTool)}] }));
-    server.setRequestHandler(CallToolRequestSchema, ({ params }) => ({ content: [{ type: "text", text: JSON.stringify({ args: params.arguments, env: process.env.STAFF_MCP_TEST_ENV }) }] }));
+    server.setRequestHandler("tools/list", () => ({ tools: [${JSON.stringify(readTool)}] }));
+    server.setRequestHandler("tools/call", ({ params }) => ({ content: [{ type: "text", text: JSON.stringify({ args: params.arguments, env: process.env.STAFF_MCP_TEST_ENV }) }] }));
     await server.connect(new StdioServerTransport());
   `;
   const start = await invoke("manage_mcp_session", {

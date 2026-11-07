@@ -1,4 +1,4 @@
-import { McpServer, RegisteredPrompt, RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, RegisteredPrompt, RegisteredTool } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { SkillManager, SkillInfo } from "../skills/manager.js";
 import * as fs from "fs/promises";
@@ -170,7 +170,7 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
             skill.name,
             {
               description: skill.description,
-              argsSchema: {}
+              argsSchema: z.object({})
             },
             callbackFn
           );

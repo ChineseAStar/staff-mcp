@@ -2,15 +2,12 @@ import * as fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import {
-    ListResourcesRequestSchema,
-    ListResourceTemplatesRequestSchema,
-    ReadResourceRequestSchema,
-    SubscribeRequestSchema,
-    UnsubscribeRequestSchema,
-    McpError,
-} from '@modelcontextprotocol/sdk/types.js';
+import { ProtocolError } from '@modelcontextprotocol/server';
+import type {
+    McpServer,
+    ServerContext,
+    ServerNotifier,
+} from '@modelcontextprotocol/server';
 import {
     FileCore,
     FileError,
@@ -22,13 +19,12 @@ import {
 } from './file-core.js';
 import { TransferManager } from './transfers.js';
 import {
-    APPS,
     DATA,
     FILES,
-    TERMINAL,
     parse as parseExtension,
     operationId,
     supports,
+    isModernRequest,
 } from '../extensions/protocol.js';
 import { FILE_MANAGER, readAppResource } from '../extensions/apps.js';
 import { TEXT_LIMIT, TEXT_PREVIEW_LIMIT } from './text-limits.js';
@@ -106,9 +102,9 @@ function parse<T extends z.ZodTypeAny>(schema: T, data: unknown): z.infer<T> {
     return parsed.data;
 }
 function rpc(error: unknown) {
-    if (error instanceof McpError) return error;
+    if (error instanceof ProtocolError) return error;
     const e = fileError(error);
-    return new McpError(e.rpcCode, e.message, {
+    return new ProtocolError(e.rpcCode, e.message, {
         code: e.code,
         ...(e.phase ? { phase: e.phase } : {}),
     });
@@ -157,7 +153,6 @@ export class FileManagerSession {
     readonly transfers: TransferManager;
     initialized = false;
     closed = false;
-    private readonly negotiated = new Set<string>();
     constructor(
         core: FileCore,
         private readonly server: McpServer,
@@ -165,25 +160,23 @@ export class FileManagerSession {
         requireData: () => void,
     ) {
         this.transfers = new TransferManager(core, runtimeDirectory, () => {
-            this.requireExtension();
+            if (this.closed) fail('STALE_CONNECTION', 'File session closed');
             requireData();
         });
     }
     initialize() {
         if (this.closed || this.initialized) return;
-        for (const extension of [APPS, FILES, TERMINAL, DATA]) {
-            if (supports(this.server, extension))
-                this.negotiated.add(extension);
-        }
         this.initialized = true;
     }
-    supports(extension: string) {
+    supports(extension: string, ctx: ServerContext) {
         return (
-            !this.closed && this.initialized && this.negotiated.has(extension)
+            !this.closed &&
+            (this.initialized || isModernRequest(ctx)) &&
+            supports(this.server, extension, ctx)
         );
     }
-    requireExtension(extension = FILES) {
-        if (!this.supports(extension))
+    requireExtension(extension: string, ctx: ServerContext) {
+        if (!this.supports(extension, ctx))
             fail(
                 'CAPABILITY_UNAVAILABLE',
                 'Extension version 1 is unavailable on this initialized session',
@@ -200,7 +193,12 @@ export class FileManagerSession {
 export function registerFileResources(
     server: McpServer,
     core: FileCore,
-    readApp?: (uri: string) => ReturnType<typeof readAppResource>,
+    readApp?: (
+        uri: string,
+        ctx: ServerContext,
+    ) => ReturnType<typeof readAppResource>,
+    notifications?: ServerNotifier,
+    modern = false,
 ) {
     const protocol = server.server;
     const subscriptions = new Set<string>();
@@ -212,18 +210,33 @@ export function registerFileResources(
         previousInitialized?.();
     };
     const guarded =
-        <T, R>(handler: (request: T) => Promise<R>) =>
-        async (request: T, extra?: { signal?: AbortSignal }) => {
+        <T, R>(handler: (request: T, ctx: ServerContext) => Promise<R>) =>
+        async (request: T, ctx: ServerContext) => {
             try {
-                if (extra?.signal?.aborted)
+                if (ctx.mcpReq.signal.aborted)
                     fail('STALE_CONNECTION', 'Request connection closed');
-                return await handler(request);
+                return await handler(request, ctx);
             } catch (e) {
                 throw rpc(e);
             }
         };
     const notify = (rootId: string, changedPath: string) => {
-        if (closed || !initialized) return;
+        if (closed) return;
+        if (modern) {
+            // SDK subscriptions/listen owns URI filtering and delivery. Publish
+            // the changed file and directory manifests containing that entry.
+            let file = changedPath;
+            for (;;) {
+                const uri = resourceUri(rootId, file);
+                if (notifications) notifications.resourceUpdated(uri);
+                else void protocol.sendResourceUpdated({ uri }).catch(() => {});
+                if (file === '') break;
+                const separator = file.lastIndexOf('/');
+                file = separator === -1 ? '' : file.slice(0, separator);
+            }
+            return;
+        }
+        if (!initialized) return;
         for (const uri of subscriptions) {
             const entry = resource(uri);
             if (entry.rootId !== rootId) continue;
@@ -237,7 +250,7 @@ export function registerFileResources(
         }
     };
     protocol.setRequestHandler(
-        ListResourcesRequestSchema,
+        'resources/list',
         guarded(async (request) => {
             if (request.params?.cursor !== undefined)
                 fail('INVALID_CURSOR', 'Resource list has no further pages');
@@ -247,7 +260,7 @@ export function registerFileResources(
         }),
     );
     protocol.setRequestHandler(
-        ListResourceTemplatesRequestSchema,
+        'resources/templates/list',
         guarded(async (request) => {
             if (request.params?.cursor)
                 fail(
@@ -265,10 +278,10 @@ export function registerFileResources(
         }),
     );
     protocol.setRequestHandler(
-        ReadResourceRequestSchema,
-        guarded(async (request) => {
+        'resources/read',
+        guarded(async (request, ctx) => {
             const uri = request.params.uri;
-            const app = await readApp?.(uri);
+            const app = await readApp?.(uri, ctx);
             if (app) return app;
             const entry = resource(uri);
             const full = await core.resolve(entry.rootId, entry.file);
@@ -326,7 +339,7 @@ export function registerFileResources(
         }),
     );
     protocol.setRequestHandler(
-        SubscribeRequestSchema,
+        'resources/subscribe',
         guarded(async (request) => {
             const entry = resource(request.params.uri);
             await core.resolve(entry.rootId, entry.file);
@@ -340,7 +353,7 @@ export function registerFileResources(
         }),
     );
     protocol.setRequestHandler(
-        UnsubscribeRequestSchema,
+        'resources/unsubscribe',
         guarded(async (request) => {
             resource(request.params.uri);
             subscriptions.delete(request.params.uri);
@@ -393,22 +406,26 @@ export function registerFileManager(
             );
         return session;
     }
-    function requireExtension(extension = FILES) {
-        current().requireExtension(extension);
+    function requireExtension(ctx: ServerContext, extension = FILES) {
+        current().requireExtension(extension, ctx);
     }
     const guarded =
-        <T, R>(handler: (request: T) => Promise<R>) =>
-        async (request: T, extra?: { signal?: AbortSignal }) => {
+        <T, R>(handler: (request: T, ctx: ServerContext) => Promise<R>) =>
+        async (request: T, ctx: ServerContext) => {
             try {
-                if (extra?.signal?.aborted)
+                if (ctx.mcpReq.signal.aborted)
                     fail('STALE_CONNECTION', 'Request connection closed');
-                return await handler(request);
+                return await handler(request, ctx);
             } catch (e) {
                 throw rpc(e);
             }
         };
-    async function extensionCall(method: keyof typeof params, input: unknown) {
-        requireExtension();
+    async function extensionCall(
+        method: keyof typeof params,
+        input: unknown,
+        ctx: ServerContext,
+    ) {
+        requireExtension(ctx);
         // Separate parse calls preserve the exact shape/types for every public method.
         switch (method) {
             case 'roots':
@@ -476,11 +493,9 @@ export function registerFileManager(
     }
     for (const method of Object.keys(params) as (keyof typeof params)[]) {
         protocol.setRequestHandler(
-            z.object({
-                method: z.literal(`${FILE_MANAGER}/${method}`),
-                params: z.unknown().optional(),
-            }),
-            guarded(async (request) => extensionCall(method, request.params)),
+            `${FILE_MANAGER}/${method}`,
+            { params: z.unknown().optional() },
+            guarded(async (input, ctx) => extensionCall(method, input, ctx)),
         );
     }
     const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -561,28 +576,32 @@ export function registerFileManager(
         transferParams,
     ) as (keyof typeof transferParams)[]) {
         protocol.setRequestHandler(
-            z.object({
-                method: z.literal(`${FILES}/v1/${method}`),
-                params: z.unknown().optional(),
-            }),
-            guarded(async (request) => {
-                requireExtension();
+            `${FILES}/v1/${method}`,
+            { params: z.unknown().optional() },
+            guarded(async (input, ctx) => {
+                requireExtension(ctx);
+                if (
+                    method === 'prepare' ||
+                    method === 'commit' ||
+                    method === 'renew'
+                )
+                    requireExtension(ctx, DATA);
                 const transfers = current().transfers;
                 switch (method) {
                     case 'roots':
-                        parseExtension(transferParams.roots, request.params);
+                        parseExtension(transferParams.roots, input);
                         return core.roots();
                     case 'resolve':
                         return resolveUri(
                             parseExtension(
                                 transferParams.resolve,
-                                request.params,
+                                input,
                             ).uri,
                         );
                     case 'stat': {
                         const p = parseExtension(
                             transferParams.stat,
-                            request.params,
+                            input,
                         );
                         const stat = await core.stat(p.rootId, p.path, true);
                         if (!stat.operations.read || stat.version === undefined)
@@ -593,20 +612,20 @@ export function registerFileManager(
                         return transfers.prepare(
                             parseExtension(
                                 transferParams.prepare,
-                                request.params,
+                                input,
                             ),
                         );
                     case 'status':
                         return transfers.status(
                             parseExtension(
                                 transferParams.status,
-                                request.params,
+                                input,
                             ).operationId,
                         );
                     case 'commit': {
                         const p = parseExtension(
                             transferParams.commit,
-                            request.params,
+                            input,
                         );
                         return transfers.commit(
                             p.operationId,
@@ -616,21 +635,21 @@ export function registerFileManager(
                     }
                     case 'renew':
                         return transfers.renew(
-                            parseExtension(transferParams.renew, request.params)
+                            parseExtension(transferParams.renew, input)
                                 .operationId,
                         );
                     case 'cancel':
                         return transfers.release(
                             parseExtension(
                                 transferParams.cancel,
-                                request.params,
+                                input,
                             ).operationId,
                         );
                     case 'release':
                         return transfers.release(
                             parseExtension(
                                 transferParams.release,
-                                request.params,
+                                input,
                             ).operationId,
                         );
                 }

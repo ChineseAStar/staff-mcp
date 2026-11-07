@@ -1,8 +1,8 @@
 import type {
     Transport,
     TransportSendOptions,
-} from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
+    JSONRPCMessage,
+} from '@modelcontextprotocol/server';
 
 interface PendingSend {
     message: JSONRPCMessage;
@@ -37,6 +37,14 @@ export class FifoTransport implements Transport {
 
     setProtocolVersion(version: string): void {
         this.raw.setProtocolVersion?.(version);
+    }
+
+    get hasPerRequestStream(): boolean | undefined {
+        return this.raw.hasPerRequestStream;
+    }
+
+    setSupportedProtocolVersions(versions: string[]): void {
+        this.raw.setSupportedProtocolVersions?.(versions);
     }
 
     async start(): Promise<void> {

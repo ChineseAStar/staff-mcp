@@ -8,6 +8,16 @@ It provides secure file management, shell execution, LSP-powered code intelligen
 
 ---
 
+## SDK and protocol compatibility in source
+
+The source uses the split MCP SDK 2 packages (`client`, `server`, `core` 2.4.0 and `node` 2.1.2). This is not a new npm release or a deployment of this checkout; the published baseline below remains 2.1.0.
+
+- **Staff listeners remain on the legacy MCP protocol** over stdio, reverse and Streamable HTTP while the implementation uses SDK 2. Existing clients and new clients negotiating legacy retain the original subscriptions, initialization deadlines, extension/data bindings, transfers and terminal lifetime. This migration does not claim staff support for pinned modern `2026-07-28` clients.
+- Modern staff serving is deliberately not enabled. The public SDK does not expose subscribed descendant URIs needed to preserve directory move/delete invalidation. Modern per-request HTTP also does not supply the existing connection owner for files/PTY/data state. Neither a second subscription protocol, caller-supplied session identity nor removal of Apps is used to disguise these gaps. Completing modern compatibility is separate from the SDK migration.
+- Nested MCP clients negotiate with new and old servers in the original process. An unknown startup command is not launched again for a disposable protocol probe; a peer that exits on discovery fails startup rather than being respawned automatically.
+- Extension discovery uses `capabilities.extensions` when present and only falls back to `experimental` when the new container is absent. An empty or invalid new grant does not inherit an old grant. Modern requests carry their own capabilities; they cannot borrow another request's capability context.
+- Tools keep complete, guarded pagination and per-call output validation through public SDK APIs. File commit/status, cancellation, leases and no-replay rules are unchanged. The Skills tools remain the existing tools; no Skills extension is enabled by this migration.
+
 ## Compatibility and coordinated upgrades
 
 Version 2.1.0 removes the workspace-only boundary from ordinary file tools and command working directories inside an explicitly marked container. Host mode remains restricted to configured directories. Files App/resource roots and file-transfer RPCs still use the published roots; private staging, root protection and file transaction rules remain in force. This is not permission to access the Docker host: OS user permissions and mounts remain the boundary, and writable workspace mounts are persistent. `STAFF_MCP_IS_DOCKER=1` is an operator-controlled launch assertion, not something inferred from the filesystem or selected by a model request. Do not set it for Host processes.

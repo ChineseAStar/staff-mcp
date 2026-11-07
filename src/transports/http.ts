@@ -3,12 +3,12 @@ import { handleNodeRequest } from '../data/node.js';
 import { configureExtensionData } from '../extensions/runtime.js';
 import express from 'express';
 import cors from 'cors';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import {
     isInitializeRequest,
     isJSONRPCRequest,
-} from '@modelcontextprotocol/sdk/types.js';
+} from '@modelcontextprotocol/server';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 
@@ -25,7 +25,7 @@ export function getHttpAuthToken(token?: string): string | undefined {
 export const HTTP_MAX_SESSIONS = 64;
 interface HttpSession {
     server: McpServer;
-    transport: StreamableHTTPServerTransport;
+    transport: NodeStreamableHTTPServerTransport;
     closing?: Promise<void>;
 }
 
@@ -164,7 +164,7 @@ export async function startHttpServer(
         };
         try {
             const server = serverFactory();
-            const transport = new StreamableHTTPServerTransport({
+            const transport = new NodeStreamableHTTPServerTransport({
                 sessionIdGenerator: () => id,
                 enableJsonResponse: true,
             });

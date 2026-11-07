@@ -1,4 +1,5 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
+import { serveConnection } from './serveConnection.js';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { configureExtensionData } from '../extensions/runtime.js';
@@ -66,20 +67,24 @@ export async function startReverseServer(
     let backoff = options.reconnect?.initialDelay ?? 1000;
     const run = async () => {
         while (!abort.signal.aborted) {
-            let server: McpServer | undefined;
+            let connection: ReturnType<typeof serveConnection> | undefined;
             let initializedAt: number | undefined;
-            let previousInitialized: (() => void) | undefined;
             let initializationTimer: NodeJS.Timeout | undefined;
             const attempt = new AbortController();
             const stopped = () => {
                 attempt.abort();
                 void active?.close();
             };
-            abort.signal.addEventListener('abort', stopped, { once: true });
+            abort.signal.addEventListener('abort', stopped, {
+                once: true,
+            });
             const http = createReverseHttp(url, proxy, attempt.signal);
             const transport = new ReverseSseTransport(
                 url,
-                { Authorization: `Bearer ${token}`, 'X-MCP-Server-Name': name },
+                {
+                    Authorization: `Bearer ${token}`,
+                    'X-MCP-Server-Name': name,
+                },
                 http.fetch,
                 options.connectTimeout,
                 options.heartbeat?.readTimeout,
@@ -89,72 +94,92 @@ export async function startReverseServer(
             };
             active = transport;
             try {
-                server = serverFactory();
-                configureExtensionData(
-                    server,
-                    (binding, accept, signal, origin, supportsPurpose) => {
-                        if (origin !== undefined)
-                            throw new Error(
-                                'Reverse data does not accept an advertised origin',
-                            );
-                        const sessionId = transport.sessionId;
-                        if (
-                            !sessionId ||
-                            attempt.signal.aborted ||
-                            signal.aborted
-                        )
-                            throw new Error(
-                                'Reverse data control session unavailable',
-                            );
-                        const expected = new URL(url.href);
-                        expected.pathname =
-                            url.pathname.replace(/\/$/, '') +
-                            '/data/' +
-                            sessionId;
-                        return {
-                            session: new HttpDataSession({
-                                role: 'remote',
+                connection = serveConnection(
+                    () => {
+                        const server = serverFactory();
+                        configureExtensionData(
+                            server,
+                            (
                                 binding,
                                 accept,
+                                signal,
+                                origin,
                                 supportsPurpose,
-                                fetch: http.fetch,
-                                resolveEndpoint: (endpoint) => {
-                                    // Match before URL parsing can normalize an unsafe spelling.
-                                    if (
-                                        endpoint !== expected.pathname &&
-                                        endpoint !== expected.href
-                                    )
-                                        throw new Error(
-                                            'Reverse data endpoint rejected',
-                                        );
-                                    return new URL(endpoint, url);
-                                },
-                                validateEndpoint: (endpoint) => {
-                                    if (
-                                        endpoint.origin !== expected.origin ||
-                                        endpoint.pathname !==
-                                            expected.pathname ||
-                                        endpoint.username ||
-                                        endpoint.password ||
-                                        endpoint.search ||
-                                        endpoint.hash
-                                    )
-                                        throw new Error(
-                                            'Reverse data endpoint rejected',
-                                        );
-                                },
-                            }),
+                            ) => {
+                                if (origin !== undefined)
+                                    throw new Error(
+                                        'Reverse data does not accept an advertised origin',
+                                    );
+                                const sessionId = transport.sessionId;
+                                if (
+                                    !sessionId ||
+                                    attempt.signal.aborted ||
+                                    signal.aborted
+                                )
+                                    throw new Error(
+                                        'Reverse data control session unavailable',
+                                    );
+                                const expected = new URL(url.href);
+                                expected.pathname =
+                                    url.pathname.replace(/\/$/, '') +
+                                    '/data/' +
+                                    sessionId;
+                                return {
+                                    session: new HttpDataSession({
+                                        role: 'remote',
+                                        binding,
+                                        accept,
+                                        supportsPurpose,
+                                        fetch: http.fetch,
+                                        resolveEndpoint: (endpoint) => {
+                                            // Match before URL parsing can normalize an unsafe spelling.
+                                            if (
+                                                endpoint !==
+                                                    expected.pathname &&
+                                                endpoint !== expected.href
+                                            )
+                                                throw new Error(
+                                                    'Reverse data endpoint rejected',
+                                                );
+                                            return new URL(endpoint, url);
+                                        },
+                                        validateEndpoint: (endpoint) => {
+                                            if (
+                                                endpoint.origin !==
+                                                    expected.origin ||
+                                                endpoint.pathname !==
+                                                    expected.pathname ||
+                                                endpoint.username ||
+                                                endpoint.password ||
+                                                endpoint.search ||
+                                                endpoint.hash
+                                            )
+                                                throw new Error(
+                                                    'Reverse data endpoint rejected',
+                                                );
+                                        },
+                                    }),
+                                };
+                            },
+                        );
+                        const ready = () => {
+                            initializedAt = performance.now();
+                            clearTimeout(initializationTimer);
+                            log.info('MCP ready on a new SSE session.');
                         };
+                        const previousInitialized = server.server.oninitialized;
+                        server.server.oninitialized = () => {
+                            previousInitialized?.();
+                            ready();
+                        };
+                        return server;
+                    },
+                    transport,
+                    () => {
+                        log.warn('Control transport error.');
                     },
                 );
-                previousInitialized = server.server.oninitialized;
-                server.server.oninitialized = () => {
-                    previousInitialized?.();
-                    initializedAt = performance.now();
-                    clearTimeout(initializationTimer);
-                    log.info('MCP initialized on a new SSE session.');
-                };
-                await server.connect(transport);
+                await connection.started;
                 // start() completes once the SSE endpoint is admitted; only then start the initialization deadline.
                 if (initializedAt === undefined) {
                     initializationTimer = setTimeout(() => {
@@ -165,7 +190,7 @@ export async function startReverseServer(
                     }, options.initializationTimeout ?? 15000);
                     initializationTimer.unref();
                 }
-                await transport.closed;
+                await connection.closed;
             } catch {
                 if (!abort.signal.aborted)
                     log.warn(
@@ -182,8 +207,7 @@ export async function startReverseServer(
                 attempt.abort();
                 await http.close().catch(() => {});
                 abort.signal.removeEventListener('abort', stopped);
-                await server?.close();
-                if (server) server.server.oninitialized = previousInitialized;
+                await connection?.close();
                 active = undefined;
             }
             if (abort.signal.aborted || options.reconnect?.enabled === false)

@@ -548,7 +548,7 @@ program
             );
         } else {
             await runHostService(
-                () => startStdioServer(serverFactory()),
+                () => startStdioServer(serverFactory),
                 false,
             );
         }

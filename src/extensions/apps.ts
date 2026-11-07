@@ -1,5 +1,5 @@
 import * as fs from 'node:fs/promises';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import {
     APPS,
@@ -64,27 +64,25 @@ const terminal = {
 
 export function registerApps(
     server: McpServer,
-    requireExtension: (extension: string) => void,
+    requireExtension: (extension: string, ctx: ServerContext) => void,
     terminalAvailable: () => boolean,
-    negotiated: (extension: string) => boolean,
+    negotiated: (extension: string, ctx: ServerContext) => boolean,
 ) {
     server.server.setRequestHandler(
-        z.object({
-            method: z.literal(`${APPS}/v1/list`),
-            params: z.unknown().optional(),
-        }),
-        async (request, extra) => {
-            if (extra.signal.aborted)
+        `${APPS}/v1/list`,
+        { params: z.unknown().optional() },
+        async (input, ctx) => {
+            if (ctx.mcpReq.signal.aborted)
                 extensionError(
                     'STALE_CONNECTION',
                     'Apps request connection closed',
                 );
-            parse(z.object({}).strict(), request.params);
-            requireExtension(APPS);
+            parse(z.object({}).strict(), input);
+            requireExtension(APPS, ctx);
             return {
                 apps: [
-                    ...(negotiated(FILES) ? [files] : []),
-                    ...(terminalAvailable() && negotiated(STREAMS)
+                    ...(negotiated(FILES, ctx) ? [files] : []),
+                    ...(terminalAvailable() && negotiated(STREAMS, ctx)
                         ? [terminal]
                         : []),
                 ],
@@ -95,13 +93,14 @@ export function registerApps(
 
 export async function readAppResource(
     uri: string,
-    requireExtension: (extension: string) => void,
+    requireExtension: (extension: string, ctx: ServerContext) => void,
     terminalAvailable: boolean,
+    ctx: ServerContext,
 ) {
     if (uri !== FILE_UI_URI && uri !== TERMINAL_UI_URI) return undefined;
-    requireExtension(APPS);
+    requireExtension(APPS, ctx);
     const terminal = uri === TERMINAL_UI_URI;
-    requireExtension(terminal ? STREAMS : FILES);
+    requireExtension(terminal ? STREAMS : FILES, ctx);
     if (terminal && !terminalAvailable) return undefined;
     const text = await fs.readFile(
         new URL(

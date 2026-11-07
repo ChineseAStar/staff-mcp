@@ -1,9 +1,8 @@
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import {
     JSONRPCMessageSchema,
     PingRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
+} from '@modelcontextprotocol/core';
+import type { Transport, JSONRPCMessage } from '@modelcontextprotocol/server';
 
 const MESSAGE_LIMIT = 4 * 1024 * 1024;
 const QUEUE_LIMIT = 8 * 1024 * 1024;

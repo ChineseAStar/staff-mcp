@@ -1,7 +1,7 @@
 import { spawn, execSync, ChildProcess } from "child_process";
 import * as os from "os";
 import * as fs from "fs";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { SecurityManager } from "../security.js";
 import { shellInitPath, SHELL_INIT_COMMAND } from "../shell-init.js";
@@ -455,7 +455,7 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
         timeout: z.number().optional().default(DEFAULT_TIMEOUT).describe(`How long to wait (in milliseconds) for the command to finish before it is moved to the background (default: ${DEFAULT_TIMEOUT}ms). The process is NOT killed when this elapses — you receive a task ID to follow up via manage_background_task. Values above ${MAX_WAIT_TIMEOUT}ms are clamped to ${MAX_WAIT_TIMEOUT}ms; for longer waits, poll via manage_background_task (action: logs, with wait).`),
       }).strict(),
     },
-    async ({ command, cwd, timeout }, extra) => {
+    async ({ command, cwd, timeout }, ctx) => {
       try {
         const validatedCwd = security.validateDirectory(cwd || ".");
         // Clamp the blocking wait so the tool always responds well before any MCP
@@ -465,9 +465,9 @@ export function registerShellTools(server: McpServer, security: SecurityManager)
         const onAbort = () => console.error("[shell-tools] MCP request cancelled while the command may still be " +
           "running; it continues and auto-backgrounds on its own (locate it via manage_background_task, " +
           `action: list). command: ${command.slice(0, 200)}`);
-        extra?.signal?.addEventListener("abort", onAbort, { once: true });
+        ctx?.mcpReq.signal?.addEventListener("abort", onAbort, { once: true });
         const result = await executeCommandCore(command, validatedCwd, waitMs);
-        extra?.signal?.removeEventListener("abort", onAbort);
+        ctx?.mcpReq.signal?.removeEventListener("abort", onAbort);
         return {
           content: [{ type: "text", text: result.text }],
           ...(result.isError ? { isError: true } : {}),

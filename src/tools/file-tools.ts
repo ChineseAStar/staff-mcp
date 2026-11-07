@@ -4,7 +4,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import * as readline from "readline";
 import { createReadStream } from "fs";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { SecurityManager } from "../security.js";
 import { CHARACTER_LIMIT, SEARCH_MAX_COLUMNS, SEARCH_MAX_MATCHES, SEARCH_EXEC_MAX_BUFFER, IMAGE_SIZE_LIMIT, FILE_SNIFF_SIZE, SUPPORTED_IMAGE_MIMES, IMAGE_MIME_BY_EXTENSION, sniffImageMime, isBinaryFile } from "../constants.js";

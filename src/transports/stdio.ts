@@ -1,5 +1,5 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { FifoTransport } from '../data/FifoTransport.js';
 import {
@@ -8,56 +8,55 @@ import {
 } from '../data/StdioDataSession.js';
 import { configureExtensionData } from '../extensions/runtime.js';
 import { registerServerCleanup } from '../utils/server-lifecycle.js';
+import { serveConnection } from './serveConnection.js';
 
 export function redirectStdioLogsToStderr(): void {
     // MCP stdio reserves stdout for JSON-RPC frames.
     console.log = (...args) => console.error(...args);
 }
 
-export async function startStdioServer(server: McpServer) {
-    let session: StdioDataSession | undefined;
-    server.server.setNotificationHandler(
-        z.object({
-            method: z.literal(DATA_FRAME_METHOD),
-            params: z.unknown(),
-        }),
-        (notification) => {
-            session?.handleNotification(notification.params);
-        },
-    );
-    registerServerCleanup(server, () => {
-        server.server.removeNotificationHandler(DATA_FRAME_METHOD);
-        session?.close();
-        session = undefined;
-    });
-    configureExtensionData(
-        server,
-        (binding, accept, signal, _origin, supportsPurpose) => {
-            signal.throwIfAborted();
-            session = new StdioDataSession({
-                role: 'remote',
-                binding,
-                accept,
-                supportsPurpose,
-                sendNotification: (params) =>
-                    server.server.notification({
-                        method: DATA_FRAME_METHOD,
-                        params,
-                    }),
-            });
-            return { session };
-        },
-        'stdio',
-    );
+export async function startStdioServer(serverFactory: () => McpServer) {
     const transport = new FifoTransport(new StdioServerTransport());
-    let resolveClosed!: () => void;
-    let rejectClosed!: (error: unknown) => void;
-    const closed = new Promise<void>((resolve, reject) => {
-        resolveClosed = resolve;
-        rejectClosed = reject;
-    });
-    // EOF may arrive before the caller receives the controller.
-    void closed.catch(() => {});
+    const connection = serveConnection(
+        () => {
+            const server = serverFactory();
+            let session: StdioDataSession | undefined;
+            server.server.setNotificationHandler(
+                DATA_FRAME_METHOD,
+                { params: z.unknown() },
+                (params) => {
+                    session?.handleNotification(params);
+                },
+            );
+            registerServerCleanup(server, () => {
+                server.server.removeNotificationHandler(DATA_FRAME_METHOD);
+                session?.close();
+                session = undefined;
+            });
+            configureExtensionData(
+                server,
+                (binding, accept, signal, _origin, supportsPurpose) => {
+                    signal.throwIfAborted();
+                    session = new StdioDataSession({
+                        role: 'remote',
+                        binding,
+                        accept,
+                        supportsPurpose,
+                        sendNotification: (params) =>
+                            server.server.notification({
+                                method: DATA_FRAME_METHOD,
+                                params,
+                            }),
+                    });
+                    return { session };
+                },
+                'stdio',
+            );
+            return server;
+        },
+        transport,
+        () => console.error('[staff-mcp] Stdio control transport error.'),
+    );
     let stopping: Promise<void> | undefined;
     let inputError: Error | undefined;
     const stop = () => {
@@ -65,14 +64,8 @@ export async function startStdioServer(server: McpServer) {
             process.stdin.removeListener('end', onStdinClosed);
             process.stdin.removeListener('close', onStdinClosed);
             process.stdin.removeListener('error', onStdinError);
-            try {
-                await server.close();
-                if (inputError) throw inputError;
-                resolveClosed();
-            } catch (error) {
-                rejectClosed(error);
-                throw error;
-            }
+            await connection.close();
+            if (inputError) throw inputError;
         });
         return stopping;
     };
@@ -83,12 +76,13 @@ export async function startStdioServer(server: McpServer) {
         inputError = new Error('MCP input stream failed.');
         onStdinClosed();
     };
-    transport.onclose = onStdinClosed;
     process.stdin.once('end', onStdinClosed);
     process.stdin.once('close', onStdinClosed);
     process.stdin.once('error', onStdinError);
+    const closed = connection.closed.then(() => stop());
+    void closed.catch(() => {});
     try {
-        await server.connect(transport);
+        await connection.started;
         if (process.stdin.readableEnded || process.stdin.destroyed)
             onStdinClosed();
         console.error('MCP Server (Stdio) is running.');

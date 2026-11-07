@@ -1,6 +1,9 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { McpError } from '@modelcontextprotocol/sdk/types.js';
+import { ProtocolError } from '@modelcontextprotocol/server';
+import type {
+    McpServer,
+    Transport,
+    ServerContext,
+} from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { DATA_OPEN_METHOD } from '../data/HttpDataSession.js';
 import type {
@@ -21,6 +24,7 @@ import {
     STREAMS,
     APPS,
     supports,
+    isModernRequest,
     extensionError,
     parse,
 } from './protocol.js';
@@ -67,10 +71,16 @@ export function installExtensions(
 ) {
     let terminalSession: TerminalSession | undefined;
     let openData:
-        | ((params: unknown) => Promise<Record<string, unknown>>)
+        | ((
+              params: unknown,
+              ctx: ServerContext,
+          ) => Promise<Record<string, unknown>>)
         | undefined;
     let configureData:
-        | ((params: unknown) => Promise<Record<string, unknown>>)
+        | ((
+              params: unknown,
+              ctx: ServerContext,
+          ) => Promise<Record<string, unknown>>)
         | undefined;
     let initialized = false;
     const enabled = new Set([
@@ -79,10 +89,12 @@ export function installExtensions(
         ...(core ? [FILES] : []),
         ...(terminalRuntime ? [STREAMS] : []),
     ]);
-    const negotiated = (extension: string) =>
-        initialized && enabled.has(extension) && supports(server, extension);
-    const requireExtension = (extension: string) => {
-        if (!negotiated(extension))
+    const negotiated = (extension: string, ctx: ServerContext) =>
+        (initialized || isModernRequest(ctx)) &&
+        enabled.has(extension) &&
+        supports(server, extension, ctx);
+    const requireExtension = (extension: string, ctx: ServerContext) => {
+        if (!negotiated(extension, ctx))
             extensionError(
                 'CAPABILITY_UNAVAILABLE',
                 'Extension version 1 is unavailable on this initialized session',
@@ -98,24 +110,24 @@ export function installExtensions(
     };
     registerApps(server, requireExtension, () => !!terminalSession, negotiated);
     if (terminalRuntime)
-        registerTerminal(server, () => {
-            requireExtension(STREAMS);
+        registerTerminal(server, (ctx, method) => {
+            requireExtension(STREAMS, ctx);
+            if (method !== 'status' && method !== 'close')
+                requireExtension(DATA, ctx);
             return terminalSession;
         });
     for (const method of ['cc.qqxing/data/v1/configure', DATA_OPEN_METHOD]) {
         server.server.setRequestHandler(
-            z.object({
-                method: z.literal(method),
-                params: z.unknown().optional(),
-            }),
-            async (request, extra) => {
-                if (extra.signal.aborted)
+            method,
+            { params: z.unknown().optional() },
+            async (input, ctx) => {
+                if (ctx.mcpReq.signal.aborted)
                     extensionError(
                         'STALE_CONNECTION',
                         'Data request connection closed',
                     );
                 try {
-                    requireExtension(DATA);
+                    requireExtension(DATA, ctx);
                     const handler =
                         method === DATA_OPEN_METHOD ? openData : configureData;
                     if (!handler)
@@ -123,10 +135,10 @@ export function installExtensions(
                             'STALE_CONNECTION',
                             'No active data connection',
                         );
-                    return await handler(request.params);
+                    return await handler(input, ctx);
                 } catch (error) {
                     if (error instanceof FileError)
-                        throw new McpError(error.rpcCode, error.message, {
+                        throw new ProtocolError(error.rpcCode, error.message, {
                             code: error.code,
                         });
                     throw error;
@@ -140,6 +152,14 @@ export function installExtensions(
         initialized = false;
         const lifetime = new AbortController();
         let data: ExtensionDataBinding | undefined;
+        let dataExtensions: Set<string> | undefined;
+        const requireDataExtension = (extension: string) => {
+            if (closed || !dataExtensions?.has(extension))
+                extensionError(
+                    'CAPABILITY_UNAVAILABLE',
+                    'Extension was not negotiated for this data connection',
+                );
+        };
         const currentData = () => {
             if (closed || !data)
                 extensionError(
@@ -149,7 +169,8 @@ export function installExtensions(
             return data.session;
         };
         const files = createFileSession?.(() => {
-            requireExtension(DATA);
+            requireDataExtension(FILES);
+            requireDataExtension(DATA);
             const session = currentData();
             if (
                 !session.supports(FILES, 'host-to-remote') ||
@@ -162,8 +183,8 @@ export function installExtensions(
         });
         const terminal = terminalRuntime
             ? new TerminalSession(workspaceCore, terminalRuntime, () => {
-                  requireExtension(STREAMS);
-                  requireExtension(DATA);
+                  requireDataExtension(STREAMS);
+                  requireDataExtension(DATA);
                   if (!currentData().supports(TERMINAL, 'duplex'))
                       extensionError(
                           'CAPABILITY_UNAVAILABLE',
@@ -173,13 +194,13 @@ export function installExtensions(
             : undefined;
         terminalSession = terminal;
         const accept = async (open: ChannelOpen, channel: DataChannel) => {
-            requireExtension(DATA);
+            requireDataExtension(DATA);
             if (open.purpose === FILES && files) {
-                requireExtension(FILES);
+                requireDataExtension(FILES);
                 return files.transfers.acceptChannel(open, channel);
             }
             if (open.purpose === TERMINAL && terminal) {
-                requireExtension(STREAMS);
+                requireDataExtension(STREAMS);
                 return terminal.acceptChannel(open, channel);
             }
             return extensionError(
@@ -189,9 +210,13 @@ export function installExtensions(
         };
         const supportsPurpose = (purpose: string) =>
             !closed &&
-            negotiated(DATA) &&
-            ((purpose === FILES && !!files && negotiated(FILES)) ||
-                (purpose === TERMINAL && !!terminal && negotiated(STREAMS)));
+            dataExtensions?.has(DATA) === true &&
+            ((purpose === FILES &&
+                !!files &&
+                dataExtensions?.has(FILES) === true) ||
+                (purpose === TERMINAL &&
+                    !!terminal &&
+                    dataExtensions?.has(STREAMS) === true));
         let configurationAttempted = false;
         let configuration: Promise<ExtensionDataBinding> | undefined;
         let dataCleanup: Promise<void> | undefined;
@@ -205,7 +230,7 @@ export function installExtensions(
             })();
             return dataCleanup;
         };
-        const configure = async (params: unknown) => {
+        const configure = async (params: unknown, ctx: ServerContext) => {
             if (closed)
                 extensionError('STALE_CONNECTION', 'Data connection closed');
             const { binding, origin, transport } = parse(
@@ -265,6 +290,9 @@ export function installExtensions(
                     'Data session is already configured',
                 );
             configurationAttempted = true;
+            dataExtensions = new Set(
+                [...enabled].filter((extension) => negotiated(extension, ctx)),
+            );
             configuration = Promise.resolve().then(() =>
                 registration.factory(
                     binding,
@@ -286,7 +314,7 @@ export function installExtensions(
                         );
                     // Preserve explicit parameter/protocol errors, but a runtime
                     // endpoint failure must not take down standard MCP control.
-                    if (error instanceof McpError) throw error;
+                    if (error instanceof ProtocolError) throw error;
                     console.error(
                         '[staff-mcp] Warning: Extension data unavailable: endpoint setup failed.',
                     );
@@ -311,7 +339,7 @@ export function installExtensions(
                 configuration = undefined;
             }
         };
-        const open = async (params: unknown) => {
+        const open = async (params: unknown, ctx: ServerContext) => {
             if (closed)
                 extensionError('STALE_CONNECTION', 'Data connection closed');
             if (!data)
@@ -335,6 +363,7 @@ export function installExtensions(
                 );
             requireExtension(
                 open.purpose === TERMINAL ? STREAMS : open.purpose,
+                ctx,
             );
             return { ...(await data.session.acceptOpen(params)) };
         };

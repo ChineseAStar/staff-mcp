@@ -1,13 +1,16 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
+import {
+  Client,
+  SSEClientTransport,
+  StreamableHTTPClientTransport,
+  SdkHttpError,
+} from "@modelcontextprotocol/client";
+import { McpServer } from "@modelcontextprotocol/server";
+import type { Transport, Tool } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { spawn, type ChildProcess } from "child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { ListToolsResultSchema, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { STAFF_MCP_VERSION } from "../package-info.js";
 
 interface McpSession {
@@ -16,6 +19,7 @@ interface McpSession {
   args: string[];
   process: ChildProcess | null;
   client: Client;
+  schemaValidator: AjvJsonSchemaValidator;
   transport: Transport | null;
   status: "starting" | "ready" | "stopping" | "error" | "exited";
   startController: AbortController;
@@ -23,6 +27,12 @@ interface McpSession {
   startedAt: Date;
   error?: string;
 }
+
+// SDK v2 clones only the exact base stdio transport for its disposable probe.
+// Probe this owned command in place: spawning a sibling would repeat user startup
+// effects. Silent legacy peers can still initialize after the probe timeout;
+// peers that exit during discovery fail startup instead of being respawned.
+class InPlaceStdioClientTransport extends StdioClientTransport {}
 
 const sessions = new Map<string, McpSession>();
 
@@ -134,18 +144,16 @@ function getReadySession(sessionId: string): McpSession {
   return session;
 }
 
-async function listAllTools(client: Client, signal?: AbortSignal): Promise<Tool[]> {
+async function listAllTools(client: Client, schemaValidator: AjvJsonSchemaValidator, signal?: AbortSignal): Promise<Tool[]> {
   const tools: Tool[] = [];
   const seenCursors = new Set<string>();
   let cursor: string | undefined;
 
   do {
-    // Use the protocol request rather than Client.listTools(): SDK v1 replaces
-    // its output-schema/task metadata cache on *every page*, which can affect
-    // concurrent tool calls while discovery is still in progress.
+    // Fetch individual pages so a repeated cursor fails rather than silently
+    // publishing a partial list. SDK v2 validates spec results on this path.
     const page = await client.request(
       { method: "tools/list", ...(cursor === undefined ? {} : { params: { cursor } }) },
-      ListToolsResultSchema,
       { signal },
     );
     for (const tool of page.tools) {
@@ -160,12 +168,11 @@ async function listAllTools(client: Client, signal?: AbortSignal): Promise<Tool[
     }
   } while (cursor !== undefined);
 
-  // SDK v1's listTools() ordinarily installs per-tool output validators and
-  // task metadata, but only for its last page. Install the complete snapshot
-  // once after a successful traversal. Do not clear metadata on partial reads.
-  // This SDK method is private in TypeScript; keep the compatibility access
-  // centralized until the SDK exposes a public full-list metadata API.
-  (client as unknown as { cacheToolMetadata(tools: Tool[]): void }).cacheToolMetadata(tools);
+  // Preserve discovery-time output-schema compilation, only after all pages
+  // succeed. Share the public validator with Client; no private cache mutation.
+  for (const tool of tools) {
+    if (tool.outputSchema) schemaValidator.getValidator(tool.outputSchema);
+  }
   return tools;
 }
 
@@ -238,9 +245,10 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
           return { content: [{ type: "text", text: `port is required when transportType is 'http'` }], isError: true };
         }
 
+        const schemaValidator = new AjvJsonSchemaValidator();
         const session: McpSession = {
-          sessionId, command, args, process: null,
-          client: new Client({ name: "staff-mcp-proxy", version: STAFF_MCP_VERSION }, { capabilities: {} }),
+          sessionId, command, args, process: null, schemaValidator,
+          client: new Client({ name: "staff-mcp-proxy", version: STAFF_MCP_VERSION }, { capabilities: {}, versionNegotiation: { mode: "auto" }, jsonSchemaValidator: schemaValidator }),
           transport: null, status: "starting", startedAt: new Date(),
           startController: new AbortController(),
         };
@@ -281,11 +289,14 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
               await connectSession(session);
             } catch (err) {
               assertStarting(session);
+              // Only a missing/unsupported MCP endpoint justifies trying SSE.
+              // Auth, timeouts, protocol and server failures are not fallback evidence.
+              if (!(err instanceof SdkHttpError) || ![404, 405].includes(err.status)) throw err;
               const errors = await closeSessionConnection(session);
               assertStarting(session);
               if (errors.length > 0) throw new Error(errors.join("; "));
               // Use a fresh client: callbacks from a failed HTTP candidate must not close the SSE connection.
-              session.client = new Client({ name: "staff-mcp-proxy", version: STAFF_MCP_VERSION }, { capabilities: {} });
+              session.client = new Client({ name: "staff-mcp-proxy", version: STAFF_MCP_VERSION }, { capabilities: {}, versionNegotiation: { mode: "auto" }, jsonSchemaValidator: session.schemaValidator });
               watchClientClose(session);
               session.transport = new SSEClientTransport(new URL(`http://127.0.0.1:${effectivePort}/sse`));
               try {
@@ -295,7 +306,7 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
               }
             }
           } else {
-            session.transport = new StdioClientTransport({ command, args, env: mergedEnv });
+            session.transport = new InPlaceStdioClientTransport({ command, args, env: mergedEnv });
             await connectSession(session);
           }
 
@@ -368,12 +379,12 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
         toolName: z.string().optional().describe("Optional. The specific tool name to get detailed argument schema for"),
       }).strict(),
     },
-    async ({ sessionId, toolName }, extra) => {
+    async ({ sessionId, toolName }, ctx) => {
       try {
         const session = getReadySession(sessionId);
         
         // Fetch every page before displaying or searching the current tools.
-        const tools = await listAllTools(session.client, extra?.signal);
+        const tools = await listAllTools(session.client, session.schemaValidator, ctx?.mcpReq.signal);
 
         if (toolName) {
           // --- Detailed view: full schema for ONE specific tool ---
@@ -469,12 +480,12 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
         params: z.string().optional().describe("A JSON-encoded string containing the arguments for the tool (e.g., '{\"query\": \"secret\"}')"),
       }).strict(),
     },
-    async ({ sessionId, method, params }, extra) => {
+    async ({ sessionId, method, params }, ctx) => {
       try {
         const session = getReadySession(sessionId);
 
         // Validate against the complete list, including tools on later pages.
-        const tools = await listAllTools(session.client, extra?.signal);
+        const tools = await listAllTools(session.client, session.schemaValidator, ctx?.mcpReq.signal);
         const tool = tools.find(t => t.name === method);
         
         if (!tool) {
@@ -498,16 +509,18 @@ export function registerMcpClientTools(server: McpServer, options: { maxSessions
         }
 
         try {
-          // The default CallToolResultSchema validates this boundary. The SDK's
-          // return type also includes the legacy toolResult schema even when unused.
+          // Pin the definition from this complete discovery. Besides preserving
+          // output validation, this disables SDK header-mismatch refresh/replay:
+          // a failed side-effecting call must never be automatically repeated.
           const result = await session.client.callTool({
             name: method,
             arguments: parsedParams,
-          }, undefined, {
+          }, {
+            toolDefinition: tool,
             timeout: 3600000, // 1 hour, aligned with the chat-ai MCP client. Nested long-running
             // tools manage their own lifecycle; a short cap here orphans their work.
-            signal: extra?.signal, // propagate caller cancellation (e.g. user stop) to the nested call
-          }) as CallToolResult;
+            signal: ctx?.mcpReq.signal, // propagate caller cancellation (e.g. user stop) to the nested call
+          });
 
           const contentArray = [...result.content];
           if (result.isError) {

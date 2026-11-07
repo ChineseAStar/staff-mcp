@@ -1,4 +1,8 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
+import type {
+    McpRequestContext,
+    ServerNotifier,
+} from '@modelcontextprotocol/server';
 import { SecurityManager } from './security.js';
 import { registerFileTools } from './tools/file-tools.js';
 import { registerShellTools } from './tools/shell-tools.js';
@@ -39,7 +43,7 @@ export function createServerFactory(
     enableLsp: boolean = false,
     extensions: ExtensionOptions = {},
     privateDirectoryAliases: string[] = [],
-): () => McpServer {
+): (context?: McpRequestContext & { notify?: ServerNotifier }) => McpServer {
     const options = resolveExtensionOptions(extensions);
     const security = new SecurityManager(workingDir, allowedDirs);
     const sandbox = security.getAllowedDirs();
@@ -115,7 +119,7 @@ export function createServerFactory(
         : undefined;
     const features = { files: !!filesCore, terminal: !!terminalRuntime };
 
-    return () => {
+    return (context) => {
         const discovery = manifest(features);
         const server = new McpServer(
             {
@@ -128,7 +132,10 @@ export function createServerFactory(
                 capabilities: {
                     resources: { subscribe: true },
                     ...(features.files || features.terminal
-                        ? { experimental: { [EXTENSIONS]: discovery } }
+                        ? {
+                              extensions: { [EXTENSIONS]: discovery },
+                              experimental: { [EXTENSIONS]: discovery },
+                          }
                         : {}),
                 },
             },
@@ -159,11 +166,26 @@ export function createServerFactory(
             server,
             filesCore ?? standardCore,
             requireExtension
-                ? (uri) =>
-                      readAppResource(uri, requireExtension, features.terminal)
+                ? (uri, ctx) =>
+                      readAppResource(
+                          uri,
+                          requireExtension,
+                          features.terminal,
+                          ctx,
+                      )
                 : undefined,
+            context?.era === 'modern' ? context.notify : undefined,
+            context?.era === 'modern',
         );
 
+        if (context?.era === 'modern' && context.notify) {
+            const notify = context.notify;
+            // Do not publish initial registration as a change. SDK updates/removes
+            // continue to call these methods, including the skills watcher.
+            server.sendToolListChanged = () => notify.toolsChanged();
+            server.sendPromptListChanged = () => notify.promptsChanged();
+            server.sendResourceListChanged = () => notify.resourcesChanged();
+        }
         return server;
     };
 }

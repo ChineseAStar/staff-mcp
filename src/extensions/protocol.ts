@@ -1,5 +1,10 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { McpError } from '@modelcontextprotocol/sdk/types.js';
+import { ClientCapabilitiesSchema } from '@modelcontextprotocol/core';
+import {
+    CLIENT_CAPABILITIES_META_KEY,
+    PROTOCOL_VERSION_META_KEY,
+    ProtocolError,
+} from '@modelcontextprotocol/server';
+import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 
 export const EXTENSIONS = 'cc.qqxing/extensions';
@@ -19,19 +24,45 @@ export function parse<T extends z.ZodType>(
 ): z.infer<T> {
     const result = schema.safeParse(input ?? {});
     if (!result.success)
-        throw new McpError(-32602, 'Invalid extension parameters', {
+        throw new ProtocolError(-32602, 'Invalid extension parameters', {
             code: 'INVALID_PARAMS',
         });
     return result.data;
 }
 
 export function extensionError(code: string, message: string): never {
-    throw new McpError(-32000, message, { code });
+    throw new ProtocolError(-32000, message, { code });
 }
 
-export function supports(server: McpServer, extension: string): boolean {
-    const manifest =
-        server.server.getClientCapabilities()?.experimental?.[EXTENSIONS];
+/** Modern identity is request-scoped; never fall back to another request's grants. */
+export function isModernRequest(ctx: ServerContext): boolean {
+    // SDK 2.4's RequestMetaEnvelope alias is {}, despite these runtime keys.
+    const envelope = ctx.mcpReq.envelope as Record<string, unknown> | undefined;
+    const version = envelope?.[PROTOCOL_VERSION_META_KEY];
+    return typeof version === 'string' && version >= '2026-07-28';
+}
+
+export function supports(
+    server: McpServer,
+    extension: string,
+    ctx: ServerContext,
+): boolean {
+    if (![APPS, DATA, FILES, STREAMS].includes(extension)) return false;
+    // SDK 2.4 exposes the modern capability view through the envelope (not ctx.mcp).
+    const envelope = ctx.mcpReq.envelope as Record<string, unknown> | undefined;
+    const parsedCapabilities = ClientCapabilitiesSchema.safeParse(
+        isModernRequest(ctx)
+            ? envelope?.[CLIENT_CAPABILITIES_META_KEY]
+            : server.server.getClientCapabilities(),
+    );
+    const capabilities = parsedCapabilities.success
+        ? parsedCapabilities.data
+        : undefined;
+    // The modern container is authoritative, even when empty or missing our
+    // entry. Only an absent container permits the legacy advertisement.
+    const manifest = capabilities?.extensions !== undefined
+        ? capabilities.extensions[EXTENSIONS]
+        : capabilities?.experimental?.[EXTENSIONS];
     const parsed = z
         .object({
             version: z.literal(1),
