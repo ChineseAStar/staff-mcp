@@ -3,8 +3,12 @@ import * as path from "path";
 export class SecurityManager {
   private allowedDirs: string[];
   private workingDir: string;
+  public readonly mode: "host" | "container";
 
   constructor(workingDir: string, allowedDirs: string[] = []) {
+    // Only the exact trusted launcher marker enables container-wide tool paths.
+    // Capture once so factories and instructions cannot disagree after env changes.
+    this.mode = process.env.STAFF_MCP_IS_DOCKER === "1" ? "container" : "host";
     this.workingDir = path.resolve(workingDir);
     // Working directory is always allowed
     const resolvedAllowedDirs = allowedDirs.map(dir => path.resolve(dir));
@@ -12,11 +16,11 @@ export class SecurityManager {
   }
 
   /**
-   * Resolves a target path and ensures it lies within one of the allowed directories.
+   * Resolves a tool path; Host mode requires a configured allowed directory.
    * @param targetPath The relative or absolute path requested.
    * @param cwd Optional base directory for resolution (must also be validated if provided).
    * @returns The absolute, validated path.
-   * @throws Error if the path is outside the allowed sandbox.
+   * @throws Error if a Host path is outside the configured allowed directories.
    */
   public resolveAndValidatePath(targetPath: string, cwd?: string): string {
     const base = cwd ? path.resolve(cwd) : this.workingDir;
@@ -28,7 +32,7 @@ export class SecurityManager {
       return !relative.startsWith("..") && !path.isAbsolute(relative);
     });
 
-    if (!isAllowed) {
+    if (this.mode === "host" && !isAllowed) {
       throw new Error(`Security Error: Path "${resolvedPath}" is outside the allowed directories.`);
     }
 
@@ -48,7 +52,7 @@ export class SecurityManager {
       return !relative.startsWith("..") && !path.isAbsolute(relative);
     });
 
-    if (!isAllowed) {
+    if (this.mode === "host" && !isAllowed) {
       throw new Error(`Security Error: Directory "${resolved}" is not in the allowed list.`);
     }
     return resolved;

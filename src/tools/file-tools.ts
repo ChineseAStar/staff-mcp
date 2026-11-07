@@ -46,16 +46,19 @@ export function registerFileTools(server: McpServer, security: SecurityManager, 
   };
   const controlledWrite = <T>(full: string, task: () => Promise<T>, missingParents = false) =>
     enqueueFileWrite(full, () => core ? core.toolWrite(full, task, missingParents) : task());
+  const pathDescription = security.mode === "container"
+    ? "Path relative to the workspace, or an absolute path in the container."
+    : "Path relative to the workspace, or an absolute path within the allowed directories.";
   // read_file
   server.registerTool(
     "read_file",
     {
       description:
-        "Read the content of a file from the allowed workspace. " +
+        "Read the content of a file. " +
         "Supports line range selection via startLine/endLine. " +
         "This tool can read image files and return them for visual analysis.",
       inputSchema: z.object({
-        path: z.string().describe("Relative path from the workspace to the file to read."),
+        path: z.string().describe(pathDescription),
         startLine: z.number().optional().describe("1-based line number to start reading from."),
         endLine: z.number().optional().describe("1-based line number to end reading at (inclusive)."),
       }).strict(),
@@ -160,7 +163,7 @@ export function registerFileTools(server: McpServer, security: SecurityManager, 
     {
       description: "Replace a specific block of text in a file with new content. Use this for precise edits.",
       inputSchema: z.object({
-        path: z.string().describe("Path to the file to edit."),
+        path: z.string().describe(pathDescription),
         oldText: z.string().describe("The exact text block to be replaced. Be as specific as possible to avoid wrong matches."),
         newText: z.string().describe("The new text content to replace with."),
       }).strict(),
@@ -222,9 +225,9 @@ export function registerFileTools(server: McpServer, security: SecurityManager, 
   server.registerTool(
     "write_file",
     {
-      description: "Write or overwrite a file in the allowed workspace.",
+      description: "Write or overwrite a file.",
       inputSchema: z.object({
-        path: z.string().describe("Path to the file to write."),
+        path: z.string().describe(pathDescription),
         content: z.string().describe("Content to write into the file."),
       }).strict(),
     },
@@ -252,9 +255,9 @@ export function registerFileTools(server: McpServer, security: SecurityManager, 
   server.registerTool(
     "delete_file",
     {
-      description: "Delete a file from the allowed workspace.",
+      description: "Delete a file.",
       inputSchema: z.object({
-        path: z.string().describe("Path to the file to delete."),
+        path: z.string().describe(pathDescription),
       }).strict(),
     },
     async ({ path: filePath }) => {
@@ -284,7 +287,7 @@ export function registerFileTools(server: McpServer, security: SecurityManager, 
     {
       description: "List files and directories within a specific path.",
       inputSchema: z.object({
-        path: z.string().default(".").describe("Path to list (defaults to workspace root)."),
+        path: z.string().default(".").describe(`${pathDescription} Defaults to the workspace root.`),
       }).strict(),
     },
     async ({ path: dirPath }) => {

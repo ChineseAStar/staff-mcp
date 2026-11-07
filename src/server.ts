@@ -62,6 +62,7 @@ export function createServerFactory(
         runtimeDirectory,
         undefined,
         privateDirectoryAliases,
+        security.mode === 'container' ? 'container' : 'roots',
     );
 
     // Generate instructions with system-specific details (OS, shell, etc.)

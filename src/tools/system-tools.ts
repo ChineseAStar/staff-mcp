@@ -22,7 +22,7 @@ export function getMcpInstructions(
 ): string {
   const platform = os.platform();
   const isWin = platform === "win32";
-  const isDocker = process.env.STAFF_MCP_IS_DOCKER === "1";
+  const isDocker = security.mode === "container";
 
   // Use the same platform assumptions as shell-tools.ts.
   let shell = isWin ? "cmd.exe or PowerShell" : "/bin/sh";
@@ -37,8 +37,8 @@ export function getMcpInstructions(
   const allowedDirs = security.getAllowedDirs();
   const environment = isDocker ? "Docker sandbox" : "host";
   const modeGuidance = isDocker
-    ? "Docker mode: the container is isolated and disposable. Installing dependencies or changing container-level configuration is allowed when useful. File tools remain restricted to the allowed paths above."
-    : "Host mode: prefer workspace-local changes. Avoid unnecessary global installs or host system configuration changes.";
+    ? "Container mode: ordinary file tools and command cwd may use paths throughout the container, not just the configured public roots. Relative file paths resolve from the workspace; absolute paths address the container filesystem. Files App, resources and transfers remain restricted to the configured public roots above. Private staging, symlink and file-transaction protections still apply. The container writable layer is disposable, but the mounted workspace persists. Installing dependencies or changing container-level configuration is allowed when useful; actual process UID permissions and read-only mounts still apply."
+    : "Host mode: file tools and command starting cwd are restricted to the configured allowed paths above. This is not an OS sandbox: shell filesystem and network effects run with the host process permissions. Prefer workspace-local changes. Avoid unnecessary global installs or host system configuration changes.";
 
   const lspGuidance = options.enableLsp
     ? `
@@ -48,7 +48,7 @@ export function getMcpInstructions(
   return `
 # MCP Context: staff-mcp
 Workspace: ${workingDir}
-Allowed paths: [${allowedDirs.join(", ")}]
+${isDocker ? "Configured public roots (Files App/resources/transfers)" : "Allowed paths"}: [${allowedDirs.join(", ")}]
 Environment: ${environment}; OS ${platform}; shell ${shell}; path separator '${path.sep}'.
 Use 'execute_command' for all shell commands. If it returns a task ID, continue that task with 'manage_background_task'; do not rerun the command.
 Keep assistant-only temporary files, logs, experiments, notes, and caches under '.staff/' unless the workspace defines another scratch location.

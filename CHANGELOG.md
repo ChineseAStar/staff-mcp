@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 2.1.0-rc.0 — Local candidate (not published to npm)
 
+- Use one explicit container mode for instructions and ordinary tool path access. Container file tools and command working directories are no longer limited to the workspace; Host mode keeps its configured directory boundary. The operating-system user, read-only mounts, private staging, configured-root protection, and existing file transaction rules still apply.
+- Keep public files/resource roots separate from container tool access; enabling container mode does not publish `/` or broaden files/transfer RPC paths. Platform-managed containers must inject the trusted `STAFF_MCP_IS_DOCKER=1` marker before starting staff; native `--docker` does the same.
 - Stop enumerating workspace roots and immediate files in `resources/list`; retain the standard method with an empty result and reject supplied cursors. Discovery no longer scans root directories.
 - Keep the existing file URI template per configured root, resource reads/subscriptions, and file App discovery, browsing and explicit attachments unchanged. A single-root workspace exposes one template; independently authorized roots retain separate template identities. Current chat-ai `@` menus no longer offer staff file quick picks; select the file or directory in the file App instead.
 - Pair with a host that accepts the template's exact empty expansion for root-directory attachments; update the host first rather than changing existing URI/template identities.

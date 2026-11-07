@@ -187,7 +187,10 @@ export class FileCore {
         privateDirectory?: string,
         shared?: FileCore,
         privateDirectoryAliases: string[] = [],
+        private readonly toolPathPolicy: 'roots' | 'container' = 'roots',
     ) {
+        // toolPathPolicy only relaxes ordinary tools, never resolve()/public roots.
+        // Do not inherit it from shared: files v1 retains its configured boundary.
         // Standard resources/tools and files v1 have independent roots, but serialize
         // writes and observe the same filesystem publications.
         // Aliases only add restrictions. Never replace canonical staging, even
@@ -345,9 +348,10 @@ export class FileCore {
             .filter((root) => inside(root.directory, full))
             .sort((a, b) => b.directory.length - a.directory.length);
         const root = roots[0];
-        if (!root) fail('OUTSIDE_ROOT', 'Path leaves allowed roots');
+        if (!root && this.toolPathPolicy !== 'container')
+            fail('OUTSIDE_ROOT', 'Path leaves allowed roots');
         const relative = path
-            .relative(root.directory, full)
+            .relative(root?.directory ?? path.parse(full).root, full)
             .split(path.sep)
             .join('/');
         if (
@@ -406,14 +410,15 @@ export class FileCore {
             ) {
                 const root = [...this.rootMap.values()].find((root) =>
                     inside(root.directory, full),
-                )!;
-                this.changed(
-                    root.rootId,
-                    path
-                        .relative(root.directory, full)
-                        .split(path.sep)
-                        .join('/'),
                 );
+                if (root)
+                    this.changed(
+                        root.rootId,
+                        path
+                            .relative(root.directory, full)
+                            .split(path.sep)
+                            .join('/'),
+                    );
             }
             return result;
         });
