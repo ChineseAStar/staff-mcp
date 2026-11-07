@@ -330,7 +330,7 @@ files-v1 跨 MCP 中转与文件应用上传不再设置 100 MiB 单文件硬限
 set -euo pipefail
 VERSION=2.1.0
 RELEASE_BRANCH=tmp/resource-templates-only
-TARGET=b0cd46fa60fc65cce1c234856e7ed4da1763f79a
+TARGET=b0cd46f137e82f756f042ea51c4d4dcf5a5cbf80
 
 git fetch origin --tags
 test -z "$(git status --porcelain)"
