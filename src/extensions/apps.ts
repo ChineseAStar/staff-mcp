@@ -67,6 +67,7 @@ export function registerApps(
     requireExtension: (extension: string, ctx: ServerContext) => void,
     terminalAvailable: () => boolean,
     negotiated: (extension: string, ctx: ServerContext) => boolean,
+    dataVersion = 1,
 ) {
     server.server.setRequestHandler(
         `${APPS}/v1/list`,
@@ -81,9 +82,27 @@ export function registerApps(
             requireExtension(APPS, ctx);
             return {
                 apps: [
-                    ...(negotiated(FILES, ctx) ? [files] : []),
+                    ...(negotiated(FILES, ctx)
+                        ? [
+                              {
+                                  ...files,
+                                  requiredExtensions: {
+                                      [FILES]: 1,
+                                      [DATA]: dataVersion,
+                                  },
+                              },
+                          ]
+                        : []),
                     ...(terminalAvailable() && negotiated(STREAMS, ctx)
-                        ? [terminal]
+                        ? [
+                              {
+                                  ...terminal,
+                                  requiredExtensions: {
+                                      [STREAMS]: 1,
+                                      [DATA]: dataVersion,
+                                  },
+                              },
+                          ]
                         : []),
                 ],
             };

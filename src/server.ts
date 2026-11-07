@@ -7,7 +7,7 @@ import { SecurityManager } from './security.js';
 import { registerFileTools } from './tools/file-tools.js';
 import { registerShellTools } from './tools/shell-tools.js';
 import { registerLspTools } from './tools/lsp-tools.js';
-import { registerSkillTools } from './tools/skills.js';
+import { registerSkillTools, watchProjectSkills } from './tools/skills.js';
 import { registerMcpClientTools } from './tools/mcp-client-tools.js';
 import { getMcpInstructions } from './tools/system-tools.js';
 import * as path from 'node:path';
@@ -15,12 +15,35 @@ import { accessSync, constants, statSync } from 'node:fs';
 import { FileCore } from './file-manager/file-core.js';
 import { EXTENSIONS, manifest } from './extensions/protocol.js';
 import { installExtensions } from './extensions/runtime.js';
+import type { HttpDataBindings } from './extensions/HttpDataBindings.js';
 import { loadTerminalRuntime } from './terminal/pty.js';
-import { registerFileResources } from './file-manager/extension.js';
+import {
+    registerFileResources,
+    subscribeFileResourceUpdates,
+    validateFileResourceSubscription,
+} from './file-manager/extension.js';
 import { readAppResource } from './extensions/apps.js';
 import { resolveExtensionOptions } from './extensions/config.js';
 import type { ExtensionOptions } from './extensions/config.js';
 export type { ExtensionOptions } from './extensions/config.js';
+
+export interface ServerFactoryContext extends McpRequestContext {
+    notify?: ServerNotifier;
+    resourceSubscriptions?: () => Iterable<string>;
+    externalResourceNotifications?: boolean;
+    httpDataBindings?: HttpDataBindings;
+}
+
+export interface ServerFactory {
+    (context?: ServerFactoryContext): McpServer;
+    // Optional for minimal/non-file factories used by connection owners.
+    validateResourceSubscription?: (uri: string) => Promise<void>;
+    subscribeCatalogUpdates?: (notify: ServerNotifier) => () => void;
+    subscribeResourceUpdates?: (
+        uris: () => Iterable<string>,
+        publish: (uri: string) => void,
+    ) => () => void;
+}
 
 /**
  * Creates and initializes a new McpServer with all functional tools.
@@ -43,7 +66,7 @@ export function createServerFactory(
     enableLsp: boolean = false,
     extensions: ExtensionOptions = {},
     privateDirectoryAliases: string[] = [],
-): (context?: McpRequestContext & { notify?: ServerNotifier }) => McpServer {
+): ServerFactory {
     const options = resolveExtensionOptions(extensions);
     const security = new SecurityManager(workingDir, allowedDirs);
     const sandbox = security.getAllowedDirs();
@@ -119,8 +142,10 @@ export function createServerFactory(
         : undefined;
     const features = { files: !!filesCore, terminal: !!terminalRuntime };
 
-    return (context) => {
-        const discovery = manifest(features);
+    const factory: ServerFactory = (context) => {
+        const modernHttp =
+            context?.era === 'modern' && !!context.httpDataBindings;
+        const discovery = manifest(features, modernHttp ? 2 : 1);
         const server = new McpServer(
             {
                 name,
@@ -149,7 +174,7 @@ export function createServerFactory(
             registerLspTools(server, security);
         }
 
-        registerSkillTools(server, workingDir, security, profile);
+        registerSkillTools(server, workingDir, security, profile, !modernHttp);
         registerMcpClientTools(server, { maxSessions: maxMcpSessions });
 
         const requireExtension =
@@ -160,6 +185,12 @@ export function createServerFactory(
                       path.join(runtimeDirectory, 'transfers'),
                       standardCore,
                       terminalRuntime,
+                      modernHttp
+                          ? {
+                                mode: 'modern-http',
+                                bindings: context.httpDataBindings!,
+                            }
+                          : undefined,
                   )
                 : undefined;
         registerFileResources(
@@ -174,8 +205,9 @@ export function createServerFactory(
                           ctx,
                       )
                 : undefined,
-            context?.era === 'modern' ? context.notify : undefined,
+            context?.resourceSubscriptions,
             context?.era === 'modern',
+            context?.externalResourceNotifications,
         );
 
         if (context?.era === 'modern' && context.notify) {
@@ -188,4 +220,14 @@ export function createServerFactory(
         }
         return server;
     };
+    factory.subscribeCatalogUpdates = (notify) =>
+        watchProjectSkills(workingDir, () => {
+            notify.toolsChanged();
+            notify.promptsChanged();
+        });
+    factory.validateResourceSubscription = (uri) =>
+        validateFileResourceSubscription(filesCore ?? standardCore, uri);
+    factory.subscribeResourceUpdates = (uris, publish) =>
+        subscribeFileResourceUpdates(filesCore ?? standardCore, uris, publish);
+    return factory;
 }

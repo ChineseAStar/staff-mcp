@@ -46,6 +46,7 @@ export function supports(
     server: McpServer,
     extension: string,
     ctx: ServerContext,
+    version = 1,
 ): boolean {
     if (![APPS, DATA, FILES, STREAMS].includes(extension)) return false;
     // SDK 2.4 exposes the modern capability view through the envelope (not ctx.mcp).
@@ -58,11 +59,12 @@ export function supports(
     const capabilities = parsedCapabilities.success
         ? parsedCapabilities.data
         : undefined;
-    // The modern container is authoritative, even when empty or missing our
-    // entry. Only an absent container permits the legacy advertisement.
-    const manifest = capabilities?.extensions !== undefined
-        ? capabilities.extensions[EXTENSIONS]
-        : capabilities?.experimental?.[EXTENSIONS];
+    // Modern envelopes require the modern container. Legacy initialize may use
+    // experimental only when its authoritative extensions container is absent.
+    const manifest =
+        isModernRequest(ctx) || capabilities?.extensions !== undefined
+            ? capabilities?.extensions?.[EXTENSIONS]
+            : capabilities?.experimental?.[EXTENSIONS];
     const parsed = z
         .object({
             version: z.literal(1),
@@ -74,16 +76,22 @@ export function supports(
         .safeParse(manifest);
     return (
         parsed.success &&
-        parsed.data.extensions[extension]?.versions.includes(1) === true
+        parsed.data.extensions[extension]?.versions.includes(version) === true
     );
 }
 
-export function manifest(features: { files: boolean; terminal: boolean }) {
+export function manifest(
+    features: { files: boolean; terminal: boolean },
+    dataVersion = 1,
+) {
     return {
         version: 1,
         extensions: {
             ...(features.files || features.terminal
-                ? { [APPS]: { versions: [1] }, [DATA]: { versions: [1] } }
+                ? {
+                      [APPS]: { versions: [1] },
+                      [DATA]: { versions: [dataVersion] },
+                  }
                 : {}),
             ...(features.files ? { [FILES]: { versions: [1] } } : {}),
             ...(features.terminal ? { [STREAMS]: { versions: [1] } } : {}),

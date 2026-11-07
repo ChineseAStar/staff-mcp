@@ -1,5 +1,5 @@
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { ServerFactory } from '../server.js';
 import { z } from 'zod';
 import { FifoTransport } from '../data/FifoTransport.js';
 import {
@@ -15,11 +15,11 @@ export function redirectStdioLogsToStderr(): void {
     console.log = (...args) => console.error(...args);
 }
 
-export async function startStdioServer(serverFactory: () => McpServer) {
+export async function startStdioServer(serverFactory: ServerFactory) {
     const transport = new FifoTransport(new StdioServerTransport());
     const connection = serveConnection(
-        () => {
-            const server = serverFactory();
+        (context) => {
+            const server = serverFactory(context);
             let session: StdioDataSession | undefined;
             server.server.setNotificationHandler(
                 DATA_FRAME_METHOD,
@@ -56,6 +56,7 @@ export async function startStdioServer(serverFactory: () => McpServer) {
         },
         transport,
         () => console.error('[staff-mcp] Stdio control transport error.'),
+        serverFactory.validateResourceSubscription,
     );
     let stopping: Promise<void> | undefined;
     let inputError: Error | undefined;

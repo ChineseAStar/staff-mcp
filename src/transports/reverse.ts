@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { ServerFactory } from '../server.js';
 import { serveConnection } from './serveConnection.js';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -37,7 +37,7 @@ export interface ReverseController {
 
 /** New HTTP pool, SDK transport and data resources per attempt; never replay requests or input. */
 export async function startReverseServer(
-    serverFactory: () => McpServer,
+    serverFactory: ServerFactory,
     value: string,
     token: string,
     name: string,
@@ -70,6 +70,9 @@ export async function startReverseServer(
             let connection: ReturnType<typeof serveConnection> | undefined;
             let initializedAt: number | undefined;
             let initializationTimer: NodeJS.Timeout | undefined;
+            let initializationDeadline: number | undefined;
+            let currentOwner: symbol | undefined;
+            let controlClosing = false;
             const attempt = new AbortController();
             const stopped = () => {
                 attempt.abort();
@@ -92,11 +95,51 @@ export async function startReverseServer(
             transport.ondiagnostic = (detail) => {
                 log.warn(`Slow control POST: ${JSON.stringify(detail)}`);
             };
+            const closeTransport = transport.close.bind(transport);
+            transport.close = () => {
+                controlClosing = true;
+                clearTimeout(initializationTimer);
+                return closeTransport();
+            };
+            const armInitializationDeadline = () => {
+                clearTimeout(initializationTimer);
+                if (
+                    controlClosing ||
+                    initializationDeadline === undefined ||
+                    initializedAt !== undefined
+                )
+                    return;
+                initializationTimer = setTimeout(
+                    () => {
+                        log.warn(
+                            'Control connection closed: initialization-timeout.',
+                        );
+                        void transport.close();
+                    },
+                    Math.max(0, initializationDeadline - performance.now()),
+                );
+                initializationTimer.unref();
+            };
             active = transport;
             try {
                 connection = serveConnection(
-                    () => {
-                        const server = serverFactory();
+                    (context) => {
+                        const owner = Symbol();
+                        currentOwner = owner;
+                        const server = serverFactory(context);
+                        // Probe retirement invalidates readiness before async
+                        // cleanup; fallback gets only the original time left.
+                        const closeServer = server.close.bind(server);
+                        server.close = () => {
+                            if (currentOwner === owner) {
+                                currentOwner = undefined;
+                                if (!controlClosing) {
+                                    initializedAt = undefined;
+                                    armInitializationDeadline();
+                                }
+                            }
+                            return closeServer();
+                        };
                         configureExtensionData(
                             server,
                             (
@@ -163,6 +206,12 @@ export async function startReverseServer(
                             },
                         );
                         const ready = () => {
+                            if (
+                                currentOwner !== owner ||
+                                controlClosing ||
+                                initializedAt !== undefined
+                            )
+                                return;
                             initializedAt = performance.now();
                             clearTimeout(initializationTimer);
                             log.info('MCP ready on a new SSE session.');
@@ -172,24 +221,28 @@ export async function startReverseServer(
                             previousInitialized?.();
                             ready();
                         };
+                        if (context.era === 'modern') {
+                            const connect = server.connect.bind(server);
+                            server.connect = async (channel) => {
+                                await connect(channel);
+                                ready();
+                            };
+                        }
                         return server;
                     },
                     transport,
                     () => {
                         log.warn('Control transport error.');
                     },
+                    serverFactory.validateResourceSubscription,
                 );
                 await connection.started;
-                // start() completes once the SSE endpoint is admitted; only then start the initialization deadline.
-                if (initializedAt === undefined) {
-                    initializationTimer = setTimeout(() => {
-                        log.warn(
-                            'Control connection closed: initialization-timeout.',
-                        );
-                        void transport.close();
-                    }, options.initializationTimeout ?? 15000);
-                    initializationTimer.unref();
-                }
+                // Transport admission, not factory/probe creation, anchors
+                // this one deadline for the entire opening exchange.
+                initializationDeadline =
+                    performance.now() +
+                    (options.initializationTimeout ?? 15000);
+                armInitializationDeadline();
                 await connection.closed;
             } catch {
                 if (!abort.signal.aborted)

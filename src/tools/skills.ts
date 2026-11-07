@@ -7,7 +7,7 @@ import * as path from "path";
 import { SecurityManager } from "../security.js";
 import { registerServerCleanup } from "../utils/server-lifecycle.js";
 
-export function registerSkillTools(server: McpServer, workingDir: string, security: SecurityManager, profile: string = "default") {
+export function registerSkillTools(server: McpServer, workingDir: string, security: SecurityManager, profile: string = "default", watchProjectChanges = true) {
   let skillsMap = SkillManager.loadSkills(workingDir, profile);
   const promptMap = new Map<string, RegisteredPrompt>();
 
@@ -197,6 +197,16 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
     dummy.remove();
   }
 
+  if (watchProjectChanges) {
+    registerServerCleanup(server, watchProjectSkills(workingDir, () => {
+      skillsMap = SkillManager.loadSkills(workingDir, profile);
+      refreshPrompts();
+    }));
+  }
+}
+
+/** One endpoint watcher can publish invalidations for stateless request facades. */
+export function watchProjectSkills(workingDir: string, onChange: () => void): () => void {
   // Watcher logic — 仅监听项目级 .staff/skills 目录
   // 目录不存在则自动创建；被删除后自动重建并恢复监听
   // 全局目录和内置目录的 skill 变动需重启才能生效
@@ -207,7 +217,7 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
   let disposed = false;
   const DEBOUNCE_MS = 1000; // 1秒防抖
 
-  registerServerCleanup(server, () => {
+  const stop = () => {
     if (disposed) return;
     disposed = true;
     if (watchTimeout) {
@@ -217,9 +227,9 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
     const activeWatcher = watcher;
     watcher = null;
     activeWatcher?.close();
-  });
+  };
 
-  const handleWatchEvent = (event: string, filename: string | null) => {
+  const handleWatchEvent = () => {
     if (disposed) return;
     if (watchTimeout) {
       clearTimeout(watchTimeout);
@@ -229,8 +239,7 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
       watchTimeout = null;
       if (disposed) return;
       try {
-        skillsMap = SkillManager.loadSkills(workingDir, profile);
-        refreshPrompts();
+        onChange();
       } catch (err) {
         console.error("[SkillTools] Error reloading skills after file change:", err);
       }
@@ -258,6 +267,7 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
   };
 
   startWatcher();
+  return stop;
 }
 
 function buildSkillOutput(skill: SkillInfo): string {

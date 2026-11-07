@@ -10,13 +10,14 @@
 
 ## 源码的 SDK／协议兼容范围
 
-源码使用拆包后的 MCP SDK 2：`client`、`server`、`core` 固定 2.4.0，`node` 固定 2.1.2。这不代表新的 npm 发布或该源码已部署；下文正式发布基线仍为 2.1.0。
+源码使用拆包后的 MCP SDK 2：`client`、`server`、`core` 固定 2.4.0，`node` 固定 2.1.2。包版本仍为 2.1.0；这些源码变更未作为新版本发布或部署，也不改变 chat 的正式运行包 pin。
 
-- **staff 的 stdio、reverse 与 Streamable HTTP 入口均暂时保持 legacy MCP 协议**，实现已迁移 SDK 2。旧客户端及协商 legacy 的新客户端保留原订阅、初始化期限、扩展／data binding、文件事务及终端生命周期；不宣称支持固定现代 `2026-07-28` 的 staff 客户端。
-- 现代 staff 入口尚未启用：SDK 未公开已订阅后代 URI，无法保持目录移动／删除后的完整失效通知；现代逐请求 HTTP 也不提供现有 files／PTY／data 所依赖的连接归属。不会用第二套订阅协议、客户端自报会话身份或删除 Apps 掩盖这些差异。完成现代协议兼容与 SDK 迁移是两个独立阶段。
+- stdio、reverse 和 direct HTTP 通过官方 SDK 接受 legacy 与现代 `2026-07-28` 客户端。legacy HTTP 保留原鉴权会话；现代 HTTP 每请求调用 server factory，不使用 `Mcp-Session-Id`、共用 MCP server 或暗藏会话 header。普通工具仍共享原进程状态并保留原权限；逐请求 facade 不是独立 OS／用户沙箱。
+- 现代 HTTP 通过公开 **DATA2 业务绑定**保留 Files／Terminal Apps：服务端签发 control 凭据，90 秒租约，files／PTY／data 状态各自归属确切 owner。APPS／FILES／STREAMS 仍为 v1；stdio／reverse（两种协议）及 legacy HTTP 仍为 DATA1。DATA2 需宿主与 staff 配套升级，源码修改不自动替换 npm 2.1.0 或 chat 的正式运行包 pin。
+- 现代资源订阅保留 canonical URI、root／private／symlink 准入及目录后代失效通知。薄 transport 适配只观察已确认 URI 兴趣，SDK 仍负责过滤、ACK、订阅 ID 与取消。HTTP 兴趣随响应流释放，端点只有一份事件源，避免并发请求重复通知。
 - 内嵌 MCP 客户端在原进程上协商新旧协议，不为短生命周期探测再次启动未知命令。对端因发现请求退出时，本次启动失败，不自动重启。
 - 扩展发现优先使用已声明的 `capabilities.extensions`，仅该容器缺省时回退 `experimental`。空或无效的新授权不继承旧授权；现代请求逐次携带能力，不借用其他请求的上下文。
-- 完整分页保护、公开 SDK API 的逐次输出校验、文件 commit/status、取消、租约与不重放规则保留。Skills 继续既有工具，本次迁移未启用 Skills 扩展。
+- 完整分页保护、公开 SDK API 的逐次输出校验、文件 commit/status、取消、原文件／PTY 租约与不重放规则保留；DATA2 另有独立业务绑定租约。Skills 继续既有工具，本次迁移未启用 Skills 扩展。
 
 ## 兼容性与配套升级
 
@@ -24,7 +25,7 @@
 
 **2.1.0 版本：** 文件资源只通过模板发现，每个配置根保留原有模板，具体资源列表返回空数组。请在文件 App 中针对文件／目录操作，不再提供顶层文件的 `@` 快捷项。该行为替代 2.0.7 的具体文件目录，不会自动更新运行中的端点。请配套 chat-ai 提交 `77369efdeeb9defce218fad95145b4dcae99724d` 或兼容后继版本，以获得容器标记传递及资源授权保护。升级前若仍有旧的按名称资源拒绝，请先连接旧目录显式保存权限，将规则转换为 URI；详见[文件资源与升级注意事项](docs/file-manager.md#standard-file-resources-and-attachments)。
 
-**2.0.7 版本：** 本机与 Docker stdio 使用有界、无端口的数据帧，不自动回退 HTTP 或重放。请配套 chat-ai 提交 `5bfa6a4321d258e5129b250da248adff96b6ad42` 或兼容后继版本，以获得匹配的协议与权限处理；宿主正式内置依赖将在兼容后继版本中更新，仅安装此 npm 包不会更新宿主依赖。HTTP/reverse wire 与业务授权保持不变。旧 stdio 宿主可能无法使用可选的 data Apps/传输，但健康的标准 MCP tools/resources/prompts 仍可用。
+**2.0.7 版本：** 本机与 Docker stdio 使用有界、无端口的数据帧，不自动回退 HTTP 或重放。请配套 chat-ai 提交 `5bfa6a4321d258e5129b250da248adff96b6ad42` 或兼容后继版本，以获得匹配的协议与权限处理；宿主正式内置依赖将在兼容后继版本中更新，仅安装此 npm 包不会更新宿主依赖。该 DATA1 版本未改变 HTTP/reverse wire 与业务授权；当前 modern HTTP 则使用上文 DATA2。旧 stdio 宿主可能无法使用可选的 data Apps/传输，但健康的标准 MCP tools/resources/prompts 仍可用。
 
 本版还新增 `STAFF_MCP_SHELL_INIT`，供命令与新 PTY 共用 Bash 初始化（management Node 主进程不 source）；文件 App 增加常用语言语法及 Markdown 代码高亮、本地阅读字号、右侧自适应目录/窄屏下拉、文本软换行，并整理工作区/文件/阅读工具栏层级、以根目录为目标的菜单与文件标签。终端 App 移除重复关闭按钮，沿用宿主 App 生命周期。详见[文件管理](docs/file-manager.md)、[终端](docs/terminal.md)与 [CHANGELOG](CHANGELOG.md)。
 
@@ -132,8 +133,9 @@ Authorization 请求头值，填写 `Bearer <token>`；如果是 Bearer token �
 token。仅发送原始 token、不带 `Bearer` 前缀的请求会被拒绝。缺失或错误的凭证返回
 HTTP 401，携带已有 `mcp-session-id` 也不能绕过验证。保护范围包括 `/mcp` 和兼容
 路由 `/sse`、`/messages`。CORS `OPTIONS` 预检无需凭证，但无法调用 MCP。
-raw `/mcp/data/...` 路由使用协商的连接级 data Bearer token 与 `X-Data-Binding`，
-不是 MCP 控制面的共享 token。
+raw `/mcp/data/...` 路由使用协商的 channel Bearer token 与 `X-Data-Binding`，
+不是 MCP 控制面的共享 token，也不是 DATA2 owner proof。现代 HTTP 业务 RPC 另需公开的
+DATA2 `control` 凭据，不能替代原 HTTP 身份验证。
 
 不传 `--http-token` 时，HTTP listener 的 MCP 控制面不要求鉴权。任何能够
 连接服务的客户端都能调用工具，因此仅应在可信网络中使用此模式。显式传入空 token
@@ -147,7 +149,7 @@ token。这里使用服务端共享 token，不提供 OAuth 流程。
 
 ### Reverse v1 与协议边界
 
-自定义协议权威为上述兼容宿主版本的 `chat-ai/docs/protocol/README.md`。chat-ai、staff-mcp 及第三方可自行实现，无指定扩展 SDK。官方 MCP SDK、标准 stdio/Streamable HTTP 和 tools/resources/prompts 不变；无旧 FTE 分块或 WS 回退，不迁移聊天数据库。
+自定义协议权威为上述兼容宿主版本的 `chat-ai/docs/protocol/README.md`。chat-ai、staff-mcp 及第三方可自行实现，无指定扩展 SDK。标准 MCP 协议处理仍由官方 SDK 负责，普通 tools/resources/prompts 保留原业务行为与权限；无旧 FTE 分块或 WS 回退，不迁移聊天数据库。
 
 Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Server-Name`；SSE endpoint 事件给出 POST 回送地址，message 事件直接承载 MCP JSON-RPC，无私有信封。源码接受显式 HTTP/HTTPS；HTTP 每次启动警告一次明文风险，不能保护 token 或正文，不可信网络应使用 HTTPS。HTTPS 验证证书与目标身份，不自动降级；配置基址无凭据、query、fragment。无需 WebSocket upgrade、独立 gateway/launcher 或私有 host leg。SDK 初始化、数据面就绪和用户授权是不同事实；短暂连接不重置指数退避。
 
@@ -188,19 +190,19 @@ files 启用时直接复用标准工具目录授权：`main` 是 `--working-dir`
 
 ### 独立文件工作区
 
-启用 `--extensions files` 后，通过 `experimental["cc.qqxing/extensions"]` 的 apps/files/data v1 及 `cc.qqxing/apps/v1/list` 发现，独立于模型 Tools。应用和 `transfer_file` 共用 files v1，与 terminal 共用当前连接的传输中立 DataSession。stdio 显式 configure `{binding,transport:"stdio"}` 并要求响应 `{transport:"stdio"}`；控制与有界 Base64 帧共用 FIFO writer，不创建数据 listener、endpoint 或 HTTP 票据。每帧解码后最多 64 KiB，每通道每方向 256 KiB 消费窗口；direct HTTP/reverse 保留 configure/open 与 raw HTTP wire，分别走原 MCP/Web 端口。ACK 等真实消费，不把 SDK write/drain 当消费，文件 ACK 不是 commit。新旧 stdio data 不匹配仅使可选 DATA Apps/传输不可用，保留健康的标准 MCP，不自动回退 HTTP 或重放。未协商 apps 仍可用普通工具和非 UI Resources；roots 不扩大工具权限。详见[文件管理合同](docs/file-manager.md)。
+启用 `--extensions files` 后，通过 `capabilities.extensions["cc.qqxing/extensions"]`（仅新容器缺省时回退 `experimental`）及 `cc.qqxing/apps/v1/list` 发现，独立于模型 Tools。APPS／FILES／STREAMS 仍为 v1；stdio／reverse 无论 MCP era 以及 legacy HTTP 均为 DATA1，modern HTTP 为 DATA2。应用和 `transfer_file` 共用 files v1，与 terminal 共用传输中立 DataSession：DATA1 归属连接，DATA2 归属公开业务绑定。stdio 显式 configure `{binding,transport:"stdio"}` 并要求响应 `{transport:"stdio"}`；控制与有界 Base64 帧共用 FIFO writer，不创建数据 listener、endpoint 或 HTTP 票据。每帧解码后最多 64 KiB，每通道每方向 256 KiB 消费窗口；direct HTTP/reverse 保留原 MCP/Web 端口的 raw channel wire；modern HTTP 的 configure/open 及关联业务 RPC 使用 DATA2 control 授权，不能描述为 DATA1 控制 wire 不变。ACK 等真实消费，不把 SDK write/drain 当消费，文件 ACK 不是 commit。新旧 stdio data 不匹配仅使可选 DATA Apps/传输不可用，保留健康的标准 MCP，不自动回退 HTTP 或重放。未协商 apps 仍可用普通工具和非 UI Resources；roots 不扩大工具权限。详见[文件管理合同](docs/file-manager.md)。
 
 新增 App 复用已有 RPC/Resource、files 或 streams 能力时，只增加自己的描述符、业务 handlers 与 UI，不改 host 通用核心。真正新增 host 权限/能力必须在发现校验、服务端资源模块、浏览器桥接的明确 composition roots 注册。未知 capability 隐藏该 App，已知 capability 畸形仍报校验错误。
 
 ### 人工终端（显式启用扩展）
 
-`--extensions terminal` 须 Linux 或 Windows（build >= 18309）、可加载的 optional `node-pty`、可执行 shell 及协商 streams/data v1 后可用的 duplex dataSession，可经受支持的本机 stdio/本地 Docker、direct HTTP 或 reverse 接入。显式请求 terminal 但平台/native PTY/shell 不可用时明确报错并启动失败，即使同时请求 files 也不静默移除 terminal。默认关闭时不加载原生 PTY。未配置 shell 初始化时，Linux 自动使用有效的绝对可执行 `$SHELL`，否则 `/bin/bash`，以 `-i` 启动，正常 profile 行为不变；若不可用则失败，不再尝试其他 shell。Windows 使用原生 ConPTY，优先可执行 `pwsh.exe`、其次 `powershell.exe`（`-NoLogo -NoProfile`），再 `ComSpec`/系统 `cmd.exe`（`/d`），无公共 `--shell` 参数。继承 staff 环境，仅排除[终端合同](docs/terminal.md)列出的精确内部控制 key。Windows 不加载 profile，但不保证 shell、程序或系统完全不记录 history。chat-ai 沿用当前会话 MCP 授权及同源浏览器请求，不另设终端权限开关或高危确认。终端遵循宿主站点统一的 HTTP/HTTPS 部署策略，不另设终端专用 TLS 门槛或 origin 白名单。建议全站使用 HTTPS 保护登录会话、工具调用及终端流量；允许 HTTP 不代表这些请求已加密。
+`--extensions terminal` 须 Linux 或 Windows（build >= 18309）、可加载的 optional `node-pty`、可执行 shell，以及协商 streams v1 和 modern HTTP 的 DATA2（其他接入为 DATA1）后可用的 duplex dataSession，可经受支持的本机 stdio/本地 Docker、direct HTTP 或 reverse 接入。显式请求 terminal 但平台/native PTY/shell 不可用时明确报错并启动失败，即使同时请求 files 也不静默移除 terminal。默认关闭时不加载原生 PTY。未配置 shell 初始化时，Linux 自动使用有效的绝对可执行 `$SHELL`，否则 `/bin/bash`，以 `-i` 启动，正常 profile 行为不变；若不可用则失败，不再尝试其他 shell。Windows 使用原生 ConPTY，优先可执行 `pwsh.exe`、其次 `powershell.exe`（`-NoLogo -NoProfile`），再 `ComSpec`/系统 `cmd.exe`（`/d`），无公共 `--shell` 参数。继承 staff 环境，仅排除[终端合同](docs/terminal.md)列出的精确内部控制 key。Windows 不加载 profile，但不保证 shell、程序或系统完全不记录 history。chat-ai 沿用当前会话 MCP 授权及同源浏览器请求，不另设终端权限开关或高危确认。终端遵循宿主站点统一的 HTTP/HTTPS 部署策略，不另设终端专用 TLS 门槛或 origin 白名单。建议全站使用 HTTPS 保护登录会话、工具调用及终端流量；允许 HTTP 不代表这些请求已加密。
 
 部署可设置 `STAFF_MCP_SHELL_INIT` 为 staff 环境内绝对、可读的 Bash 脚本路径（不是 MCP 参数）。配置后必须使用 Linux `/bin/bash`，不静默回退 `sh`；每次 `execute_command` 和每个新 PTY 都先 source 同一文件，alias、function、export 和 `cd` 在该 shell 内生效。初始化 stdout 转 stderr，不污染 MCP 协议 stdout；source 诊断被固定失败消息替代，返回非零则不执行用户命令或进入交互提示。PTY 使用私有 bootstrap 替代正常的用户 Bash rc 文件；清除 `BASH_ENV`，保留初始化路径标记供后代使用。management Node 主进程不 source 文件。脚本修改仅影响后续命令/新 PTY，不更新已有 shell；这是重复执行的初始化代码，不是一次性安装或键值解析。不新增自动重试/重放；未配置时包括 Windows 在内的既有 shell 选择及启动行为不变。详见[终端合同](docs/terminal.md#shared-shell-initialization)。
 
 PTY 默认从 staff 工作区 `main` 启动，与文件 roots 独立，以 staff 的运行 OS 身份运行；root/cwd 只是起始目录，**不是 sandbox**；shell 的文件和网络副作用不受文件工具路径检查约束。终端输入输出不进入模型或聊天历史。每个 stream 的浏览器到 chat-ai 交互使用一条同源 WebSocket（`/api/mcp/app-stream`，`chat-app-stream-v1`），输入、输出、resize、presence 和真实 xterm 消费 ACK 共用连接，后端仍是公共 DataSession（stdio 帧或 raw HTTP）。浏览器每 10 秒刷新独立的 120 秒 host presence；host 通用 streams 模块按远端每次返回的租约调度续租，staff 默认 30 秒。点击 Shell App 自动启动一次 PTY，无额外打开按钮或确认；退出、PTY 错误或真实断链后保留 App 壳供手动重连。普通隐藏视图保留 read/ACK/presence，但拒绝新输入和 resize；真正离页、关闭、撤权或到期才清理，清理 best effort，不撤销副作用。Linux 保留 TERM-to-KILL，Windows 关闭自有 ConPTY console；均不保证全部 detached 后代结束或文件/网络副作用回滚。
 
-当前描述符和 iframe 资源保持 **bridge v1**：文件显式 `scope:"workspace"`，终端 `scope:"chat"`。文件声明 `capabilities.files:{version:1,upload:true,download:true}`；终端声明 `capabilities.streams:{version:1,purpose,create,renew,status,close,commands}` 并要求 streams/data v1。终端业务 RPC 和 data purpose 保持 `cc.qqxing/terminal`，不再声明 terminal manifest；host 仅校验通用信封，PTY 参数与 metadata 由 staff handler/UI adapter 解释。2.0.0 扩展合同要求宿主、描述符与 UI 资源配套部署并重新打开 App，不提供旧实现兼容路径。files-v1 新增自己的 `stat` 用于 force 复制版本检查，不再依赖文件管理 App；chat-ai 的本地字节预算不代表远端业务上限。详见[宿主/桥接边界](docs/file-manager.md#host-boundary-and-bridge-v1)。
+当前描述符和 iframe 资源保持 **bridge v1**：文件显式 `scope:"workspace"`，终端 `scope:"chat"`。文件声明 `capabilities.files:{version:1,upload:true,download:true}`；终端声明 `capabilities.streams:{version:1,purpose,create,renew,status,close,commands}` 并要求 streams v1 与对应 DATA 版本（modern HTTP 为 2，其余为 1）。终端业务 RPC 和 data purpose 保持 `cc.qqxing/terminal`，不再声明 terminal manifest；host 仅校验通用信封，PTY 参数与 metadata 由 staff handler/UI adapter 解释。2.0.0 扩展合同要求宿主、描述符与 UI 资源配套部署并重新打开 App，不提供旧实现兼容路径。files-v1 新增自己的 `stat` 用于 force 复制版本检查，不再依赖文件管理 App；chat-ai 的本地字节预算不代表远端业务上限。详见[宿主/桥接边界](docs/file-manager.md#host-boundary-and-bridge-v1)。
 
 背压退出可能输出不完整，当前源码在远端 `status.error` 返回 `{code:"OUTPUT_INCOMPLETE",message:string}`，宿主通用流结果则以可选 `incomplete:boolean` 与 `error:{code:string,message:string}` 接续异常 close/status 并提供 UI 警告；通用布尔字段为 incomplete，App 本地终端 adapter 再映射完整性警告，不是远端 status 字段；这些字段用于检测和诊断可能的丢失，不恢复缺失字节，也不保证无损输出，即使收到 EOF 或 exit code 0。见[终端 UI 合同（英文）](docs/terminal.md)。
 
@@ -212,7 +214,7 @@ PTY 默认从 staff 工作区 `main` 启动，与文件 roots 独立，以 staff
 - 将独立的 Docker 工具缓存 `<staff-global>/tools/docker` 挂到 `/opt/.staff/tools`，并保留原 skills/profiles 挂载。同 uid 非 root 可直接写工具目录，不覆盖宿主原工具缓存；仍受原有挂载权限限制，不自动 chown/chmod。
 - 提供 `--docker-args` 配置兼容的硬件/环境参数（如 ADB USB 调试、GPU），保留受管容器生命周期限制；stdio 数据不再要求 loopback 发布或特定容器网络模式。
 
-Docker stdio 控制与数据共用既有管道：不再映射 `39173`，无应用数据 listener、endpoint、HTTP 票据或 bootstrap metadata。wrapper 保留确切自有容器校验、工作区/程序包/tools/skills/profile 挂载、权限和清理。扩展默认全关，未协商时不创建 DataSession；HTTP 原 MCP listener 及 HTTP/reverse 数据 wire 不变。
+Docker stdio 控制与数据共用既有管道：不再映射 `39173`，无应用数据 listener、endpoint、HTTP 票据或 bootstrap metadata。wrapper 保留确切自有容器校验、工作区/程序包/tools/skills/profile 挂载、权限和清理。扩展默认全关，未协商时不创建 DataSession；HTTP 保留原 MCP listener，HTTP/reverse raw channel wire 不变；modern HTTP 业务控制改用上文 DATA2。
 
 Docker 文件根仅复用已有工作区（`/workspace`，`main`）与 allowed-directory 挂载，不创建第二套 file-root 挂载。显式 `-d /` 会通过已有授权目录映射主动扩大宿主文件访问范围，仍受 Docker/OS 权限与拓扑约束。终端 cwd 始终为 `/workspace`，不受额外文件根影响。
 
@@ -250,15 +252,17 @@ node /path/to/staff-mcp/dist/src/index.js --profile android-reverse
 
 ### HTTP 会话容量与生命周期
 
-每个 HTTP 监听器固定最多 **64 个会话**，为内部常量。初始化中、清理未完成或清理失败的会话都计入名额。满额时新初始化返回 **429**，不驱逐已有会话；清理成功后才释放名额。它与限制受管子 MCP 的 `--max-mcp-sessions` 独立，子 MCP 显式 start/stop 不变。
+每个 HTTP 监听器的 **legacy MCP sessions 与 modern DATA2 active/closing bindings 合计最多 64 个**。初始化中的 legacy 会话、清理未完成或失败的 owner 都占名额，清理成功后才释放。满额时 legacy 新初始化返回 HTTP **429**，DATA2 新 configure 返回扩展容量错误，不驱逐已有 owner。DATA2 proof registry 另限 **128 条总记录**，包含 active、closing 和保留期内 closed 记录，不是额外容纳 128 条 closed proof；不会为新 owner 驱逐未过期 proof。这些限制与受管子 MCP 的 `--max-mcp-sessions` 独立，子 MCP 显式 start/stop 不变。
 
-HTTP 会话**不按空闲超时回收**。显式 DELETE/SDK close、初始化失败、传输关闭或监听器 shutdown 才清理会话；客户端应主动关闭不再使用的连接。遗留会话可能持续占用名额，直到关闭或 shutdown。文件/终端租约、数据消费期限及资源清理仍独立生效，不因 MCP 空闲而主动关闭整个会话。未知或已关闭 ID 返回 **404**，需不带旧 ID 显式重连，不重放工具、文件提交或终端输入。此容量不是后台命令、受管子 MCP 或 LSP 的全局配额。
+legacy HTTP 会话**没有 MCP 空闲回收定时器**。显式 DELETE/SDK close、初始化失败、传输关闭或监听器 shutdown 才清理；客户端应主动关闭不用的会话。文件／PTY 租约及数据消费期限仍独立生效。未知或已关闭 legacy session ID 返回 HTTP **404**，不会创建替代会话。此容量不是后台命令、受管子 MCP 或 LSP 的全局配额。
+
+modern HTTP 无 MCP session ID，每请求创建独立 server facade。Files／PTY／data 状态归属 configure 返回的公开 DATA2 `control:{binding,token}`，具有由宿主单独续期的 **90 秒租约**。owner proof 只留宿主内存，不进入 UI／模型、配置或日志；raw channel token 和消费 ACK 保持不变。close、租约到期和 listener shutdown 同步拒绝新业务，再等待已受理 CRUD、文件准备／I/O／commit、PTY 创建／退出及 cleanup；清理失败不报告 closed、不释放容量。有限保留期内（owner 清理成功后五分钟，原操作仍受其记录期限限制），可凭原 proof 和当前授权查询原操作 status／执行 cleanup，但不能恢复操作权限或重放；unknown／记录缺失不证明未发布。健康的标准 MCP 普通工具保持可用；DATA 到期不自动 configure、重连或重放。
 
 ### 会话关闭
 
 正常 SDK close、stdio EOF 及 CLI SIGINT/SIGTERM/SIGHUP 都先清理会话资源，再退出进程；Docker 宿主管道 EOF 走同一路径。清理立即拒绝新操作，关闭 skills 监听器及防抖定时器，并等待文件暂存、已受理提交、数据会话和自有 PTY 退出。重复 close 等待同一清理过程，失败明确报告，不伪报成功。异步清理结束前保留同步 exit 兜底。SIGKILL、崩溃和 daemonize 后代不保证清理，未兑现的底层操作也可能延迟正常退出。
 
-新 HTTP 会话只能由不带 MCP session ID 的 POST initialize 创建。未知或已关闭 ID 返回 404；GET/DELETE/无效请求不会创建替代会话。初始化失败会释放资源，监听器停止时等待活动及初始化中的会话。reverse 重连等待旧会话清理后创建新 server，不复用已关闭的监听器、不重放操作。HTTP 监听器容量与生命周期遵循上节规则，不再按空闲回收。
+新 legacy HTTP 会话只能由不带 MCP session ID 的 POST initialize 创建。未知或已关闭 legacy ID 返回 404；GET/DELETE/无效请求不会创建替代会话。初始化失败释放资源。modern HTTP 请求结束只销毁该次 SDK facade，不关闭 DATA2 owner；监听器 shutdown 等待活动／初始化中的 legacy 会话，并 fence、等待 modern owner 清理。reverse 重连等待旧会话清理后创建新 server，不复用已关闭的监听器、不重放操作。HTTP 容量、legacy session 与 DATA2 的不同生命周期遵循上节规则。
 
 ### 受管子 MCP 会话
 

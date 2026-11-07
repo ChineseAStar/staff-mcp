@@ -11,7 +11,18 @@ import type { TerminalSession } from './session.js';
 /** Business adapter: the stream host never needs terminal dimensions or PTY state. */
 export function registerTerminal(
     server: McpServer,
-    current: (ctx: ServerContext, method: string) => TerminalSession | undefined,
+    current: (
+        ctx: ServerContext,
+        method: string,
+    ) => TerminalSession | undefined,
+    resolve?: (
+        input: unknown,
+        ctx: ServerContext,
+        method: string,
+    ) => {
+        terminal: TerminalSession | undefined;
+        params: unknown;
+    },
 ) {
     const size = z.number().int().min(2).max(1000);
     const resourceId = z.string().min(1).max(256);
@@ -53,7 +64,11 @@ export function registerTerminal(
                         'STALE_CONNECTION',
                         'Terminal request connection closed',
                     );
-                const terminal = current(ctx, method);
+                const selected = resolve?.(input, ctx, method);
+                const terminal = selected
+                    ? selected.terminal
+                    : current(ctx, method);
+                if (selected) input = selected.params;
                 if (!terminal)
                     extensionError(
                         'TERMINAL_DISABLED',

@@ -3,11 +3,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { z } from 'zod';
 import { ProtocolError } from '@modelcontextprotocol/server';
-import type {
-    McpServer,
-    ServerContext,
-    ServerNotifier,
-} from '@modelcontextprotocol/server';
+import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
 import {
     FileCore,
     FileError,
@@ -148,14 +144,52 @@ function resource(uri: string) {
     return { rootId: match[1], file };
 }
 
-/** One instance per physical transport generation; no negotiation or handles survive reconnect. */
+/** The same admission boundary for legacy subscribe and pre-instance modern listen. */
+export async function validateFileResourceSubscription(
+    core: FileCore,
+    uri: string,
+) {
+    try {
+        const entry = resource(uri);
+        await core.resolve(entry.rootId, entry.file);
+    } catch (error) {
+        throw rpc(error);
+    }
+}
+
+/** Bind invalidation dependencies without owning protocol subscriptions or delivery. */
+export function subscribeFileResourceUpdates(
+    core: FileCore,
+    uris: () => Iterable<string>,
+    publish: (uri: string) => void,
+): () => void {
+    const notify = (rootId: string, changedPath: string) => {
+        for (const uri of new Set(uris())) {
+            const entry = resource(uri);
+            if (entry.rootId !== rootId) continue;
+            if (
+                entry.file === changedPath ||
+                entry.file.startsWith(`${changedPath}/`) ||
+                entry.file === '' ||
+                changedPath.startsWith(`${entry.file}/`)
+            )
+                publish(uri);
+        }
+    };
+    core.listeners.add(notify);
+    return () => {
+        core.listeners.delete(notify);
+    };
+}
+
+/** One business owner: connection-scoped DATA1 or explicitly controlled HTTP DATA2. */
 export class FileManagerSession {
     readonly transfers: TransferManager;
     initialized = false;
     closed = false;
     constructor(
         core: FileCore,
-        private readonly server: McpServer,
+        private readonly server: McpServer | undefined,
         runtimeDirectory: string,
         requireData: () => void,
     ) {
@@ -171,6 +205,7 @@ export class FileManagerSession {
     supports(extension: string, ctx: ServerContext) {
         return (
             !this.closed &&
+            this.server !== undefined &&
             (this.initialized || isModernRequest(ctx)) &&
             supports(this.server, extension, ctx)
         );
@@ -197,8 +232,9 @@ export function registerFileResources(
         uri: string,
         ctx: ServerContext,
     ) => ReturnType<typeof readAppResource>,
-    notifications?: ServerNotifier,
+    resourceSubscriptions?: () => Iterable<string>,
     modern = false,
+    externalResourceNotifications = false,
 ) {
     const protocol = server.server;
     const subscriptions = new Set<string>();
@@ -220,35 +256,6 @@ export function registerFileResources(
                 throw rpc(e);
             }
         };
-    const notify = (rootId: string, changedPath: string) => {
-        if (closed) return;
-        if (modern) {
-            // SDK subscriptions/listen owns URI filtering and delivery. Publish
-            // the changed file and directory manifests containing that entry.
-            let file = changedPath;
-            for (;;) {
-                const uri = resourceUri(rootId, file);
-                if (notifications) notifications.resourceUpdated(uri);
-                else void protocol.sendResourceUpdated({ uri }).catch(() => {});
-                if (file === '') break;
-                const separator = file.lastIndexOf('/');
-                file = separator === -1 ? '' : file.slice(0, separator);
-            }
-            return;
-        }
-        if (!initialized) return;
-        for (const uri of subscriptions) {
-            const entry = resource(uri);
-            if (entry.rootId !== rootId) continue;
-            if (
-                entry.file === changedPath ||
-                entry.file.startsWith(`${changedPath}/`) ||
-                entry.file === '' ||
-                changedPath.startsWith(`${entry.file}/`)
-            )
-                void server.server.sendResourceUpdated({ uri }).catch(() => {});
-        }
-    };
     protocol.setRequestHandler(
         'resources/list',
         guarded(async (request) => {
@@ -341,8 +348,7 @@ export function registerFileResources(
     protocol.setRequestHandler(
         'resources/subscribe',
         guarded(async (request) => {
-            const entry = resource(request.params.uri);
-            await core.resolve(entry.rootId, entry.file);
+            await validateFileResourceSubscription(core, request.params.uri);
             if (closed)
                 fail(
                     'STALE_CONNECTION',
@@ -364,12 +370,28 @@ export function registerFileResources(
     server.connect = async (transport) => {
         closed = false;
         initialized = false;
-        core.listeners.add(notify);
+        // HTTP owns one long-lived factory listener; stdio/reverse keep the
+        // dependency accessor on their physical connection's server instance.
+        const unsubscribe = externalResourceNotifications
+            ? undefined
+            : subscribeFileResourceUpdates(
+                  core,
+                  () => {
+                      if (closed || (!modern && !initialized)) return [];
+                      if (modern) return resourceSubscriptions?.() ?? [];
+                      return subscriptions;
+                  },
+                  (uri) => {
+                      void protocol
+                          .sendResourceUpdated({ uri })
+                          .catch(() => {});
+                  },
+              );
         const cleanup = () => {
             closed = true;
             initialized = false;
             subscriptions.clear();
-            core.listeners.delete(notify);
+            unsubscribe?.();
         };
         const previousClose = transport.onclose;
         transport.onclose = () => {
@@ -386,10 +408,24 @@ export function registerFileResources(
     };
 }
 
+export interface FileManagerRequestResolver {
+    resolve(
+        input: unknown,
+        ctx: ServerContext,
+        method: string,
+        required: readonly string[],
+    ): {
+        session: FileManagerSession;
+        params: unknown;
+        run?<T>(operation: () => Promise<T>): Promise<T>;
+    };
+}
+
 export function registerFileManager(
     server: McpServer,
     core: FileCore,
     runtimeDirectory: string,
+    options?: FileManagerRequestResolver,
 ) {
     let session: FileManagerSession | undefined;
     const protocol = server.server;
@@ -409,6 +445,16 @@ export function registerFileManager(
     function requireExtension(ctx: ServerContext, extension = FILES) {
         current().requireExtension(extension, ctx);
     }
+    function select(
+        input: unknown,
+        ctx: ServerContext,
+        method: string,
+        required: readonly string[],
+    ): ReturnType<FileManagerRequestResolver['resolve']> {
+        if (options) return options.resolve(input, ctx, method, required);
+        for (const extension of required) requireExtension(ctx, extension);
+        return { session: current(), params: input };
+    }
     const guarded =
         <T, R>(handler: (request: T, ctx: ServerContext) => Promise<R>) =>
         async (request: T, ctx: ServerContext) => {
@@ -420,12 +466,7 @@ export function registerFileManager(
                 throw rpc(e);
             }
         };
-    async function extensionCall(
-        method: keyof typeof params,
-        input: unknown,
-        ctx: ServerContext,
-    ) {
-        requireExtension(ctx);
+    async function extensionCall(method: keyof typeof params, input: unknown) {
         // Separate parse calls preserve the exact shape/types for every public method.
         switch (method) {
             case 'roots':
@@ -495,7 +536,11 @@ export function registerFileManager(
         protocol.setRequestHandler(
             `${FILE_MANAGER}/${method}`,
             { params: z.unknown().optional() },
-            guarded(async (input, ctx) => extensionCall(method, input, ctx)),
+            guarded(async (input, ctx) => {
+                const selected = select(input, ctx, method, [FILES]);
+                const operation = () => extensionCall(method, selected.params);
+                return selected.run ? selected.run(operation) : operation();
+            }),
         );
     }
     const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -579,30 +624,25 @@ export function registerFileManager(
             `${FILES}/v1/${method}`,
             { params: z.unknown().optional() },
             guarded(async (input, ctx) => {
-                requireExtension(ctx);
-                if (
+                const required =
                     method === 'prepare' ||
                     method === 'commit' ||
                     method === 'renew'
-                )
-                    requireExtension(ctx, DATA);
-                const transfers = current().transfers;
+                        ? [FILES, DATA]
+                        : [FILES];
+                const selected = select(input, ctx, method, required);
+                input = selected.params;
+                const transfers = selected.session.transfers;
                 switch (method) {
                     case 'roots':
                         parseExtension(transferParams.roots, input);
                         return core.roots();
                     case 'resolve':
                         return resolveUri(
-                            parseExtension(
-                                transferParams.resolve,
-                                input,
-                            ).uri,
+                            parseExtension(transferParams.resolve, input).uri,
                         );
                     case 'stat': {
-                        const p = parseExtension(
-                            transferParams.stat,
-                            input,
-                        );
+                        const p = parseExtension(transferParams.stat, input);
                         const stat = await core.stat(p.rootId, p.path, true);
                         if (!stat.operations.read || stat.version === undefined)
                             fail('NOT_FILE', 'Expected a regular file');
@@ -610,23 +650,15 @@ export function registerFileManager(
                     }
                     case 'prepare':
                         return transfers.prepare(
-                            parseExtension(
-                                transferParams.prepare,
-                                input,
-                            ),
+                            parseExtension(transferParams.prepare, input),
                         );
                     case 'status':
                         return transfers.status(
-                            parseExtension(
-                                transferParams.status,
-                                input,
-                            ).operationId,
+                            parseExtension(transferParams.status, input)
+                                .operationId,
                         );
                     case 'commit': {
-                        const p = parseExtension(
-                            transferParams.commit,
-                            input,
-                        );
+                        const p = parseExtension(transferParams.commit, input);
                         return transfers.commit(
                             p.operationId,
                             p.transferId,
@@ -640,17 +672,13 @@ export function registerFileManager(
                         );
                     case 'cancel':
                         return transfers.release(
-                            parseExtension(
-                                transferParams.cancel,
-                                input,
-                            ).operationId,
+                            parseExtension(transferParams.cancel, input)
+                                .operationId,
                         );
                     case 'release':
                         return transfers.release(
-                            parseExtension(
-                                transferParams.release,
-                                input,
-                            ).operationId,
+                            parseExtension(transferParams.release, input)
+                                .operationId,
                         );
                 }
             }),
