@@ -10,9 +10,9 @@
 
 ## 兼容性与配套升级
 
-本轮容器模式候选版本移除普通文件工具与命令工作目录的 workspace 边界；Host 仍使用配置目录限制。Files App／资源模板以及文件传输 RPC 仍只公开配置根，不自动增加 `/`。私有 staging、根目录保护和原文件事务规则保留；普通文件工具仍不跟随符号链接，不处理任意设备。操作系统用户权限、只读挂载继续生效，可写工作区挂载会持久修改文件。`STAFF_MCP_IS_DOCKER=1` 是可信启动方的容器环境声明，不从文件系统猜测，也不由模型工具参数切换；Host 进程不要设置此标记。
+2.1.0 移除普通文件工具与命令工作目录的 workspace 边界；Host 仍使用配置目录限制。Files App／资源模板以及文件传输 RPC 仍只公开配置根，不自动增加 `/`。私有 staging、根目录保护和原文件事务规则保留；普通文件工具仍不跟随符号链接，不处理任意设备。操作系统用户权限、只读挂载继续生效，可写工作区挂载会持久修改文件。`STAFF_MCP_IS_DOCKER=1` 是可信启动方的容器环境声明，不从文件系统猜测，也不由模型工具参数切换；Host 进程不要设置此标记。
 
-**本地 2.1.0-rc.0 候选版本（未发布 npm）：** 文件资源只通过模板发现，每个配置根保留原有模板，具体资源列表返回空数组。请在文件 App 中针对文件／目录操作，不再提供顶层文件的 `@` 快捷项。该改动不属于 npm 2.0.7，也不会自动更新正在运行的端点。升级前若仍有旧的按名称资源拒绝，请先连接旧目录显式保存权限，将规则转换为 URI；详见[文件资源与升级注意事项](docs/file-manager.md#standard-file-resources-and-attachments)。
+**2.1.0 版本：** 文件资源只通过模板发现，每个配置根保留原有模板，具体资源列表返回空数组。请在文件 App 中针对文件／目录操作，不再提供顶层文件的 `@` 快捷项。该行为替代 2.0.7 的具体文件目录，不会自动更新运行中的端点。请配套 chat-ai 提交 `77369efdeeb9defce218fad95145b4dcae99724d` 或兼容后继版本，以获得容器标记传递及资源授权保护。升级前若仍有旧的按名称资源拒绝，请先连接旧目录显式保存权限，将规则转换为 URI；详见[文件资源与升级注意事项](docs/file-manager.md#standard-file-resources-and-attachments)。
 
 **2.0.7 版本：** 本机与 Docker stdio 使用有界、无端口的数据帧，不自动回退 HTTP 或重放。请配套 chat-ai 提交 `5bfa6a4321d258e5129b250da248adff96b6ad42` 或兼容后继版本，以获得匹配的协议与权限处理；宿主正式内置依赖将在兼容后继版本中更新，仅安装此 npm 包不会更新宿主依赖。HTTP/reverse wire 与业务授权保持不变。旧 stdio 宿主可能无法使用可选的 data Apps/传输，但健康的标准 MCP tools/resources/prompts 仍可用。
 
@@ -35,7 +35,7 @@ Docker 模板/用户脚本编排、受管 staff 短命令与聊天深色渲染�
 无需进行 Chat8/schema9/format7/分享 protocol2 数据迁移。
 
 1. 结束在途操作，备份正常配置；无需转换数据。
-2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.0.7，并协调 reverse 连接的停机窗口。
+2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.1.0，并协调 reverse 连接的停机窗口。
 3. 重新连接 MCP、重新打开 App，仅显式启用需要的扩展。
 
 发布摘要见 [CHANGELOG](CHANGELOG.md)。
@@ -49,7 +49,7 @@ Docker 模板/用户脚本编排、受管 staff 短命令与聊天深色渲染�
 使用明确版本运行 staff-mcp：
 
 ```bash
-npx --yes staff-mcp@2.0.7 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.1.0 --working-dir /path/to/your/project
 ```
 
 从源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口：
@@ -156,7 +156,7 @@ Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Ser
 
 ## 🛠️ 核心能力
 
-以下描述 staff-mcp 2.0.7；扩展仍须显式启用。
+以下描述 staff-mcp 2.1.0；扩展仍须显式启用。
 
 扩展**默认全关**。通过 `--extensions files`、`--extensions terminal` 或 `--extensions files,terminal` 启用；apps/data 依赖及 terminal 对 streams v1 的声明自动计算，无需单独选择。禁用能力不声明对应 manifest 条目、不注册对应 UI Resource 或业务 handler；全关时无扩展 manifest、应用数据 listener/session，普通 MCP 工具和非 UI Resources 保留。HTTP 模式仍监听原 MCP 服务。
 
@@ -323,14 +323,14 @@ files-v1 跨 MCP 中转与文件应用上传不再设置 100 MiB 单文件硬限
 ## 发版流程
 
 1. 在临时开发分支完成改动、补齐 CHANGELOG 发布日期，确认 `package.json`、`package-lock.json` 顶层及 `packages[""].version` 都是本次目标版本，提交并推送该分支。
-2. 运行以下 **Bash** 检查流程。先核对 `VERSION`、`RELEASE_BRANCH` 与实现提交 `TARGET`，并确认该分支头已包含发布文档与版本变更。示例为 2.0.7；它发布后不可原样重跑。任何一步失败都应先排查，不要跳过检查继续打标签。
+2. 运行以下 **Bash** 检查流程。先核对 `VERSION`、`RELEASE_BRANCH` 与实现提交 `TARGET`，并确认该分支头已包含发布文档与版本变更。示例为 2.1.0；它发布后不可原样重跑。任何一步失败都应先排查，不要跳过检查继续打标签。
 
 ```bash
 (
 set -euo pipefail
-VERSION=2.0.7
-RELEASE_BRANCH=tmp/stdio-data-session
-TARGET=28b253079fa242e679cee62b09459129a9760b65
+VERSION=2.1.0
+RELEASE_BRANCH=tmp/resource-templates-only
+TARGET=b0cd46fa60fc65cce1c234856e7ed4da1763f79a
 
 git fetch origin --tags
 test -z "$(git status --porcelain)"
@@ -380,7 +380,7 @@ git push origin "refs/tags/v$VERSION"
 
 标签触发 `.github/workflows/publish.yml` 的 **Publish to npm**。工作流使用 Node 24、OIDC trusted publishing 和 `npm publish --provenance --access public`；npm 包设置中的 trusted publisher 必须对应仓库和 `publish.yml` 工作流文件。发布任务会验证标签对应提交已包含于远端 `master`，并校验三处版本；仅 push/合并 `master` 不会发布 npm。禁止从未合入的开发分支发版、移动已发布标签或重用已发布版本。
 
-成功后检查 Actions 和 `npm view staff-mcp@2.0.7 version`，再按原安装方式更新（如 `npm install -g staff-mcp@2.0.7` 或 `npx -y staff-mcp@2.0.7 ...`），并重启各 MCP 进程；已运行进程和已打开的 App 不会自动替换。版本号与标签示例需随每次后续发布更新。
+成功后检查 Actions 和 `npm view staff-mcp@2.1.0 version`，再按原安装方式更新（如 `npm install -g staff-mcp@2.1.0` 或 `npx -y staff-mcp@2.1.0 ...`），并重启各 MCP 进程；已运行进程和已打开的 App 不会自动替换。版本号与标签示例需随每次后续发布更新。
 
 ## 📄 License
 

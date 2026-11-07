@@ -10,9 +10,9 @@ It provides secure file management, shell execution, LSP-powered code intelligen
 
 ## Compatibility and coordinated upgrades
 
-The container-mode candidate removes the workspace-only boundary from ordinary file tools and command working directories inside an explicitly marked container. Host mode remains restricted to configured directories. Files App/resource roots and file-transfer RPCs still use the published roots; private staging, root protection and file transaction rules remain in force. This is not permission to access the Docker host: OS user permissions and mounts remain the boundary, and writable workspace mounts are persistent. `STAFF_MCP_IS_DOCKER=1` is an operator-controlled launch assertion, not something inferred from the filesystem or selected by a model request. Do not set it for Host processes.
+Version 2.1.0 removes the workspace-only boundary from ordinary file tools and command working directories inside an explicitly marked container. Host mode remains restricted to configured directories. Files App/resource roots and file-transfer RPCs still use the published roots; private staging, root protection and file transaction rules remain in force. This is not permission to access the Docker host: OS user permissions and mounts remain the boundary, and writable workspace mounts are persistent. `STAFF_MCP_IS_DOCKER=1` is an operator-controlled launch assertion, not something inferred from the filesystem or selected by a model request. Do not set it for Host processes.
 
-**Local 2.1.0-rc.0 candidate (not published to npm):** file Resource discovery is template-only, with one unchanged URI template per configured root and an empty concrete list. Use the file App's explicit file/directory actions instead of top-level `@` quick picks. This is not part of npm 2.0.7 and does not update running endpoints. See [file Resources and upgrade precautions](docs/file-manager.md#standard-file-resources-and-attachments).
+**Version 2.1.0:** file Resource discovery is template-only, with one unchanged URI template per configured root and an empty concrete list. Use the file App's explicit file/directory actions instead of top-level `@` quick picks. This replaces the concrete file directory from 2.0.7 and does not update running endpoints. Pair with chat-ai commit `77369efdeeb9defce218fad95145b4dcae99724d` or a compatible descendant for container-mode propagation and resource authorization safeguards. See [file Resources and upgrade precautions](docs/file-manager.md#standard-file-resources-and-attachments).
 
 **Version 2.0.7:** adds bounded, no-port stdio data frames for local and Docker connections, with no automatic HTTP fallback or replay. Pair with chat-ai commit `5bfa6a4321d258e5129b250da248adff96b6ad42` or a compatible descendant for the matching protocol and permissions. The host's formal bundled dependency update will follow in a compatible descendant; installing this npm package alone does not update it. HTTP/reverse wire and business authorization remain unchanged. With an older stdio host, optional data-dependent Apps/transfers may be unavailable while healthy standard MCP tools/resources/prompts remain usable.
 
@@ -35,7 +35,7 @@ Standard stdio/Streamable HTTP tools, resources and prompts remain supported. Ex
 No Chat8/schema9/format7/share protocol2 data migration is required.
 
 1. Finish in-flight operations and back up your normal configuration; no data conversion is needed.
-2. Upgrade the matching chat-ai host first, then staff-mcp 2.0.7, coordinating downtime for reverse connections.
+2. Upgrade the matching chat-ai host first, then staff-mcp 2.1.0, coordinating downtime for reverse connections.
 3. Reconnect MCP, reopen Apps and explicitly enable only the extensions you want.
 
 See [CHANGELOG](CHANGELOG.md) for the release summary.
@@ -49,7 +49,7 @@ Current source supports Linux PTY and Windows native ConPTY, subject to native l
 Run staff-mcp with an explicit package version:
 
 ```bash
-npx --yes staff-mcp@2.0.7 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.1.0 --working-dir /path/to/your/project
 ```
 
 For a source checkout, install dependencies and build before using the absolute entrypoint in the examples:
@@ -161,7 +161,7 @@ The two reverse transport sources (`src/reverse/SseTransport.ts` and chat-ai's `
 
 ## 🛠️ Core Capabilities
 
-The behavior below describes staff-mcp 2.0.7. Extensions remain opt-in.
+The behavior below describes staff-mcp 2.1.0. Extensions remain opt-in.
 
 Extensions are **all off by default**. Use `--extensions files`, `--extensions terminal`, or `--extensions files,terminal`; apps/data dependencies and terminal's streams v1 manifest are added automatically, not selected separately. Disabled features advertise no manifest entry and register no corresponding UI Resource or business handler. With both off there is no extension manifest or application data listener/session; ordinary MCP tools and non-UI Resources remain. HTTP mode still opens its normal MCP listener.
 
@@ -326,7 +326,7 @@ Upgrade the host and all participating endpoints, reconnect MCP and reopen Apps.
 
 ## Release workflow
 
-Merge the verified release changes into `master` first. From an up-to-date `master` checkout, confirm that implementation commit `28b253079fa242e679cee62b09459129a9760b65` and the reviewed release-branch head are included and all three package/lock versions equal the explicit target version, not merely each other; finalize the changelog, then create and push the new version tag. A check that HEAD belongs to master alone does not prove the feature branch was merged. The checklist stops on any failed command and rejects an existing version/tag. The npm workflow rejects a tag whose commit is not contained in remote `master`. Do not publish from a development branch or move an existing release tag. Merging code alone does not publish to npm. `.github/workflows/publish.yml` runs Node 24 and OIDC trusted publishing with provenance; npm must trust the matching repository/workflow. Run `npm ci`, `npm run build` and `npm pack --dry-run` in the release checkout before tagging. After Actions succeeds, verify the exact version with `npm view staff-mcp@2.0.7 version`, update the package at each endpoint and restart it. See the [step-by-step release checklist](README_zh.md#发版流程); version/tag examples must be advanced for later releases.
+Merge the verified release changes into `master` first. From an up-to-date `master` checkout, confirm that implementation commit `b0cd46fa60fc65cce1c234856e7ed4da1763f79a` and the reviewed release-branch head are included and all three package/lock versions equal the explicit target version, not merely each other; finalize the changelog, then create and push the new version tag. A check that HEAD belongs to master alone does not prove the feature branch was merged. The checklist stops on any failed command and rejects an existing version/tag. The npm workflow rejects a tag whose commit is not contained in remote `master`. Do not publish from a development branch or move an existing release tag. Merging code alone does not publish to npm. `.github/workflows/publish.yml` runs Node 24 and OIDC trusted publishing with provenance; npm must trust the matching repository/workflow. Run `npm ci`, `npm run build` and `npm pack --dry-run` in the release checkout before tagging. After Actions succeeds, verify the exact version with `npm view staff-mcp@2.1.0 version`, update the package at each endpoint and restart it. See the [step-by-step release checklist](README_zh.md#发版流程); version/tag examples must be advanced for later releases.
 
 ## 📄 License
 

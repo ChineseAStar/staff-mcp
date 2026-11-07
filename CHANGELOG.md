@@ -1,13 +1,15 @@
 # Changelog
 
-## 2.1.0-rc.0 — Local candidate (not published to npm)
+## 2.1.0 — 2026-11-07
 
 - Use one explicit container mode for instructions and ordinary tool path access. Container file tools and command working directories are no longer limited to the workspace; Host mode keeps its configured directory boundary. The operating-system user, read-only mounts, private staging, configured-root protection, and existing file transaction rules still apply.
 - Keep public files/resource roots separate from container tool access; enabling container mode does not publish `/` or broaden files/transfer RPC paths. Platform-managed containers must inject the trusted `STAFF_MCP_IS_DOCKER=1` marker before starting staff; native `--docker` does the same.
 - Stop enumerating workspace roots and immediate files in `resources/list`; retain the standard method with an empty result and reject supplied cursors. Discovery no longer scans root directories.
 - Keep the existing file URI template per configured root, resource reads/subscriptions, and file App discovery, browsing and explicit attachments unchanged. A single-root workspace exposes one template; independently authorized roots retain separate template identities. Current chat-ai `@` menus no longer offer staff file quick picks; select the file or directory in the file App instead.
-- Pair with a host that accepts the template's exact empty expansion for root-directory attachments; update the host first rather than changing existing URI/template identities.
-- Before upgrading a chat-ai instance with legacy name-only resource denials, save its resource permissions against the old catalog to convert those rules to URI identities. Existing URI/template restrictions remain valid; no automatic permission migration, npm publication, host bundle update or endpoint reconnect is performed.
+- Pair with chat-ai commit `77369efdeeb9defce218fad95145b4dcae99724d` or a compatible descendant for managed container markers, exact empty template expansion and fail-closed handling of unresolved legacy resource denials. Update the host first; its formal bundled dependency update follows separately. This npm release does not merge chat-ai into codex-cloud or deploy other environments.
+- Before upgrading a chat-ai instance with legacy name-only resource denials, save its resource permissions against the old catalog to convert those rules to URI identities. Existing URI/template restrictions remain valid; unresolved legacy name denials fail closed in the matching host. No automatic permission migration, host bundle update, endpoint reconnect or side-effect replay is performed.
+
+This release retains MCP SDK 1.32.1, existing MCP/extension protocols, dependency versions and Skills tools. Linux x64 isolated builds, real Docker file/data/PTY checks and permission regressions were verified; no new OS/architecture, real-model or company-network compatibility claims are made.
 
 ## 2.0.7 — 2026-11-06
 
