@@ -24,6 +24,7 @@ import {
 } from '../extensions/protocol.js';
 import { FILE_MANAGER, readAppResource } from '../extensions/apps.js';
 import { TEXT_LIMIT, TEXT_PREVIEW_LIMIT } from './text-limits.js';
+import type { SkillResources } from '../skills/resources.js';
 
 const RESOURCE_LIMIT = 256 * 1024;
 // Keep escaped results below the SDK's 10 MiB stdio buffer, including envelope.
@@ -235,6 +236,7 @@ export function registerFileResources(
     resourceSubscriptions?: () => Iterable<string>,
     modern = false,
     externalResourceNotifications = false,
+    skills?: SkillResources,
 ) {
     const protocol = server.server;
     const subscriptions = new Set<string>();
@@ -275,12 +277,15 @@ export function registerFileResources(
                     'Resource templates have no further pages',
                 );
             return {
-                resourceTemplates: core.roots().roots.map((root) => ({
-                    uriTemplate: `staff-file://${root.rootId}/{+path}`,
-                    name: `${root.name} files`,
-                    description:
-                        'Actual root-relative files (256 KiB maximum) or directory manifests. Encode each path component once.',
-                })),
+                resourceTemplates: [
+                    ...core.roots().roots.map((root) => ({
+                        uriTemplate: `staff-file://${root.rootId}/{+path}`,
+                        name: `${root.name} files`,
+                        description:
+                            'Actual root-relative files (256 KiB maximum) or directory manifests. Encode each path component once.',
+                    })),
+                    ...(skills ? [skills.template] : []),
+                ],
             };
         }),
     );
@@ -290,6 +295,8 @@ export function registerFileResources(
             const uri = request.params.uri;
             const app = await readApp?.(uri, ctx);
             if (app) return app;
+            const skill = await skills?.readResource(uri);
+            if (skill) return skill;
             const entry = resource(uri);
             const full = await core.resolve(entry.rootId, entry.file);
             if ((await fs.lstat(full)).isDirectory()) {

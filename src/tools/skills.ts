@@ -1,13 +1,23 @@
-import { McpServer, RegisteredPrompt, RegisteredTool } from "@modelcontextprotocol/server";
+import type { McpServer } from "@modelcontextprotocol/server";
+import type { RegisteredPrompt } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { SkillManager, SkillInfo } from "../skills/manager.js";
-import * as fs from "fs/promises";
+import { SkillManager } from "../skills/manager.js";
+import type { SkillInfo } from "../skills/manager.js";
+import { registerSkillResources } from "../skills/resources.js";
+import type { SkillResources } from "../skills/resources.js";
 import * as fsSync from "fs";
 import * as path from "path";
-import { SecurityManager } from "../security.js";
+import type { SecurityManager } from "../security.js";
 import { registerServerCleanup } from "../utils/server-lifecycle.js";
 
-export function registerSkillTools(server: McpServer, workingDir: string, security: SecurityManager, profile: string = "default", watchProjectChanges = true) {
+export function registerSkillTools(
+  server: McpServer,
+  workingDir: string,
+  _security: SecurityManager,
+  profile: string = "default",
+  watchProjectChanges = true,
+): SkillResources {
+  const resources = registerSkillResources(server, workingDir, profile);
   let skillsMap = SkillManager.loadSkills(workingDir, profile);
   const promptMap = new Map<string, RegisteredPrompt>();
 
@@ -33,9 +43,11 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
     "skill",
     {
       description: getToolDescription(Object.values(skillsMap)),
-      inputSchema: z.object({
-        name: z.string().describe(`The name of the skill from available_skills`),
-      }).strict(),
+      inputSchema: z
+        .object({
+          name: z.string().describe(`The name of the skill from available_skills`),
+        })
+        .strict(),
     },
     async ({ name }) => {
       skillsMap = SkillManager.loadSkills(workingDir, profile);
@@ -47,13 +59,15 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
       }
 
       return {
-        content: [{
-          type: "text",
-          text: buildSkillOutput(skill),
-        }],
+        content: [
+          {
+            type: "text",
+            text: buildSkillOutput(skill),
+          },
+        ],
         _meta: { persistent: true },
       };
-    }
+    },
   );
 
   // read_skill_file
@@ -61,48 +75,44 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
     "read_skill_file",
     {
       description: "Read the contents of a file associated with a specific loaded skill.",
-      inputSchema: z.object({
-        skillName: z.string().describe('The name of the skill (e.g., "react-component")'),
-        relativePath: z.string().describe('The relative path of the file to read (e.g., "templates/Component.tsx")')
-      }).strict(),
+      inputSchema: z
+        .object({
+          skillName: z.string().describe('The name of the skill (e.g., "react-component")'),
+          relativePath: z
+            .string()
+            .describe('The relative path of the file to read (e.g., "templates/Component.tsx")'),
+        })
+        .strict(),
     },
     async ({ skillName, relativePath }) => {
-      const skill = skillsMap[skillName];
+      skillsMap = SkillManager.loadSkills(workingDir, profile);
+      const skill = Object.values(skillsMap).find((item) => item.name === skillName);
 
       if (!skill) {
         return {
           isError: true,
-          content: [{ type: "text", text: `Error: Skill "${skillName}" not found.` }]
-        };
-      }
-
-      const baseDir = path.dirname(skill.location);
-      const targetPath = path.resolve(baseDir, relativePath);
-
-      // Security check: ensure targetPath is within baseDir
-      if (!targetPath.startsWith(baseDir)) {
-        return {
-          isError: true,
-          content: [{ type: "text", text: `Security Error: Access denied. Cannot read files outside skill directory.` }]
+          content: [{ type: "text", text: `Error: Skill "${skillName}" not found.` }],
         };
       }
 
       try {
-        const content = await fs.readFile(targetPath, "utf-8");
+        const content = (await SkillManager.readSkillFile(skill, relativePath)).toString("utf-8");
         return {
-          content: [{
-            type: "text",
-            text: content,
-          }],
+          content: [
+            {
+              type: "text",
+              text: content,
+            },
+          ],
           _meta: { persistent: true },
         };
       } catch (e: any) {
         return {
           isError: true,
-          content: [{ type: "text", text: `Failed to read skill file: ${e.message}` }]
+          content: [{ type: "text", text: `Failed to read skill file: ${e.message}` }],
         };
       }
-    }
+    },
   );
 
   const promptDescMap = new Map<string, string>();
@@ -110,23 +120,23 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
 
   const refreshPrompts = () => {
     const list = Object.values(skillsMap);
-    
+
     const newToolDescription = getToolDescription(list);
     if (newToolDescription !== currentToolDescription) {
       currentToolDescription = newToolDescription;
       skillTool.update({ description: currentToolDescription });
     }
-    
+
     // Intercept sendPromptListChanged to batch notifications
     let promptsChanged = false;
     const originalSendPromptListChanged = server.sendPromptListChanged;
-    
+
     if (typeof originalSendPromptListChanged === "function") {
       server.sendPromptListChanged = () => {
         promptsChanged = true;
       };
     }
-    
+
     try {
       // Remove old prompts that are no longer in skillsMap
       for (const name of promptMap.keys()) {
@@ -141,7 +151,7 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
       // Add or update prompts
       for (const skill of list) {
         const oldDesc = promptDescMap.get(skill.name);
-        
+
         const callbackFn = () => {
           const latestSkill = skillsMap[skill.name];
           return {
@@ -150,10 +160,10 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
                 role: "user" as const,
                 content: {
                   type: "text" as const,
-                  text: latestSkill ? buildSkillOutput(latestSkill) : "Skill not found"
-                }
-              }
-            ]
+                  text: latestSkill ? buildSkillOutput(latestSkill) : "Skill not found",
+                },
+              },
+            ],
           };
         };
 
@@ -161,18 +171,27 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
           if (oldDesc !== skill.description) {
             promptMap.get(skill.name)!.update({
               description: skill.description,
-              callback: callbackFn
+              callback: callbackFn,
             });
             promptDescMap.set(skill.name, skill.description);
           }
         } else {
+          // SDK 2.4 stores prompts in a plain object and rejects inherited names.
+          // These skills were previously lost by the manager's own plain object;
+          // keep them available to tools/standard skills without breaking startup.
+          if (Object.hasOwn(Object.prototype, skill.name)) {
+            console.warn(
+              "[SkillTools] Skill prompt omitted: name unsupported by the SDK prompt registry.",
+            );
+            continue;
+          }
           const registered = server.registerPrompt(
             skill.name,
             {
               description: skill.description,
-              argsSchema: z.object({})
+              argsSchema: z.object({}),
             },
-            callbackFn
+            callbackFn,
           );
           promptMap.set(skill.name, registered);
           promptDescMap.set(skill.name, skill.description);
@@ -193,16 +212,23 @@ export function registerSkillTools(server: McpServer, workingDir: string, securi
 
   // Ensure prompt capabilities are registered even if the initial skillsMap is empty
   if (promptMap.size === 0) {
-    const dummy = server.registerPrompt("_dummy_", { description: "dummy" }, () => ({ messages: [] }));
+    const dummy = server.registerPrompt("_dummy_", { description: "dummy" }, () => ({
+      messages: [],
+    }));
     dummy.remove();
   }
 
   if (watchProjectChanges) {
-    registerServerCleanup(server, watchProjectSkills(workingDir, () => {
-      skillsMap = SkillManager.loadSkills(workingDir, profile);
-      refreshPrompts();
-    }));
+    registerServerCleanup(
+      server,
+      watchProjectSkills(workingDir, () => {
+        skillsMap = SkillManager.loadSkills(workingDir, profile);
+        refreshPrompts();
+        server.sendResourceListChanged();
+      }),
+    );
   }
+  return resources;
 }
 
 /** One endpoint watcher can publish invalidations for stateless request facades. */
@@ -234,7 +260,7 @@ export function watchProjectSkills(workingDir: string, onChange: () => void): ()
     if (watchTimeout) {
       clearTimeout(watchTimeout);
     }
-    
+
     watchTimeout = setTimeout(() => {
       watchTimeout = null;
       if (disposed) return;
@@ -272,7 +298,7 @@ export function watchProjectSkills(workingDir: string, onChange: () => void): ()
 
 function buildSkillOutput(skill: SkillInfo): string {
   const dir = path.dirname(skill.location);
-  
+
   return [
     `<skill_content name="${skill.name}">`,
     `# Skill: ${skill.name}`,
@@ -281,6 +307,6 @@ function buildSkillOutput(skill: SkillInfo): string {
     "",
     `Base directory: ${dir}`,
     "Relative paths in this skill are relative to this base directory.",
-    "</skill_content>"
+    "</skill_content>",
   ].join("\n");
 }

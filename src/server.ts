@@ -174,7 +174,13 @@ export function createServerFactory(
             registerLspTools(server, security);
         }
 
-        registerSkillTools(server, workingDir, security, profile, !modernHttp);
+        const skills = registerSkillTools(
+            server,
+            workingDir,
+            security,
+            profile,
+            !modernHttp,
+        );
         registerMcpClientTools(server, { maxSessions: maxMcpSessions });
 
         const requireExtension =
@@ -208,6 +214,7 @@ export function createServerFactory(
             context?.resourceSubscriptions,
             context?.era === 'modern',
             context?.externalResourceNotifications,
+            skills,
         );
 
         if (context?.era === 'modern' && context.notify) {
@@ -224,6 +231,7 @@ export function createServerFactory(
         watchProjectSkills(workingDir, () => {
             notify.toolsChanged();
             notify.promptsChanged();
+            notify.resourcesChanged();
         });
     factory.validateResourceSubscription = (uri) =>
         validateFileResourceSubscription(filesCore ?? standardCore, uri);

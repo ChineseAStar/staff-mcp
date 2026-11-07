@@ -17,7 +17,7 @@
 - 现代资源订阅保留 canonical URI、root／private／symlink 准入及目录后代失效通知。薄 transport 适配只观察已确认 URI 兴趣，SDK 仍负责过滤、ACK、订阅 ID 与取消。HTTP 兴趣随响应流释放，端点只有一份事件源，避免并发请求重复通知。
 - 内嵌 MCP 客户端在原进程上协商新旧协议，不为短生命周期探测再次启动未知命令。对端因发现请求退出时，本次启动失败，不自动重启。
 - 扩展发现优先使用已声明的 `capabilities.extensions`，仅该容器缺省时回退 `experimental`。空或无效的新授权不继承旧授权；现代请求逐次携带能力，不借用其他请求的上下文。
-- 完整分页保护、公开 SDK API 的逐次输出校验、文件 commit/status、取消、原文件／PTY 租约与不重放规则保留；DATA2 另有独立业务绑定租约。Skills 继续既有工具，本次迁移未启用 Skills 扩展。
+- 完整分页保护、公开 SDK API 的逐次输出校验、文件 commit/status、取消、原文件／PTY 租约与不重放规则保留；DATA2 另有独立业务绑定租约。Skills 标准发布使用官方 SDK 的 Beta 扩展，旧 `skill`、`read_skill_file` 和 prompts 继续兼容。配套宿主在首次模型请求前提供已授权技能的名称、描述和来源，再通过两个只读平台工具按需加载。
 
 ## 兼容性与配套升级
 
@@ -241,7 +241,7 @@ files、terminal 和当前连接的数据通道分别判断可用性。缺少终
 
 **Profile 是加性参数**——第 1 级和第 4 级不受 profile 影响，永远被加载；第 2、3、5 级根据 profile 值追加对应目录。多层级出现同名 skill 时，高优先级覆盖低优先级（取并集+同名覆盖，而非整层替换）。
 
-只有项目级 `.staff/skills/` 目录被实时监听。目录在启动时如不存在则自动创建，运行中被删除后自动重建并恢复监听。其他层级需重启生效。
+只有项目级 `.staff/skills/` 目录被实时监听。目录在启动时如不存在则自动创建，运行中被删除后自动重建并恢复监听。其他层级不自动发变更通知；显式技能调用及标准发现会重新读取当前选择，重启可刷新其旧工具／prompt 描述。
 
 在不同角色中自由切换：
 ```bash
@@ -249,6 +249,14 @@ node /path/to/staff-mcp/dist/src/index.js --profile default
 node /path/to/staff-mcp/dist/src/index.js --profile android-reverse
 ```
 
+
+### 标准 Skills 发布
+
+官方 `io.modelcontextprotocol/skills` 扩展提供 `skills/list`、`skills/get`，由 SDK 按原始文件字节计算 manifest 的大小及 SHA-256。新增 `skill://staff/{+path}` 技能资源模板；原文件根模板不变，`resources/list` 仍返回空列表并拒绝任何已提供的 cursor。技能目录不扩大普通文件工具或 File App 的公开根。
+
+原 SkillManager 仍决定技能选择及 profile 优先级。标准不合格条目不发布，不换成低优先级同名技能，也不改旧技能名称。每个技能的扫描最多 512 个文件、16 MiB；拒绝路径越界、符号链接逃逸及特殊文件。嵌套技能文件仍是父技能的普通附属内容，读取其 Markdown 不自动激活 frontmatter。读取不执行脚本、不安装依赖、不授予工具权限。配套 chat 宿主使用当前资源权限、官方 `SkillsClient` 静态 manifest 校验与来源标记；旧宿主继续使用原工具／prompts。源码变化不代表 npm 发布或远端实例已升级。
+
+两个旧技能读取工具及标准发现／读取现在均按需解析当前选中的技能；自动监听仍只覆盖原项目复数 `skills` 目录。本次不增加宿主逐技能同意、绑定审批的 acting-window 或执行批准机制：配套宿主的只读集成不代表完整满足 Beta 的全部宿主安全要求，原本已获授权的命令工具仍独立可用。
 
 ### HTTP 会话容量与生命周期
 
