@@ -261,6 +261,8 @@ The official `io.modelcontextprotocol/skills` extension publishes `skills/list` 
 
 The existing SkillManager remains the selection authority, including profile precedence. Invalid standard entries are omitted without selecting a lower-priority duplicate or renaming legacy skills. Per-skill scans are bounded to 512 files and 16 MiB; traversal, symlink escapes and special files are rejected. Nested skill files remain ordinary supporting content of their parent; reading nested markdown does not activate its frontmatter. Reads do not execute scripts, install dependencies or grant tools. The compatible chat host uses current resource permissions, verifies static manifests with the official `SkillsClient`, and keeps origin labels; legacy clients continue using the old tools/prompts. These are source changes, not an npm publication or automatic endpoint upgrade.
 
+The legacy `skill` and `read_skill_file` definitions explicitly carry `_meta["chat-ai/skill-compatibility"] = true`. A paired host that supports standard Skills can omit these duplicates from fresh model menus while retaining manual access and old-client compatibility. The marker is a host integration hint, not an MCP-standard permission or a change to the tools' execution contract.
+
 Both legacy skill-reading tools and standard discovery/reads now resolve the current selected skills on demand; only the existing project plural `skills` directory has automatic watching. This does not add host per-skill consent, approval-bound acting windows or execution approval: the paired host's read-only integration is not a claim of full Beta host-safety conformance, and already-authorized command tools remain independently usable.
 
 ### HTTP session capacity and lifetime

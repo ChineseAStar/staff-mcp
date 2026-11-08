@@ -256,6 +256,8 @@ node /path/to/staff-mcp/dist/src/index.js --profile android-reverse
 
 原 SkillManager 仍决定技能选择及 profile 优先级。标准不合格条目不发布，不换成低优先级同名技能，也不改旧技能名称。每个技能的扫描最多 512 个文件、16 MiB；拒绝路径越界、符号链接逃逸及特殊文件。嵌套技能文件仍是父技能的普通附属内容，读取其 Markdown 不自动激活 frontmatter。读取不执行脚本、不安装依赖、不授予工具权限。配套 chat 宿主使用当前资源权限、官方 `SkillsClient` 静态 manifest 校验与来源标记；旧宿主继续使用原工具／prompts。源码变化不代表 npm 发布或远端实例已升级。
 
+旧 `skill` 和 `read_skill_file` 的工具定义显式携带 `_meta["chat-ai/skill-compatibility"] = true`。支持标准 Skills 的配套宿主可从新会话模型菜单移除这些重复入口，人工调用和旧客户端兼容仍保留。该标记只是宿主集成提示，不是 MCP 标准权限，也不改变原工具执行合同。
+
 两个旧技能读取工具及标准发现／读取现在均按需解析当前选中的技能；自动监听仍只覆盖原项目复数 `skills` 目录。本次不增加宿主逐技能同意、绑定审批的 acting-window 或执行批准机制：配套宿主的只读集成不代表完整满足 Beta 的全部宿主安全要求，原本已获授权的命令工具仍独立可用。
 
 ### HTTP 会话容量与生命周期

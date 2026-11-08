@@ -43,6 +43,7 @@ export function registerSkillTools(
     "skill",
     {
       description: getToolDescription(Object.values(skillsMap)),
+      _meta: { "chat-ai/skill-compatibility": true },
       inputSchema: z
         .object({
           name: z.string().describe(`The name of the skill from available_skills`),
@@ -75,6 +76,7 @@ export function registerSkillTools(
     "read_skill_file",
     {
       description: "Read the contents of a file associated with a specific loaded skill.",
+      _meta: { "chat-ai/skill-compatibility": true },
       inputSchema: z
         .object({
           skillName: z.string().describe('The name of the skill (e.g., "react-component")'),
