@@ -8,12 +8,12 @@ It provides secure file management, shell execution, LSP-powered code intelligen
 
 ---
 
-## SDK and protocol compatibility in source
+## SDK and protocol compatibility — 2.2.0
 
-The source uses the split MCP SDK 2 packages (`client`, `server`, `core` 2.4.0 and `node` 2.1.2). The package version remains 2.1.0; these source changes are not a new npm release or a deployment, and do not change the chat runtime pin.
+staff-mcp 2.2.0 (2026-11-08) uses the split MCP SDK 2 packages (`client`, `server`, `core` 2.4.0 and `node` 2.1.2). The release target is Linux x64. Publishing the npm package does not update the chat-ai runtime pin, deploy a host or upgrade running endpoints; those are separate steps. This documentation does not claim all-platform, company-network or full end-to-end acceptance.
 
 - Stdio, reverse and direct HTTP accept legacy clients and modern `2026-07-28` clients through the official SDK. Legacy HTTP keeps its existing authenticated sessions. Modern HTTP calls the server factory for each request, without `Mcp-Session-Id`, a pooled MCP server or a hidden session header. Ordinary tools retain their shared process state and existing permissions; request facades are not separate OS/user sandboxes.
-- Files/Terminal Apps remain available on modern HTTP through the public **DATA2 business binding** contract: a server-minted control capability, a 90-second lease, and independently owned files/PTY/data state. APPS/FILES/STREAMS stay at version 1. Stdio/reverse (both eras) and legacy HTTP keep DATA1. Upgrade the host and staff together for DATA2; the published 2.1.0 package and chat runtime pin are not silently replaced by this source checkout.
+- Files/Terminal Apps remain available on modern HTTP through the public **DATA2 business binding** contract: a server-minted control capability, a 90-second lease, and independently owned files/PTY/data state. APPS/FILES/STREAMS stay at version 1. Stdio/reverse (both eras) and legacy HTTP keep DATA1. Upgrade the host and staff together for DATA2; use the paired chat-ai version below and explicitly update its bundled staff dependency.
 - Modern resource subscriptions retain canonical URI/root/private/symlink admission and directory-descendant invalidation. A thin public transport adapter observes acknowledged URI interests; the SDK still owns filtering, acknowledgements, subscription IDs and cancellation. HTTP interests live only as long as their response streams, with one endpoint event source to avoid duplicate notifications.
 - Nested MCP clients negotiate with new and old servers in the original process. An unknown startup command is not launched again for a disposable protocol probe; a peer that exits on discovery fails startup rather than being respawned automatically.
 - Extension discovery uses `capabilities.extensions` when present and only falls back to `experimental` when the new container is absent. An empty or invalid new grant does not inherit an old grant. Modern requests carry their own capabilities; they cannot borrow another request's capability context.
@@ -21,15 +21,17 @@ The source uses the split MCP SDK 2 packages (`client`, `server`, `core` 2.4.0 a
 
 ## Compatibility and coordinated upgrades
 
+**Version 2.2.0:** adds MCP SDK 2, modern `2026-07-28` serving, modern HTTP DATA2 business bindings, standard Skills and the legacy skill-tool compatibility marker. Pair with chat-ai `tmp/inner-mcp-stdio` commit `1d659874f4da0540274ea454f016cebaa6838945` or a compatible successor, including matching host/descriptors/UI assets. Older host commits listed for historical releases below are not sufficient for modern HTTP DATA2 or the standard Skills integration. This is a coordinated control-wire upgrade, not a new persistent data format; it adds no skill execution approval or automatic operation/input replay. The 2.1.0 container and file-resource behavior below is retained.
+
 Version 2.1.0 removes the workspace-only boundary from ordinary file tools and command working directories inside an explicitly marked container. Host mode remains restricted to configured directories. Files App/resource roots and file-transfer RPCs still use the published roots; private staging, root protection and file transaction rules remain in force. This is not permission to access the Docker host: OS user permissions and mounts remain the boundary, and writable workspace mounts are persistent. `STAFF_MCP_IS_DOCKER=1` is an operator-controlled launch assertion, not something inferred from the filesystem or selected by a model request. Do not set it for Host processes.
 
 **Version 2.1.0:** file Resource discovery is template-only, with one unchanged URI template per configured root and an empty concrete list. Use the file App's explicit file/directory actions instead of top-level `@` quick picks. This replaces the concrete file directory from 2.0.7 and does not update running endpoints. Pair with chat-ai commit `77369efdeeb9defce218fad95145b4dcae99724d` or a compatible descendant for container-mode propagation and resource authorization safeguards. See [file Resources and upgrade precautions](docs/file-manager.md#standard-file-resources-and-attachments).
 
 **Version 2.0.7:** adds bounded, no-port stdio data frames for local and Docker connections, with no automatic HTTP fallback or replay. Pair with chat-ai commit `5bfa6a4321d258e5129b250da248adff96b6ad42` or a compatible descendant for the matching protocol and permissions. The host's formal bundled dependency update will follow in a compatible descendant; installing this npm package alone does not update it. That DATA1 release did not change HTTP/reverse wire or business authorization; current modern HTTP uses DATA2 as described above. With an older stdio host, optional data-dependent Apps/transfers may be unavailable while healthy standard MCP tools/resources/prompts remain usable.
 
-The release also adds shared Bash initialization through `STAFF_MCP_SHELL_INIT` for commands and new PTYs (never sourced by the management Node process), common-language syntax and Markdown code highlighting, local reading fonts and an adaptive right-side outline/narrow-view dropdown, soft-wrapped text, and cleaner workspace/file/reading toolbars, root-targeted menus and file tabs. The terminal App removes its duplicate close button in favor of the host App lifecycle. See [file manager](docs/file-manager.md), [terminal](docs/terminal.md) and [CHANGELOG](CHANGELOG.md).
+Version 2.0.7 also adds shared Bash initialization through `STAFF_MCP_SHELL_INIT` for commands and new PTYs (never sourced by the management Node process), common-language syntax and Markdown code highlighting, local reading fonts and an adaptive right-side outline/narrow-view dropdown, soft-wrapped text, and cleaner workspace/file/reading toolbars, root-targeted menus and file tabs. The terminal App removes its duplicate close button in favor of the host App lifecycle. See [file manager](docs/file-manager.md), [terminal](docs/terminal.md) and [CHANGELOG](CHANGELOG.md).
 
-Docker template/user-script orchestration, short managed staff commands and dark chat rendering are host features, not capabilities supplied by this npm package alone. Release verification covers Linux x64 with Chromium; it adds no Windows/macOS/musl validation or support claims. Remote-network availability must still be verified in the target deployment.
+Docker template/user-script orchestration, short managed staff commands and dark chat rendering are host features, not capabilities supplied by this npm package alone. The 2.0.7 verification covered Linux x64 with Chromium; 2.2.0 adds no Windows/macOS/musl validation or support claims. Remote-network availability must still be verified in the target deployment.
 
 **Version 2.0.6:** adds reference-only attachments, Markdown draft previews, directory uploads/ZIP downloads and opt-in large-text previews (automatic up to 512 KiB, read-only above 2 MiB, download-only at or above 5 MiB). Binary files use a neutral preview state and failed rereads preserve unsaved drafts. Pair with chat-ai commit `972d26e2df5998f67dbcbab96685f72ef1fadf3cbbf` or a compatible descendant. Background terminal heartbeats, upload HTTP diagnostics, command editing and App merging are host updates, not features supplied by this npm package alone. See [file manager](docs/file-manager.md) and [CHANGELOG](CHANGELOG.md).
 
@@ -46,7 +48,7 @@ Standard stdio/Streamable HTTP tools, resources and prompts remain supported. Ex
 No Chat8/schema9/format7/share protocol2 data migration is required.
 
 1. Finish in-flight operations and back up your normal configuration; no data conversion is needed.
-2. Upgrade the matching chat-ai host first, then staff-mcp 2.1.0, coordinating downtime for reverse connections.
+2. Upgrade the matching chat-ai host first, explicitly update its bundled staff dependency, then upgrade staff-mcp endpoints to 2.2.0, coordinating downtime for reverse connections.
 3. Reconnect MCP, reopen Apps and explicitly enable only the extensions you want.
 
 See [CHANGELOG](CHANGELOG.md) for the release summary.
@@ -60,7 +62,7 @@ Current source supports Linux PTY and Windows native ConPTY, subject to native l
 Run staff-mcp with an explicit package version:
 
 ```bash
-npx --yes staff-mcp@2.1.0 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.2.0 --working-dir /path/to/your/project
 ```
 
 For a source checkout, install dependencies and build before using the absolute entrypoint in the examples:
@@ -174,7 +176,7 @@ The two reverse transport sources (`src/reverse/SseTransport.ts` and chat-ai's `
 
 ## 🛠️ Core Capabilities
 
-The behavior below describes the current source, still versioned 2.1.0; the SDK/DATA2 changes above are not a published release. Extensions remain opt-in.
+The behavior below describes staff-mcp 2.2.0. Extensions remain opt-in; npm publication alone does not upgrade a host or running endpoint.
 
 Extensions are **all off by default**. Use `--extensions files`, `--extensions terminal`, or `--extensions files,terminal`; apps/data dependencies and terminal's streams v1 manifest are added automatically, not selected separately. Disabled features advertise no manifest entry and register no corresponding UI Resource or business handler. With both off there is no extension manifest or application data listener/session; ordinary MCP tools and non-UI Resources remain. HTTP mode still opens its normal MCP listener.
 
@@ -259,9 +261,9 @@ node /path/to/staff-mcp/dist/src/index.js --profile android-reverse
 
 The official `io.modelcontextprotocol/skills` extension publishes `skills/list` and `skills/get`, with raw-file manifest sizes and SHA-256 digests generated by the SDK. A `skill://staff/{+path}` resource template serves selected skill files; ordinary file-root templates are unchanged, and `resources/list` still returns no concrete resources and rejects any supplied cursor. Skills do not expand file-tool or File App roots.
 
-The existing SkillManager remains the selection authority, including profile precedence. Invalid standard entries are omitted without selecting a lower-priority duplicate or renaming legacy skills. Per-skill scans are bounded to 512 files and 16 MiB; traversal, symlink escapes and special files are rejected. Nested skill files remain ordinary supporting content of their parent; reading nested markdown does not activate its frontmatter. Reads do not execute scripts, install dependencies or grant tools. The compatible chat host uses current resource permissions, verifies static manifests with the official `SkillsClient`, and keeps origin labels; legacy clients continue using the old tools/prompts. These are source changes, not an npm publication or automatic endpoint upgrade.
+The existing SkillManager remains the selection authority, including profile precedence. Invalid standard entries are omitted without selecting a lower-priority duplicate or renaming legacy skills. Per-skill scans are bounded to 512 files and 16 MiB; traversal, symlink escapes and special files are rejected. Nested skill files remain ordinary supporting content of their parent; reading nested markdown does not activate its frontmatter. Reads do not execute scripts, install dependencies or grant tools. The compatible chat host uses current resource permissions, verifies static manifests with the official `SkillsClient`, and keeps origin labels; legacy clients continue using the old tools/prompts. These features are included in 2.2.0; publishing the package does not automatically upgrade the host or endpoints.
 
-The legacy `skill` and `read_skill_file` definitions explicitly carry `_meta["chat-ai/skill-compatibility"] = true`. A paired host that supports standard Skills can omit these duplicates from fresh model menus while retaining manual access and old-client compatibility. The marker is a host integration hint, not an MCP-standard permission or a change to the tools' execution contract.
+The legacy `skill` and `read_skill_file` definitions explicitly carry `_meta["chat-ai/skill-compatibility"] = true`. A paired host that supports standard Skills consolidates fresh model menus and manual calls into platform skill tools; the server retains the original tools for older clients. The marker is a host integration hint, not an MCP-standard permission or a change to the tools' execution contract.
 
 Both legacy skill-reading tools and standard discovery/reads now resolve the current selected skills on demand; only the existing project plural `skills` directory has automatic watching. This does not add host per-skill consent, approval-bound acting windows or execution approval: the paired host's read-only integration is not a claim of full Beta host-safety conformance, and already-authorized command tools remain independently usable.
 
@@ -351,7 +353,7 @@ Upgrade the host and all participating endpoints, reconnect MCP and reopen Apps.
 
 ## Release workflow
 
-Merge the verified release changes into `master` first. From an up-to-date `master` checkout, confirm that implementation commit `b0cd46f137e82f756f042ea51c4d4dcf5a5cbf80` and the reviewed release-branch head are included and all three package/lock versions equal the explicit target version, not merely each other; finalize the changelog, then create and push the new version tag. A check that HEAD belongs to master alone does not prove the feature branch was merged. The checklist stops on any failed command and rejects an existing version/tag. The npm workflow rejects a tag whose commit is not contained in remote `master`. Do not publish from a development branch or move an existing release tag. Merging code alone does not publish to npm. `.github/workflows/publish.yml` runs Node 24 and OIDC trusted publishing with provenance; npm must trust the matching repository/workflow. Run `npm ci`, `npm run build` and `npm pack --dry-run` in the release checkout before tagging. After Actions succeeds, verify the exact version with `npm view staff-mcp@2.1.0 version`, update the package at each endpoint and restart it. See the [step-by-step release checklist](README_zh.md#发版流程); version/tag examples must be advanced for later releases.
+Merge the verified release changes into `master` first. From an up-to-date `master` checkout, confirm that implementation commit `885e36d11a9ed208c4ed262b020582be325dcf94` (`TARGET`, SDK/modern/DATA2/Skills/compat marker) and the reviewed `tmp/mcp-sdk-v2` release-branch head are included and all three package/lock versions equal the explicit target version, not merely each other; finalize the changelog, then create and push the new version tag. A check that HEAD belongs to master alone does not prove the feature branch was merged. The checklist stops on any failed command and rejects an existing version/tag. The npm workflow rejects a tag whose commit is not contained in remote `master`. Do not publish from a development branch or move an existing release tag. Merging code alone does not publish to npm. `.github/workflows/publish.yml` runs Node 24 and OIDC trusted publishing with provenance; npm must trust the matching repository/workflow. Run `npm ci`, `npm run build` and `npm pack --dry-run` in the release checkout before tagging. After Actions succeeds, verify the exact version with `npm view staff-mcp@2.2.0 version`, update the package at each endpoint and restart it. See the [step-by-step release checklist](README_zh.md#发版流程); version/tag examples must be advanced for later releases.
 
 ## 📄 License
 

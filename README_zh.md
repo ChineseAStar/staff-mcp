@@ -8,12 +8,12 @@
 
 ---
 
-## 源码的 SDK／协议兼容范围
+## SDK／协议兼容范围 — 2.2.0
 
-源码使用拆包后的 MCP SDK 2：`client`、`server`、`core` 固定 2.4.0，`node` 固定 2.1.2。包版本仍为 2.1.0；这些源码变更未作为新版本发布或部署，也不改变 chat 的正式运行包 pin。
+staff-mcp 2.2.0（2026-11-08）使用拆包后的 MCP SDK 2：`client`、`server`、`core` 固定 2.4.0，`node` 固定 2.1.2。本次发布目标为 Linux x64；npm 发布不等于 chat-ai 正式运行包 pin 更新、宿主部署或运行端点升级，这些须分别完成。本文不宣称全平台、公司网络或完整端到端验收。
 
 - stdio、reverse 和 direct HTTP 通过官方 SDK 接受 legacy 与现代 `2026-07-28` 客户端。legacy HTTP 保留原鉴权会话；现代 HTTP 每请求调用 server factory，不使用 `Mcp-Session-Id`、共用 MCP server 或暗藏会话 header。普通工具仍共享原进程状态并保留原权限；逐请求 facade 不是独立 OS／用户沙箱。
-- 现代 HTTP 通过公开 **DATA2 业务绑定**保留 Files／Terminal Apps：服务端签发 control 凭据，90 秒租约，files／PTY／data 状态各自归属确切 owner。APPS／FILES／STREAMS 仍为 v1；stdio／reverse（两种协议）及 legacy HTTP 仍为 DATA1。DATA2 需宿主与 staff 配套升级，源码修改不自动替换 npm 2.1.0 或 chat 的正式运行包 pin。
+- 现代 HTTP 通过公开 **DATA2 业务绑定**保留 Files／Terminal Apps：服务端签发 control 凭据，90 秒租约，files／PTY／data 状态各自归属确切 owner。APPS／FILES／STREAMS 仍为 v1；stdio／reverse（两种协议）及 legacy HTTP 仍为 DATA1。DATA2 需宿主与 staff 配套升级，使用下文配套 chat-ai 版本，并显式更新其内置 staff 依赖。
 - 现代资源订阅保留 canonical URI、root／private／symlink 准入及目录后代失效通知。薄 transport 适配只观察已确认 URI 兴趣，SDK 仍负责过滤、ACK、订阅 ID 与取消。HTTP 兴趣随响应流释放，端点只有一份事件源，避免并发请求重复通知。
 - 内嵌 MCP 客户端在原进程上协商新旧协议，不为短生命周期探测再次启动未知命令。对端因发现请求退出时，本次启动失败，不自动重启。
 - 扩展发现优先使用已声明的 `capabilities.extensions`，仅该容器缺省时回退 `experimental`。空或无效的新授权不继承旧授权；现代请求逐次携带能力，不借用其他请求的上下文。
@@ -21,15 +21,17 @@
 
 ## 兼容性与配套升级
 
+**2.2.0 版本：** 新增 MCP SDK 2、现代 `2026-07-28` 服务、modern HTTP DATA2 业务绑定、标准 Skills 及旧技能工具兼容标记。请配套 chat-ai `tmp/inner-mcp-stdio` 提交 `1d659874f4da0540274ea454f016cebaa6838945` 或兼容后继版本，以及匹配的宿主／描述符／UI 资源。下文历史版本所列旧宿主提交不足以提供 modern HTTP DATA2 和标准 Skills 集成。本次是需配套升级的控制 wire 变化，不新增持久化数据格式、技能执行审批或操作／输入自动重放；保留下文 2.1.0 的容器与文件资源行为。
+
 2.1.0 移除普通文件工具与命令工作目录的 workspace 边界；Host 仍使用配置目录限制。Files App／资源模板以及文件传输 RPC 仍只公开配置根，不自动增加 `/`。私有 staging、根目录保护和原文件事务规则保留；普通文件工具仍不跟随符号链接，不处理任意设备。操作系统用户权限、只读挂载继续生效，可写工作区挂载会持久修改文件。`STAFF_MCP_IS_DOCKER=1` 是可信启动方的容器环境声明，不从文件系统猜测，也不由模型工具参数切换；Host 进程不要设置此标记。
 
 **2.1.0 版本：** 文件资源只通过模板发现，每个配置根保留原有模板，具体资源列表返回空数组。请在文件 App 中针对文件／目录操作，不再提供顶层文件的 `@` 快捷项。该行为替代 2.0.7 的具体文件目录，不会自动更新运行中的端点。请配套 chat-ai 提交 `77369efdeeb9defce218fad95145b4dcae99724d` 或兼容后继版本，以获得容器标记传递及资源授权保护。升级前若仍有旧的按名称资源拒绝，请先连接旧目录显式保存权限，将规则转换为 URI；详见[文件资源与升级注意事项](docs/file-manager.md#standard-file-resources-and-attachments)。
 
 **2.0.7 版本：** 本机与 Docker stdio 使用有界、无端口的数据帧，不自动回退 HTTP 或重放。请配套 chat-ai 提交 `5bfa6a4321d258e5129b250da248adff96b6ad42` 或兼容后继版本，以获得匹配的协议与权限处理；宿主正式内置依赖将在兼容后继版本中更新，仅安装此 npm 包不会更新宿主依赖。该 DATA1 版本未改变 HTTP/reverse wire 与业务授权；当前 modern HTTP 则使用上文 DATA2。旧 stdio 宿主可能无法使用可选的 data Apps/传输，但健康的标准 MCP tools/resources/prompts 仍可用。
 
-本版还新增 `STAFF_MCP_SHELL_INIT`，供命令与新 PTY 共用 Bash 初始化（management Node 主进程不 source）；文件 App 增加常用语言语法及 Markdown 代码高亮、本地阅读字号、右侧自适应目录/窄屏下拉、文本软换行，并整理工作区/文件/阅读工具栏层级、以根目录为目标的菜单与文件标签。终端 App 移除重复关闭按钮，沿用宿主 App 生命周期。详见[文件管理](docs/file-manager.md)、[终端](docs/terminal.md)与 [CHANGELOG](CHANGELOG.md)。
+2.0.7 还新增 `STAFF_MCP_SHELL_INIT`，供命令与新 PTY 共用 Bash 初始化（management Node 主进程不 source）；文件 App 增加常用语言语法及 Markdown 代码高亮、本地阅读字号、右侧自适应目录/窄屏下拉、文本软换行，并整理工作区/文件/阅读工具栏层级、以根目录为目标的菜单与文件标签。终端 App 移除重复关闭按钮，沿用宿主 App 生命周期。详见[文件管理](docs/file-manager.md)、[终端](docs/terminal.md)与 [CHANGELOG](CHANGELOG.md)。
 
-Docker 模板/用户脚本编排、受管 staff 短命令与聊天深色渲染属于宿主功能，不由 npm 包单独提供。本次发布验证覆盖 Linux x64 与 Chromium，不新增 Windows/macOS/musl 实测或支持承诺；远程网络的流式传输与可用性仍需在目标部署中验证。
+Docker 模板/用户脚本编排、受管 staff 短命令与聊天深色渲染属于宿主功能，不由 npm 包单独提供。2.0.7 的验证覆盖 Linux x64 与 Chromium；2.2.0 不新增 Windows/macOS/musl 实测或支持承诺；远程网络的流式传输与可用性仍需在目标部署中验证。
 
 **2.0.6 版本：** 新增文件仅引用、Markdown 草稿预览、文件夹上传与 ZIP 下载，以及大文本手动加载（≤512 KiB 自动加载、>2 MiB 只读、≥5 MiB 仅下载）。二进制文件使用中性预览提示，读取失败保留未保存草稿。请配套 chat-ai 提交 `972d26e2df5998f67dbcbab96685f72ef1fadf3cbbf` 或兼容后继版本；终端后台心跳、上传 HTTP 诊断、命令编辑及 Apps 合并属于宿主更新，不由 npm 包单独提供。详见[文件管理说明](docs/file-manager.md)与 [CHANGELOG](CHANGELOG.md)。
 
@@ -46,7 +48,7 @@ Docker 模板/用户脚本编排、受管 staff 短命令与聊天深色渲染�
 无需进行 Chat8/schema9/format7/分享 protocol2 数据迁移。
 
 1. 结束在途操作，备份正常配置；无需转换数据。
-2. 先升级配套 chat-ai 宿主，再升级 staff-mcp 2.1.0，并协调 reverse 连接的停机窗口。
+2. 先升级配套 chat-ai 宿主并显式更新其内置 staff 依赖，再将 staff-mcp 端点升级到 2.2.0，并协调 reverse 连接的停机窗口。
 3. 重新连接 MCP、重新打开 App，仅显式启用需要的扩展。
 
 发布摘要见 [CHANGELOG](CHANGELOG.md)。
@@ -60,7 +62,7 @@ Docker 模板/用户脚本编排、受管 staff 短命令与聊天深色渲染�
 使用明确版本运行 staff-mcp：
 
 ```bash
-npx --yes staff-mcp@2.1.0 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.2.0 --working-dir /path/to/your/project
 ```
 
 从源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口：
@@ -168,7 +170,7 @@ Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Ser
 
 ## 🛠️ 核心能力
 
-以下描述 staff-mcp 2.1.0；扩展仍须显式启用。
+以下描述 staff-mcp 2.2.0；扩展仍须显式启用，npm 发布不会自动升级宿主或运行端点。
 
 扩展**默认全关**。通过 `--extensions files`、`--extensions terminal` 或 `--extensions files,terminal` 启用；apps/data 依赖及 terminal 对 streams v1 的声明自动计算，无需单独选择。禁用能力不声明对应 manifest 条目、不注册对应 UI Resource 或业务 handler；全关时无扩展 manifest、应用数据 listener/session，普通 MCP 工具和非 UI Resources 保留。HTTP 模式仍监听原 MCP 服务。
 
@@ -254,9 +256,9 @@ node /path/to/staff-mcp/dist/src/index.js --profile android-reverse
 
 官方 `io.modelcontextprotocol/skills` 扩展提供 `skills/list`、`skills/get`，由 SDK 按原始文件字节计算 manifest 的大小及 SHA-256。新增 `skill://staff/{+path}` 技能资源模板；原文件根模板不变，`resources/list` 仍返回空列表并拒绝任何已提供的 cursor。技能目录不扩大普通文件工具或 File App 的公开根。
 
-原 SkillManager 仍决定技能选择及 profile 优先级。标准不合格条目不发布，不换成低优先级同名技能，也不改旧技能名称。每个技能的扫描最多 512 个文件、16 MiB；拒绝路径越界、符号链接逃逸及特殊文件。嵌套技能文件仍是父技能的普通附属内容，读取其 Markdown 不自动激活 frontmatter。读取不执行脚本、不安装依赖、不授予工具权限。配套 chat 宿主使用当前资源权限、官方 `SkillsClient` 静态 manifest 校验与来源标记；旧宿主继续使用原工具／prompts。源码变化不代表 npm 发布或远端实例已升级。
+原 SkillManager 仍决定技能选择及 profile 优先级。标准不合格条目不发布，不换成低优先级同名技能，也不改旧技能名称。每个技能的扫描最多 512 个文件、16 MiB；拒绝路径越界、符号链接逃逸及特殊文件。嵌套技能文件仍是父技能的普通附属内容，读取其 Markdown 不自动激活 frontmatter。读取不执行脚本、不安装依赖、不授予工具权限。配套 chat 宿主使用当前资源权限、官方 `SkillsClient` 静态 manifest 校验与来源标记；旧宿主继续使用原工具／prompts。这些功能纳入 2.2.0；npm 发布不代表宿主或远端实例已自动升级。
 
-旧 `skill` 和 `read_skill_file` 的工具定义显式携带 `_meta["chat-ai/skill-compatibility"] = true`。支持标准 Skills 的配套宿主可从新会话模型菜单移除这些重复入口，人工调用和旧客户端兼容仍保留。该标记只是宿主集成提示，不是 MCP 标准权限，也不改变原工具执行合同。
+旧 `skill` 和 `read_skill_file` 的工具定义显式携带 `_meta["chat-ai/skill-compatibility"] = true`。支持标准 Skills 的配套宿主将新会话模型菜单和人工调用统一到平台技能入口，服务端仍兼容旧客户端的原工具调用。该标记只是宿主集成提示，不是 MCP 标准权限，也不改变原工具执行合同。
 
 两个旧技能读取工具及标准发现／读取现在均按需解析当前选中的技能；自动监听仍只覆盖原项目复数 `skills` 目录。本次不增加宿主逐技能同意、绑定审批的 acting-window 或执行批准机制：配套宿主的只读集成不代表完整满足 Beta 的全部宿主安全要求，原本已获授权的命令工具仍独立可用。
 
@@ -347,16 +349,18 @@ files-v1 跨 MCP 中转与文件应用上传不再设置 100 MiB 单文件硬限
 ## 发版流程
 
 1. 在临时开发分支完成改动、补齐 CHANGELOG 发布日期，确认 `package.json`、`package-lock.json` 顶层及 `packages[""].version` 都是本次目标版本，提交并推送该分支。
-2. 运行以下 **Bash** 检查流程。先核对 `VERSION`、`RELEASE_BRANCH` 与实现提交 `TARGET`，并确认该分支头已包含发布文档与版本变更。示例为 2.1.0；它发布后不可原样重跑。任何一步失败都应先排查，不要跳过检查继续打标签。
+2. 运行以下 **Bash** 检查流程。先核对 `VERSION`、`RELEASE_BRANCH` 与实现提交 `TARGET`，并确认该分支头已包含发布文档与版本变更。示例为 2.2.0；`TARGET` 是已存在且可核对的 SDK／modern／DATA2／Skills／compat marker 实现提交，不是尚未知的发版提交。该版本发布后不可原样重跑。任何一步失败都应先排查，不要跳过检查继续打标签。
 
 ```bash
 (
 set -euo pipefail
-VERSION=2.1.0
-RELEASE_BRANCH=tmp/resource-templates-only
-TARGET=b0cd46f137e82f756f042ea51c4d4dcf5a5cbf80
+VERSION=2.2.0
+RELEASE_BRANCH=tmp/mcp-sdk-v2
+TARGET=885e36d11a9ed208c4ed262b020582be325dcf94
 
 git fetch origin --tags
+git cat-file -e "$TARGET^{commit}"
+git merge-base --is-ancestor "$TARGET" "origin/$RELEASE_BRANCH"
 test -z "$(git status --porcelain)"
 git switch master
 git pull --ff-only origin master
@@ -404,7 +408,7 @@ git push origin "refs/tags/v$VERSION"
 
 标签触发 `.github/workflows/publish.yml` 的 **Publish to npm**。工作流使用 Node 24、OIDC trusted publishing 和 `npm publish --provenance --access public`；npm 包设置中的 trusted publisher 必须对应仓库和 `publish.yml` 工作流文件。发布任务会验证标签对应提交已包含于远端 `master`，并校验三处版本；仅 push/合并 `master` 不会发布 npm。禁止从未合入的开发分支发版、移动已发布标签或重用已发布版本。
 
-成功后检查 Actions 和 `npm view staff-mcp@2.1.0 version`，再按原安装方式更新（如 `npm install -g staff-mcp@2.1.0` 或 `npx -y staff-mcp@2.1.0 ...`），并重启各 MCP 进程；已运行进程和已打开的 App 不会自动替换。版本号与标签示例需随每次后续发布更新。
+成功后检查 Actions 和 `npm view staff-mcp@2.2.0 version`，再按原安装方式更新（如 `npm install -g staff-mcp@2.2.0` 或 `npx -y staff-mcp@2.2.0 ...`），并重启各 MCP 进程；已运行进程和已打开的 App 不会自动替换。版本号与标签示例需随每次后续发布更新。
 
 ## 📄 License
 

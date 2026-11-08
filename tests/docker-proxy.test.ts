@@ -432,7 +432,8 @@ test("failed fallback cleanup reaches a bounded error result", async (t) => {
     signals,
     {
       gracefulShutdownTimeoutMs: 50,
-      containerCleanupTimeoutMs: 100,
+      // Allow the fresh Node fixture to start before asserting one failed cleanup.
+      containerCleanupTimeoutMs: 500,
       forceKillTimeoutMs: 50,
     }
   );
