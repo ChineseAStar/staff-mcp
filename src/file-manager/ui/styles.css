@@ -1099,6 +1099,9 @@ progress::-moz-progress-bar {
 ::-webkit-scrollbar-track {
     background: transparent;
 }
+.locate-current-file {
+    display: none;
+}
 @container file-app (max-width: 899px) {
     .file-app[data-mobile-view='editor'] .directory-panel {
         display: none;
@@ -1108,6 +1111,9 @@ progress::-moz-progress-bar {
     }
 }
 @container file-app (min-width: 900px) {
+    .locate-current-file {
+        display: inline-flex;
+    }
     .pane-separator {
         display: block;
     }

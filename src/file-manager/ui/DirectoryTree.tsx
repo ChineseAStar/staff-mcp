@@ -18,6 +18,7 @@ interface Props {
     available: boolean;
     selectedPath?: string;
     activePath?: string;
+    locateRequest?: { path: string };
     interactionEpoch: number;
     uploadAllowed: boolean;
     onUpload: (files: File[], directory: string) => void;
@@ -45,6 +46,7 @@ export function DirectoryTree({
     available,
     selectedPath,
     activePath,
+    locateRequest,
     interactionEpoch,
     uploadAllowed,
     onUpload,
@@ -187,6 +189,25 @@ export function DirectoryTree({
         setDropTarget(undefined);
     }, [interactionEpoch, available, tree.directories]);
     const nodes = useRef(new Map<string, HTMLDivElement>());
+    const list = useRef<HTMLDivElement>(null);
+    const consumedLocate = useRef<Props['locateRequest']>(undefined);
+    useEffect(() => {
+        if (!locateRequest || consumedLocate.current === locateRequest) return;
+        const container = list.current;
+        const row = nodes.current
+            .get(locateRequest.path)
+            ?.querySelector<HTMLElement>(':scope > .file-row');
+        if (!container || !row) return;
+        consumedLocate.current = locateRequest;
+        const bounds = row.getBoundingClientRect();
+        const top = container.getBoundingClientRect().top + container.clientTop;
+        const bottom = top + container.clientHeight;
+        // Only move this scrollport, not the iframe, host or editor. The
+        // request identity changes only on explicit successful location.
+        if (bounds.top < top) container.scrollTop += bounds.top - top;
+        else if (bounds.bottom > bottom)
+            container.scrollTop += bounds.bottom - bottom;
+    }, [locateRequest]);
     const creationInput = useRef<HTMLInputElement>(null);
     useEffect(() => {
         if (!creation) return;
@@ -595,6 +616,7 @@ export function DirectoryTree({
     return (
         <div
             className={`file-list directory-tree ${dropTarget && !dropTarget.row ? 'drop-target' : ''}`}
+            ref={list}
             role="tree"
             aria-label="文件目录树"
             tabIndex={0}

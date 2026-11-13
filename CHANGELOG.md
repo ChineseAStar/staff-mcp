@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a one-shot current-file reveal button to the Files App's wide split layout. Switch to the active file's root, expand/paginate only its ancestor path and scroll/select the real row without rereading or saving document contents. Narrow layouts keep Back to files; no auto-follow preference, protocol or permission change.
+
 - Default `--docker` launches to `--ulimit core=0:0` before the image name, setting core-file soft/hard limits to zero. Preserve explicit `-D` / `--docker-args` core limits in both `--ulimit core=...` and `--ulimit=core=...` forms without adding the default; other ulimits do not suppress it. Leave invalid limits to Docker and host mode unchanged. No existing container or host setting is modified.
 - Remove the Docker extension OS precheck instead of parsing engine-specific info fields. Docker/Podman-compatible launchers are not rejected by `docker info` format differences; real container startup and in-container PTY/shell checks decide availability. Retain HTTP/stdio local-endpoint restrictions, argument validation and owned-container lifecycle/mount safeguards. No automatic engine fallback or startup retry.
 - Distinguish local-endpoint CLI failure and the existing 2-second timeout, including synchronous spawn errors. Report only safe error identifiers, never query output, arguments or endpoints. Explicit terminal startup failure and files-only local-endpoint degradation remain. No new CLI option, dependency, protocol or chat-ai change is required. POSIX container paths are unchanged; this is not new Windows-container support or all-platform/all-transport Podman acceptance.

@@ -16,6 +16,7 @@ export interface DirectoryPage {
 interface PendingList {
     invalidated: boolean;
     refresh: boolean;
+    promise: Promise<void>;
 }
 
 type LoadMode = 'initial' | 'more' | 'refresh';
@@ -28,6 +29,8 @@ export function useDirectoryTree(rootId: string, available: boolean) {
             directories: new Map<string, DirectoryPage>(),
             expanded: new Set<string>(),
             pending: new Map<string, PendingList>(),
+            active: true,
+            locator: 0,
         }),
         [rootId, available],
     );
@@ -40,14 +43,20 @@ export function useDirectoryTree(rootId: string, available: boolean) {
             path: string,
             mode: LoadMode = 'initial',
         ): Promise<void> {
-            if (!available || !rootId || current.current !== scope) return;
+            if (
+                !available ||
+                !rootId ||
+                !scope.active ||
+                current.current !== scope
+            )
+                return;
             const pending = scope.pending.get(path);
             if (pending) {
                 if (mode === 'refresh' || pending.invalidated) {
                     pending.invalidated = true;
                     pending.refresh = true;
                 }
-                return;
+                return pending.promise;
             }
             const previous = scope.directories.get(path);
             if (mode === 'initial' && previous) return;
@@ -57,7 +66,14 @@ export function useDirectoryTree(rootId: string, available: boolean) {
             )
                 return;
             const cursor = mode === 'more' ? previous?.nextCursor : undefined;
-            const request: PendingList = { invalidated: false, refresh: false };
+            let finish!: () => void;
+            const request: PendingList = {
+                invalidated: false,
+                refresh: false,
+                promise: new Promise<void>((resolve) => {
+                    finish = resolve;
+                }),
+            };
             scope.pending.set(path, request);
             scope.directories.set(path, {
                 entries: previous?.entries ?? [],
@@ -68,6 +84,7 @@ export function useDirectoryTree(rootId: string, available: boolean) {
             render();
             const valid = () =>
                 current.current === scope &&
+                scope.active &&
                 scope.pending.get(path) === request &&
                 !request.invalidated;
             try {
@@ -111,25 +128,91 @@ export function useDirectoryTree(rootId: string, available: boolean) {
             } finally {
                 if (scope.pending.get(path) === request)
                     scope.pending.delete(path);
-                if (current.current === scope) {
-                    if (request.refresh) void loadDirectory(path, 'refresh');
+                if (current.current === scope && scope.active) {
+                    // Joiners wait for the queued refresh as well, never read
+                    // the invalidated page or start a concurrent next page.
+                    if (request.refresh) await loadDirectory(path, 'refresh');
                     else render();
                 }
+                finish();
             }
         },
         [available, rootId, scope],
     );
 
     useEffect(() => {
+        scope.active = true;
         void load('');
-    }, [load]);
+        return () => {
+            scope.active = false;
+            scope.locator++;
+        };
+    }, [load, scope]);
+
+    const locate = useCallback(
+        async (
+            path: string,
+            isCurrent: () => boolean,
+        ): Promise<Entry | undefined> => {
+            const request = ++scope.locator;
+            const valid = () =>
+                scope.active &&
+                current.current === scope &&
+                scope.locator === request &&
+                isCurrent();
+            const parts = path.split('/').filter(Boolean);
+            let directory = '';
+            for (let index = 0; index < parts.length; index++) {
+                if (!valid()) return;
+                const target = parts.slice(0, index + 1).join('/');
+                await load(directory);
+                while (valid()) {
+                    const page = scope.directories.get(directory);
+                    if (page?.error)
+                        throw new Error(
+                            page.invalidCursor
+                                ? '目录分页已失效，请刷新此目录后重试。'
+                                : page.error,
+                        );
+                    const entry = page?.entries.find(
+                        (item) => item.path === target,
+                    );
+                    if (entry) {
+                        if (index === parts.length - 1) return entry;
+                        if (entry.type !== 'directory')
+                            throw new Error(
+                                '目标的祖先已不是文件夹，请刷新目录。',
+                            );
+                        scope.expanded.add(entry.path);
+                        render();
+                        directory = entry.path;
+                        break;
+                    }
+                    if (!page?.nextCursor)
+                        throw new Error('文件或目录不存在，请刷新目录。');
+                    const cursor = page.nextCursor;
+                    await load(directory, 'more');
+                    if (!valid()) return;
+                    if (
+                        scope.directories.get(directory)?.nextCursor ===
+                            cursor &&
+                        !scope.directories.get(directory)?.error
+                    )
+                        throw new Error('目录分页未前进，请刷新此目录后重试。');
+                }
+            }
+        },
+        [load, scope],
+    );
 
     const expand = (path: string) => {
+        scope.locator++;
         scope.expanded.add(path);
         render();
         void load(path);
     };
     const collapse = (path: string) => {
+        scope.locator++;
         scope.expanded.delete(path);
         render();
     };
@@ -140,11 +223,14 @@ export function useDirectoryTree(rootId: string, available: boolean) {
         for (let i = 1; i <= count; i++) expand(parts.slice(0, i).join('/'));
     };
     const refreshDirectory = (targetRoot: string, path: string) => {
-        if (targetRoot === rootId && scope.directories.has(path))
+        if (targetRoot === rootId && scope.directories.has(path)) {
+            scope.locator++;
             void load(path, 'refresh');
+        }
     };
     const removeSubtree = (targetRoot: string, path: string) => {
         if (targetRoot !== rootId) return;
+        scope.locator++;
         for (const [key, request] of scope.pending) {
             if (!withinPath(key, path)) continue;
             request.invalidated = true;
@@ -165,8 +251,13 @@ export function useDirectoryTree(rootId: string, available: boolean) {
         expand,
         collapse,
         reveal,
-        loadMore: (path: string) => void load(path, 'more'),
+        locate,
+        loadMore: (path: string) => {
+            scope.locator++;
+            void load(path, 'more');
+        },
         retry: (path: string) => {
+            scope.locator++;
             const page = scope.directories.get(path);
             void load(
                 path,

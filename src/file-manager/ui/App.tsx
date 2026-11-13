@@ -180,6 +180,7 @@ export function App() {
     const [requestedTreeWidth, setRequestedTreeWidth] =
         useState(DEFAULT_TREE_WIDTH);
     const [workspaceWidth, setWorkspaceWidth] = useState(0);
+    const splitView = workspaceWidth >= 900;
     const [resizing, setResizing] = useState(false);
     const workspace = useRef<HTMLDivElement>(null);
     const resizeGesture = useRef<{
@@ -303,6 +304,15 @@ export function App() {
     const root = roots.find((item) => item.rootId === rootId);
     const readOnly = !root || root.readOnly;
     const activeTab = tabs.find((tab) => tab.id === activeTabId);
+    const activeTabRef = useRef(activeTab);
+    activeTabRef.current = activeTab;
+    const [locateRequest, setLocateRequest] =
+        useState<Pick<FileTab, 'id' | 'rootId' | 'path'>>();
+    const startedLocate = useRef<typeof locateRequest>(undefined);
+    const [locatedRow, setLocatedRow] = useState<{
+        path: string;
+        intent: number;
+    }>();
     const canWrite = (targetRoot: string) =>
         available &&
         roots.some((item) => item.rootId === targetRoot && !item.readOnly);
@@ -469,6 +479,78 @@ export function App() {
             pendingTabReveal.current = undefined;
         }
     }, [rootId]);
+
+    const locateCurrentFile = () => {
+        if (!splitView || !available || !activeTab) return;
+        cancelCreation();
+        actionIntent.current++;
+        setStatLoading(false);
+        setContextMenu(undefined);
+        setTabMenu(undefined);
+        setMenu(null);
+        pendingTabReveal.current = undefined;
+        setLocatedRow(undefined);
+        setSelected(undefined);
+        setDirectory(parentPath(activeTab.path));
+        setRootId(activeTab.rootId);
+        setLocateRequest({
+            id: activeTab.id,
+            rootId: activeTab.rootId,
+            path: activeTab.path,
+        });
+    };
+
+    useEffect(() => {
+        const request = locateRequest;
+        // Each click runs once, after its target root's cache exists. A later
+        // scope/tab change cancels it; it must not restart on returning.
+        if (!request || startedLocate.current === request) return;
+        startedLocate.current = request;
+        if (
+            !splitView ||
+            !available ||
+            rootId !== request.rootId ||
+            activeTab?.id !== request.id ||
+            activeTab.path !== request.path
+        )
+            return;
+        let cancelled = false;
+        const intent = actionIntent.current;
+        const valid = () =>
+            !cancelled &&
+            splitView &&
+            actionIntent.current === intent &&
+            actionContext.current.available &&
+            actionContext.current.rootId === request.rootId &&
+            activeTabRef.current?.id === request.id &&
+            activeTabRef.current.path === request.path;
+        void tree.locate(request.path, valid).then(
+            (entry) => {
+                if (!entry || !valid()) return;
+                setSelected(entry);
+                setDirectory(parentPath(entry.path));
+                setLocatedRow({ path: entry.path, intent });
+            },
+            (error: unknown) => {
+                if (valid())
+                    setNotice({
+                        kind: 'error',
+                        text: `定位失败：${errorMessage(error)}`,
+                    });
+            },
+        );
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        locateRequest,
+        splitView,
+        rootId,
+        available,
+        activeTab?.id,
+        activeTab?.path,
+        tree.locate,
+    ]);
 
     const updateTab = useCallback((id: string, patch: Partial<FileTab>) => {
         setTabs((current) =>
@@ -1844,6 +1926,13 @@ export function App() {
                                 : undefined
                         }
                         selectedPath={selected?.path}
+                        locateRequest={
+                            splitView &&
+                            available &&
+                            locatedRow?.intent === actionIntent.current
+                                ? locatedRow
+                                : undefined
+                        }
                         interactionEpoch={actionIntent.current}
                         uploadAllowed={canWrite(rootId)}
                         onUpload={(files, path) =>
@@ -2110,6 +2199,13 @@ export function App() {
                                     role="group"
                                     aria-label="当前文件操作"
                                 >
+                                    <IconButton
+                                        className="locate-current-file"
+                                        name="locate"
+                                        title="在文件列表中定位当前文件"
+                                        disabled={!available}
+                                        onClick={locateCurrentFile}
+                                    />
                                     {activeTab.readOnly && (
                                         <span className="readonly-label">
                                             只读
