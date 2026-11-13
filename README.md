@@ -91,6 +91,8 @@ node /path/to/staff-mcp/dist/src/index.js --docker node:22-alpine
 node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest --profile android-reverse
 ```
 
+`--docker` adds `--ulimit core=0:0` before the image name by default to set core-file soft/hard limits to zero. An explicit core limit in `-D` / `--docker-args`, such as `-D "--ulimit core=1024:1024"` or `-D "--ulimit=core=1024:1024"`, is passed through without adding the default. Other limits (for example `nofile`) do not suppress the core default. Invalid user-supplied limits are left for Docker to reject; host mode is unchanged. This applies to newly created containers, not existing containers or host settings.
+
 ### Docker-compatible launchers and capability checks
 
 The wrapper invokes the executable named `docker` on PATH directly; shell aliases alone do not affect it. It no longer probes `docker info` or parses Docker/Podman OS fields, so a Podman-backed executable is not rejected for a different info format. It does not switch engines or retry container startup automatically. HTTP/stdio retain their local-endpoint validation, with no new native Podman connection discovery.

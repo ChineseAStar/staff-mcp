@@ -364,7 +364,17 @@ program
                 );
             }
 
-            // 6. Inject the already validated custom Docker options.
+            // 6. Inject default core limit and validated options.
+            if (
+                !additionalDockerArgs.some(
+                    (arg, index) =>
+                        arg.startsWith('--ulimit=core=') ||
+                        (arg === '--ulimit' &&
+                            additionalDockerArgs[index + 1]?.startsWith('core=')),
+                )
+            ) {
+                dockerArgs.push('--ulimit', 'core=0:0');
+            }
             dockerArgs.push(...additionalDockerArgs);
 
             // Only wrapper-owned mounts are known here, not arbitrary -D mounts.

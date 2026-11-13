@@ -91,6 +91,8 @@ node /path/to/staff-mcp/dist/src/index.js --docker node:22-alpine
 node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest --profile android-reverse
 ```
 
+`--docker` 默认在镜像名前添加 `--ulimit core=0:0`，将 core 文件大小软/硬限制设为 0。若 `-D` / `--docker-args` 已显式设置 core 限制，例如 `-D "--ulimit core=1024:1024"` 或 `-D "--ulimit=core=1024:1024"`，则原样传递，不追加默认值。其他限制（如 `nofile`）不影响 core 默认值；用户传入的非法限制仍交由 Docker 报错，Host 模式不变。该默认值仅作用于新建容器，不修改已有容器或宿主设置。
+
 ### Docker 兼容入口与实际能力检查
 
 wrapper 直接执行 PATH 中名为 `docker` 的可执行入口，只有 shell alias 不会改变启动器调用。不再探测 `docker info` 或解析 Docker／Podman 的 OS 字段，因此不会仅因 Podman 返回不同的信息结构而拒绝启动；也不自动切换引擎或重试容器启动。HTTP/stdio 保留本地 endpoint 验证，不新增 Podman 原生连接发现。
