@@ -1111,6 +1111,9 @@ progress::-moz-progress-bar {
     }
 }
 @container file-app (min-width: 900px) {
+    .root-select {
+        min-width: 40px;
+    }
     .locate-current-file {
         display: inline-flex;
     }

@@ -1872,6 +1872,13 @@ export function App() {
                             </button>
                         )}
                         <IconButton
+                            className="locate-current-file"
+                            name="locate"
+                            title="在文件列表中定位当前文件"
+                            disabled={!available || !activeTab}
+                            onClick={locateCurrentFile}
+                        />
+                        <IconButton
                             name="refresh"
                             title="刷新当前目录"
                             disabled={!available}
@@ -2199,13 +2206,6 @@ export function App() {
                                     role="group"
                                     aria-label="当前文件操作"
                                 >
-                                    <IconButton
-                                        className="locate-current-file"
-                                        name="locate"
-                                        title="在文件列表中定位当前文件"
-                                        disabled={!available}
-                                        onClick={locateCurrentFile}
-                                    />
                                     {activeTab.readOnly && (
                                         <span className="readonly-label">
                                             只读
