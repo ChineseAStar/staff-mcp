@@ -91,6 +91,14 @@ node /path/to/staff-mcp/dist/src/index.js --docker node:22-alpine
 node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest --profile android-reverse
 ```
 
+### Docker 兼容入口与 Podman
+
+源码预检查改用 `docker info --format '{{json .}}'`，同时识别 Docker 的 `OSType` 与 Podman 的 `host.os`。这修复了 Linux reverse 模式下，PATH 中名为 `docker` 的可执行入口实际代理 Podman 时的启动检查。只有 shell alias 不会改变启动器调用；启动器直接执行可执行文件。始终查询同一个入口和连接，不在权限或连接失败后自动切换引擎。
+
+这不代表完整支持所有 Podman 模式：HTTP/stdio 仍保留原有的本地 Docker endpoint 验证，不新增 Podman 原生连接发现。目标引擎和镜像的容器启动、bind mount、Node／原生 PTY 加载及清理仍需验证。仅此预检查修复不需要修改宿主协议或升级 chat-ai，也不会自动更新镜像和运行中的端点。
+
+命令检查失败分别报告 `DOCKER_CHECK_FAILED`（仅附安全的退出码或已知进程错误码）、`DOCKER_CHECK_TIMEOUT`（保留原有 2 秒期限）、`DOCKER_INFO_INVALID`；只有有效的非 Linux OS 结果才报告 `DOCKER_UNSUPPORTED_PLATFORM`。输出、参数及 endpoint 详情仍不写入错误，避免泄漏凭据。显式 terminal 请求继续启动失败；仅 files 请求保留既有的扩展降级行为。
+
 ### 3. Claude Desktop 配置
 将以下内容添加到你的 `claude_desktop_config.json`：
 

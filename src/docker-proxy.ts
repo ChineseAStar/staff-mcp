@@ -1,10 +1,19 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import {
+    execFile,
+    spawn,
+    type ChildProcess,
+    type ExecFileException,
+} from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ExtensionFeature } from './extensions/config.js';
-import { terminalStartupError } from './terminal/pty.js';
+import {
+    TerminalStartupError,
+    terminalStartupError,
+    type TerminalStartupReason,
+} from './terminal/pty.js';
 
 const HANDLED_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 20_000;
@@ -257,6 +266,15 @@ export function validateAdditionalDockerArgs(args: readonly string[]): void {
     }
 }
 
+class DockerPreflightError extends Error {
+    constructor(
+        readonly reason: TerminalStartupReason,
+        message: string,
+    ) {
+        super(message);
+    }
+}
+
 /** Docker output/argv can contain credentials. Never include either in errors. */
 async function dockerOutput(
     command: string,
@@ -264,24 +282,69 @@ async function dockerOutput(
     args: string[],
 ): Promise<string> {
     return new Promise((resolve, reject) => {
-        const fail = () =>
+        const processErrorCodes = [
+            'ENOENT',
+            'EACCES',
+            'EPERM',
+            'ENOEXEC',
+            'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+        ];
+        const fail = (error: ExecFileException) => {
+            if (
+                error.killed &&
+                error.signal === 'SIGKILL' &&
+                error.code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+            ) {
+                reject(
+                    new DockerPreflightError(
+                        'DOCKER_CHECK_TIMEOUT',
+                        'Docker-compatible CLI check timed out after 2000ms.',
+                    ),
+                );
+                return;
+            }
+            // Only controlled identifiers are safe: child errors may embed
+            // the command, endpoint credentials or arbitrary stderr.
+            const code =
+                typeof error.code === 'number'
+                    ? ` exitCode=${error.code}`
+                    : processErrorCodes.includes(error.code ?? '')
+                      ? ` code=${error.code}`
+                      : '';
             reject(
-                new Error('Docker daemon check failed (details suppressed).'),
+                new DockerPreflightError(
+                    'DOCKER_CHECK_FAILED',
+                    `Docker-compatible CLI check failed.${code} Output suppressed; check the container CLI in the same launch environment.`,
+                ),
             );
-        execFile(
-            command,
-            [...prefix, ...args],
-            {
-                timeout: 2_000,
-                killSignal: 'SIGKILL',
-                maxBuffer: 1024 * 1024,
-                encoding: 'utf8',
-            },
-            (error, stdout) => {
-                if (error) fail();
-                else resolve(stdout.trim());
-            },
-        );
+        };
+        try {
+            execFile(
+                command,
+                [...prefix, ...args],
+                {
+                    timeout: 2_000,
+                    killSignal: 'SIGKILL',
+                    maxBuffer: 1024 * 1024,
+                    encoding: 'utf8',
+                },
+                (error, stdout) => {
+                    if (error) fail(error);
+                    else resolve(stdout.trim());
+                },
+            );
+        } catch (error) {
+            // Some OS spawn failures throw synchronously (for example EPERM).
+            // Classify only known process failures, not programming errors.
+            if (
+                error instanceof Error &&
+                'code' in error &&
+                typeof error.code === 'string' &&
+                processErrorCodes.includes(error.code)
+            )
+                fail(error as ExecFileException);
+            else reject(error);
+        }
     });
 }
 
@@ -308,7 +371,10 @@ async function assertLocalDockerDaemon(
         !normalizedEndpoint.slice('npipe:////./pipe/'.length).includes('/') &&
         normalizedEndpoint.length > 'npipe:////./pipe/'.length;
     if (!localUnix && !localPipe) {
-        throw new Error('Docker extensions require a verified local daemon.');
+        throw new DockerPreflightError(
+            'DOCKER_LOCAL_DAEMON_REQUIRED',
+            'Docker extensions require a verified local daemon; remote/TCP/SSH endpoints are unsupported.',
+        );
     }
 }
 
@@ -316,13 +382,48 @@ async function assertLinuxDockerDaemon(
     command: string,
     prefix: readonly string[],
 ): Promise<void> {
-    const osType = await dockerOutput(command, prefix, [
+    // Both Docker and Podman's Docker-compatible CLI support JSON templates.
+    // Query the same selected CLI/connection once; never switch engines after
+    // a permission, connection or command failure.
+    const output = await dockerOutput(command, prefix, [
         'info',
         '--format',
-        '{{.OSType}}',
+        '{{json .}}',
     ]);
+    let info: unknown;
+    try {
+        info = JSON.parse(output);
+    } catch {
+        throw new DockerPreflightError(
+            'DOCKER_INFO_INVALID',
+            'Docker-compatible CLI returned invalid info JSON.',
+        );
+    }
+    let osType: unknown;
+    if (info && typeof info === 'object' && !Array.isArray(info)) {
+        if ('OSType' in info) {
+            osType = info.OSType;
+        } else if (
+            'host' in info &&
+            info.host &&
+            typeof info.host === 'object' &&
+            !Array.isArray(info.host) &&
+            'os' in info.host
+        ) {
+            osType = info.host.os;
+        }
+    }
+    if (typeof osType !== 'string' || !osType) {
+        throw new DockerPreflightError(
+            'DOCKER_INFO_INVALID',
+            'Docker-compatible CLI info must contain Docker OSType or Podman host.os.',
+        );
+    }
     if (osType !== 'linux') {
-        throw new Error('Docker extensions require a Linux container daemon.');
+        throw new DockerPreflightError(
+            'DOCKER_UNSUPPORTED_PLATFORM',
+            'Docker extensions require Linux containers.',
+        );
     }
 }
 
@@ -335,36 +436,23 @@ export async function preflightDockerExtensions(
     validateAdditionalDockerArgs(additionalArgs);
     if (!requested.length) return [];
 
-    let reason: string | undefined;
-    let terminalReason:
-        | 'DOCKER_UNSUPPORTED_PLATFORM'
-        | 'DOCKER_LOCAL_DAEMON_REQUIRED'
-        | undefined;
-    // Keep daemon/mount prerequisites. Stdio data uses the control pipe and
-    // needs no loopback publication or particular container network mode.
-    if (transport === 'stdio' || transport === 'http') {
-        try {
+    try {
+        // Keep daemon/mount prerequisites. Stdio data uses the control pipe and
+        // needs no loopback publication or particular container network mode.
+        if (transport === 'stdio' || transport === 'http') {
             await assertLocalDockerDaemon('docker', []);
-        } catch {
-            reason =
-                'Docker extensions require a verified local daemon; remote/TCP/SSH or unavailable contexts are unsupported';
-            terminalReason = 'DOCKER_LOCAL_DAEMON_REQUIRED';
         }
-    }
-    if (!reason) {
-        try {
-            await assertLinuxDockerDaemon('docker', []);
-        } catch {
-            reason =
-                'Docker extensions require a verified Linux container daemon';
-            terminalReason = 'DOCKER_UNSUPPORTED_PLATFORM';
+        await assertLinuxDockerDaemon('docker', []);
+    } catch (error) {
+        if (!(error instanceof DockerPreflightError)) throw error;
+        if (requested.includes('terminal')) {
+            throw new TerminalStartupError(
+                error.reason,
+                `${terminalStartupError(error.reason).message} ${error.message}`,
+            );
         }
-    }
-    if (reason) {
-        if (requested.includes('terminal') && terminalReason)
-            throw terminalStartupError(terminalReason);
         console.error(
-            `[staff-mcp] Disabling requested Docker extensions (${requested.join(',')}): ${reason}. Basic MCP tools/control remain enabled.`,
+            `[staff-mcp] Disabling requested Docker extensions (${requested.join(',')}): reason=${error.reason} ${error.message} Basic MCP tools/control remain enabled.`,
         );
         return [];
     }

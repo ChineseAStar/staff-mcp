@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Accept Docker `OSType` and Podman `host.os` from one Docker-compatible CLI info JSON query, fixing Linux reverse extension preflight through a Podman-backed `docker` executable. Do not switch engines or connections after failures; retain HTTP/stdio local-endpoint restrictions and container lifecycle/mount safeguards.
+- Distinguish CLI failure, the existing 2-second check timeout, invalid info and confirmed non-Linux results. Report only safe error identifiers, never CLI output, arguments or endpoints. Explicit terminal failure and files-only degradation remain unchanged. No new CLI option, dependency, protocol or chat-ai change is required; this is not all-platform or all-transport Podman acceptance.
+
 ## 2.2.0 — 2026-11-08
 
 - Migrate to the official split MCP SDK 2 packages: `client`, `server` and `core` 2.4.0, with `node` 2.1.2. Serve legacy and modern `2026-07-28` clients over stdio, reverse and direct HTTP; nested MCP clients negotiate in the original process without relaunching unknown commands for protocol probes. Preserve ordinary tool names, shared process state, permissions, guarded pagination and per-call output validation.

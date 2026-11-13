@@ -91,6 +91,14 @@ node /path/to/staff-mcp/dist/src/index.js --docker node:22-alpine
 node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest --profile android-reverse
 ```
 
+### Docker-compatible Podman launchers
+
+The source preflight also accepts Podman's `host.os` from `docker info --format '{{json .}}'`, alongside Docker's `OSType`. This fixes the Linux reverse-mode startup check when the executable named `docker` on PATH is a Podman-compatible wrapper. Shell aliases alone do not affect this launcher; it invokes the executable directly. The selected executable/connection is queried once, with no engine fallback after permission or connection failures.
+
+This is not a blanket Podman support claim: HTTP/stdio retain the existing verified-local Docker endpoint check, with no new native Podman connection discovery. Container startup, bind mounts, Node/native PTY loading and cleanup must still work on the target engine/image. No host protocol or chat-ai update is needed for this preflight change alone, and no image or running endpoint is updated automatically.
+
+Failed CLI checks now report `DOCKER_CHECK_FAILED` (with a safe exit code or known process error code), `DOCKER_CHECK_TIMEOUT` (the existing 2-second deadline), or `DOCKER_INFO_INVALID`. `DOCKER_UNSUPPORTED_PLATFORM` is reserved for a valid non-Linux OS result. Output, arguments and endpoint details remain suppressed because they may contain credentials. Explicit terminal requests still fail startup; files-only requests retain their existing extension-degradation behavior.
+
 ### 3. Claude Desktop Configuration
 Add the following to your `claude_desktop_config.json`:
 
