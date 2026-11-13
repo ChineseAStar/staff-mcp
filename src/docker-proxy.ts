@@ -378,55 +378,6 @@ async function assertLocalDockerDaemon(
     }
 }
 
-async function assertLinuxDockerDaemon(
-    command: string,
-    prefix: readonly string[],
-): Promise<void> {
-    // Both Docker and Podman's Docker-compatible CLI support JSON templates.
-    // Query the same selected CLI/connection once; never switch engines after
-    // a permission, connection or command failure.
-    const output = await dockerOutput(command, prefix, [
-        'info',
-        '--format',
-        '{{json .}}',
-    ]);
-    let info: unknown;
-    try {
-        info = JSON.parse(output);
-    } catch {
-        throw new DockerPreflightError(
-            'DOCKER_INFO_INVALID',
-            'Docker-compatible CLI returned invalid info JSON.',
-        );
-    }
-    let osType: unknown;
-    if (info && typeof info === 'object' && !Array.isArray(info)) {
-        if ('OSType' in info) {
-            osType = info.OSType;
-        } else if (
-            'host' in info &&
-            info.host &&
-            typeof info.host === 'object' &&
-            !Array.isArray(info.host) &&
-            'os' in info.host
-        ) {
-            osType = info.host.os;
-        }
-    }
-    if (typeof osType !== 'string' || !osType) {
-        throw new DockerPreflightError(
-            'DOCKER_INFO_INVALID',
-            'Docker-compatible CLI info must contain Docker OSType or Podman host.os.',
-        );
-    }
-    if (osType !== 'linux') {
-        throw new DockerPreflightError(
-            'DOCKER_UNSUPPORTED_PLATFORM',
-            'Docker extensions require Linux containers.',
-        );
-    }
-}
-
 /** Validate requested permissions before reducing optional capabilities. */
 export async function preflightDockerExtensions(
     requested: readonly ExtensionFeature[],
@@ -437,12 +388,12 @@ export async function preflightDockerExtensions(
     if (!requested.length) return [];
 
     try {
-        // Keep daemon/mount prerequisites. Stdio data uses the control pipe and
-        // needs no loopback publication or particular container network mode.
+        // Keep local mount/data prerequisites, not an engine OS allowlist.
+        // Container startup and in-container PTY/shell checks decide actual
+        // availability. Reverse needs no separate daemon probe.
         if (transport === 'stdio' || transport === 'http') {
             await assertLocalDockerDaemon('docker', []);
         }
-        await assertLinuxDockerDaemon('docker', []);
     } catch (error) {
         if (!(error instanceof DockerPreflightError)) throw error;
         if (requested.includes('terminal')) {

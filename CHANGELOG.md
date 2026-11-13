@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- Accept Docker `OSType` and Podman `host.os` from one Docker-compatible CLI info JSON query, fixing Linux reverse extension preflight through a Podman-backed `docker` executable. Do not switch engines or connections after failures; retain HTTP/stdio local-endpoint restrictions and container lifecycle/mount safeguards.
-- Distinguish CLI failure, the existing 2-second check timeout, invalid info and confirmed non-Linux results. Report only safe error identifiers, never CLI output, arguments or endpoints. Explicit terminal failure and files-only degradation remain unchanged. No new CLI option, dependency, protocol or chat-ai change is required; this is not all-platform or all-transport Podman acceptance.
+- Remove the Docker extension OS precheck instead of parsing engine-specific info fields. Docker/Podman-compatible launchers are not rejected by `docker info` format differences; real container startup and in-container PTY/shell checks decide availability. Retain HTTP/stdio local-endpoint restrictions, argument validation and owned-container lifecycle/mount safeguards. No automatic engine fallback or startup retry.
+- Distinguish local-endpoint CLI failure and the existing 2-second timeout, including synchronous spawn errors. Report only safe error identifiers, never query output, arguments or endpoints. Explicit terminal startup failure and files-only local-endpoint degradation remain. No new CLI option, dependency, protocol or chat-ai change is required. POSIX container paths are unchanged; this is not new Windows-container support or all-platform/all-transport Podman acceptance.
 
 ## 2.2.0 — 2026-11-08
 

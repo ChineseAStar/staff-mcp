@@ -81,7 +81,7 @@ node /path/to/staff-mcp/dist/src/index.js --working-dir /path/to/your/project
 ```
 
 ### 2. Docker 透明代理模式 (Cyber-Shell)
-在兼容的 Docker 镜像中运行 staff-mcp，保留宿主的标准 MCP 控制连接。wrapper 自动挂载项目和程序包；启动仍取决于镜像、Node/native ABI/libc 和挂载权限。扩展预检依据 daemon OS 和 endpoint，而非 launcher OS：各 transport 均要求 Linux 容器 daemon，HTTP/stdio 另须经验证的本地 Unix socket 或命名管道 `npipe` endpoint。Windows Docker Desktop Linux 容器因此可用，仍须满足既有程序包、原生库与 bind mount 前提；扩展不支持 Windows 容器，macOS 未实测。
+在兼容的 Docker 镜像中运行 staff-mcp，保留宿主的标准 MCP 控制连接。wrapper 自动挂载项目和程序包；启动仍取决于镜像、Node/native ABI/libc 和挂载权限。启动器不再查询 `docker info`，也不按引擎 OS 放行或拒绝扩展。HTTP/stdio 仍须经验证的本地 Unix socket 或命名管道 `npipe` endpoint；reverse 不做独立 daemon 预检查。实际容器启动及容器内扩展检查决定是否可用。wrapper 仍使用 `/workspace`、`/opt/staff-mcp` 等 POSIX 容器路径；取消 OS 门禁不等于新增 Windows 容器路径或启动适配，macOS 仍未实测。
 
 ```bash
 # 仅普通 MCP，不启用 terminal：在 Alpine Node 容器内调试代码
@@ -91,13 +91,13 @@ node /path/to/staff-mcp/dist/src/index.js --docker node:22-alpine
 node /path/to/staff-mcp/dist/src/index.js --docker chineseastar/security:latest --profile android-reverse
 ```
 
-### Docker 兼容入口与 Podman
+### Docker 兼容入口与实际能力检查
 
-源码预检查改用 `docker info --format '{{json .}}'`，同时识别 Docker 的 `OSType` 与 Podman 的 `host.os`。这修复了 Linux reverse 模式下，PATH 中名为 `docker` 的可执行入口实际代理 Podman 时的启动检查。只有 shell alias 不会改变启动器调用；启动器直接执行可执行文件。始终查询同一个入口和连接，不在权限或连接失败后自动切换引擎。
+wrapper 直接执行 PATH 中名为 `docker` 的可执行入口，只有 shell alias 不会改变启动器调用。不再探测 `docker info` 或解析 Docker／Podman 的 OS 字段，因此不会仅因 Podman 返回不同的信息结构而拒绝启动；也不自动切换引擎或重试容器启动。HTTP/stdio 保留本地 endpoint 验证，不新增 Podman 原生连接发现。
 
-这不代表完整支持所有 Podman 模式：HTTP/stdio 仍保留原有的本地 Docker endpoint 验证，不新增 Podman 原生连接发现。目标引擎和镜像的容器启动、bind mount、Node／原生 PTY 加载及清理仍需验证。仅此预检查修复不需要修改宿主协议或升级 chat-ai，也不会自动更新镜像和运行中的端点。
+是否可用由实际容器启动、挂载、Node／原生 PTY 加载及 shell 检查决定。显式 terminal 请求在实际前提不满足时仍启动失败。仅 files 在本地 endpoint 无法验证时保留警告并禁用扩展的行为；取消 OS 门禁不把容器启动失败视为健康 MCP。这里不承诺所有 Podman 模式、Windows 容器或全部传输组合均受支持。
 
-命令检查失败分别报告 `DOCKER_CHECK_FAILED`（仅附安全的退出码或已知进程错误码）、`DOCKER_CHECK_TIMEOUT`（保留原有 2 秒期限）、`DOCKER_INFO_INVALID`；只有有效的非 Linux OS 结果才报告 `DOCKER_UNSUPPORTED_PLATFORM`。输出、参数及 endpoint 详情仍不写入错误，避免泄漏凭据。显式 terminal 请求继续启动失败；仅 files 请求保留既有的扩展降级行为。
+本地 endpoint 查询失败报告 `DOCKER_CHECK_FAILED`（仅附安全的退出码或已知进程错误码）或 `DOCKER_CHECK_TIMEOUT`（保留原有 2 秒期限）。该检查不输出原始输出、参数及 endpoint 详情，避免泄漏凭据；实际容器启动仍使用既有失败诊断和自有容器清理。仅此修改不需要升级宿主协议或 chat-ai，也不会自动更新镜像和运行中的端点。
 
 ### 3. Claude Desktop 配置
 将以下内容添加到你的 `claude_desktop_config.json`：
@@ -230,7 +230,7 @@ Docker 文件根仅复用已有工作区（`/workspace`，`main`）与 allowed-d
 
 Docker 中普通工具与文件应用复用允许目录挂载。宿主文件系统根（如 `/`）映射到 `/opt/staff-allowed/root-N`，因为 Docker 禁止挂载到容器 `/`。Windows drive/UNC 额外目录转换为容器内 POSIX namespace，不直接透传 Windows 路径；容器内 `-d` 和受保护暂存别名使用同一映射，重叠挂载不绕过 staging 保护。
 
-移除 stdio 数据端口不扩大 daemon 或平台支持。扩展仍预检 Linux 容器 daemon，HTTP/stdio 仍要求经验证的本地 Unix socket/`npipe` endpoint；HTTP 还须可达宿主 loopback，reverse 保留有效既有挂载要求。符合前提的 Windows Docker Desktop Linux 容器可用，不承诺任意 Desktop/remote context。挂载 uid/gid、工作区/全局目录权限、程序包/native ABI/libc 和 shell 限制仍在，不自动 chown、放宽权限或切换浏览器用户身份。显式 terminal 前提不满足仍启动报错，仅 files 保留原警告/禁用行为。可选 data configure 失败不终止健康 MCP，不回退 HTTP、不重放。`--network=none` 的 stdio 验证只证明数据不依赖网络，不证明 remote Docker、敌对容器隔离或全部平台可用。正常退出及信号仍清理自有容器，不承诺跨重启恢复。
+移除 stdio 数据端口不扩大 daemon 或平台支持。不再预检容器 OS，HTTP/stdio 仍要求经验证的本地 Unix socket/`npipe` endpoint；HTTP 还须可达宿主 loopback，reverse 保留有效既有挂载要求。符合前提的 Windows Docker Desktop Linux 容器可用，不承诺任意 Desktop/remote context。挂载 uid/gid、工作区/全局目录权限、程序包/native ABI/libc 和 shell 限制仍在，不自动 chown、放宽权限或切换浏览器用户身份。显式 terminal 前提不满足仍启动报错，仅 files 保留原警告/禁用行为。可选 data configure 失败不终止健康 MCP，不回退 HTTP、不重放。`--network=none` 的 stdio 验证只证明数据不依赖网络，不证明 remote Docker、敌对容器隔离或全部平台可用。正常退出及信号仍清理自有容器，不承诺跨重启恢复。
 
 ### 可选协商降级与显式 terminal 启动错误
 
