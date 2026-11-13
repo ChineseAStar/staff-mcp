@@ -14,7 +14,12 @@ import { TextEditor } from './Editor';
 import { isMarkdown, MarkdownPreview } from './MarkdownPreview';
 import { FileContextMenu } from './FileContextMenu';
 import { DirectoryTree } from './DirectoryTree';
-import { hasFilePayload } from './tree-input';
+import {
+    collectDroppedEntries,
+    hasFilePayload,
+    validateHostDropEntries,
+} from './tree-input';
+import type { HostDropEvent, HostDropLayout } from './host-file-drop';
 import { useDirectoryTree } from './useDirectoryTree';
 import { parentPath, withinPath } from './tree-types';
 import type { Entry } from './tree-types';
@@ -300,9 +305,51 @@ export function App() {
         | undefined
     >(undefined);
     const uploadInput = useRef<HTMLInputElement>(null);
+    const dropPreparation = useRef<AbortController | undefined>(undefined);
+    const [readingDrop, setReadingDrop] = useState(false);
+    const hostDropLayout = useRef<
+        | {
+              layout: HostDropLayout;
+              rootId: string;
+              actionEpoch: number;
+          }
+        | undefined
+    >(undefined);
+    const hostDropHandler = useRef<(event: HostDropEvent) => void>(() => {});
+    useEffect(
+        () => bridge.onHostDrop((event) => hostDropHandler.current(event)),
+        [],
+    );
+    const rootsRef = useRef(roots);
+    rootsRef.current = roots;
+
+    useEffect(() => {
+        let previous = bridge.snapshot();
+        const unsubscribe = bridge.subscribe(() => {
+            const next = bridge.snapshot();
+            if (
+                next.connected !== previous.connected ||
+                next.enabled !== previous.enabled ||
+                next.visible !== previous.visible
+            ) {
+                dropPreparation.current?.abort();
+            }
+            previous = next;
+        });
+        const abort = () => dropPreparation.current?.abort();
+        window.addEventListener('pagehide', abort);
+        return () => {
+            unsubscribe();
+            window.removeEventListener('pagehide', abort);
+            abort();
+        };
+    }, []);
 
     const root = roots.find((item) => item.rootId === rootId);
     const readOnly = !root || root.readOnly;
+    useEffect(() => {
+        return () => dropPreparation.current?.abort();
+    }, [rootId, available, readOnly]);
     const activeTab = tabs.find((tab) => tab.id === activeTabId);
     const activeTabRef = useRef(activeTab);
     activeTabRef.current = activeTab;
@@ -1343,7 +1390,149 @@ export function App() {
             return;
         }
         setShowTransfers(true);
-        transfers.upload(files, targetRoot, targetDirectory, folder);
+        transfers.upload(
+            files.map((file) => ({
+                file,
+                relativePath: folder
+                    ? file.webkitRelativePath
+                    : file.name.includes('/')
+                      ? ''
+                      : file.name,
+            })),
+            targetRoot,
+            targetDirectory,
+        );
+    };
+
+    const prepareDrop = async (
+        source: DataTransfer | { batchId: string },
+        targetDirectory: string,
+        targetRoot = rootId,
+    ) => {
+        const cancelHost = () => {
+            if ('batchId' in source)
+                void bridge.request('fileDropCancel', source).catch(() => {});
+        };
+        if (dropPreparation.current) {
+            cancelHost();
+            setNotice({
+                kind: 'info',
+                text: '仍在读取上一批文件夹，请等待或先取消，再拖入新的一批。',
+            });
+            return;
+        }
+        if (!canWrite(targetRoot) || !bridge.snapshot().visible) {
+            cancelHost();
+            setNotice({
+                kind: 'error',
+                text: '此目标当前不可写，请重新拖入。',
+            });
+            return;
+        }
+        const epoch = actionContext.current.epoch;
+        const controller = new AbortController();
+        const check = () => {
+            controller.signal.throwIfAborted();
+            const current = actionContext.current;
+            const state = bridge.snapshot();
+            if (
+                current.epoch !== epoch ||
+                current.rootId !== targetRoot ||
+                !current.available ||
+                !state.enabled ||
+                !state.connected ||
+                !state.visible ||
+                !rootsRef.current.some(
+                    (item) => item.rootId === targetRoot && !item.readOnly,
+                )
+            )
+                throw new Error('连接、根目录或写入权限已变化，请重新拖入。');
+        };
+        dropPreparation.current = controller;
+        setReadingDrop(true);
+        try {
+            check();
+            // Destination/root/action epoch were frozen before the first await.
+            // Same-root selection and geometry changes never redirect this batch.
+            const entries =
+                'batchId' in source
+                    ? validateHostDropEntries(
+                          await bridge.readHostDrop(
+                              source.batchId,
+                              controller.signal,
+                          ),
+                      )
+                    : await collectDroppedEntries(
+                          source,
+                          controller.signal,
+                          check,
+                      );
+            check();
+            if (!entries.length) {
+                setNotice({
+                    kind: 'info',
+                    text: '未读取到可上传的文件或文件夹。',
+                });
+                return;
+            }
+            setShowTransfers(true);
+            transfers.upload(entries, targetRoot, targetDirectory);
+        } catch (error) {
+            cancelHost();
+            setNotice({
+                kind: controller.signal.aborted ? 'info' : 'error',
+                text: controller.signal.aborted
+                    ? '已停止读取文件夹，此批次未开始上传；已有传输不受影响。'
+                    : errorMessage(error),
+            });
+        } finally {
+            if (dropPreparation.current === controller) {
+                dropPreparation.current = undefined;
+                setReadingDrop(false);
+            }
+        }
+    };
+
+    hostDropHandler.current = (event) => {
+        if (event.type === 'file-drop-error') {
+            setNotice({ kind: 'error', text: event.message });
+            return;
+        }
+        if (event.type !== 'file-drop-start') return;
+        // Flush pending scroll/render geometry, never guess an old revision's row.
+        hostDropLayout.current?.layout.refresh();
+        const current = hostDropLayout.current;
+        const target = current?.layout.destinations.get(event.token);
+        const state = bridge.snapshot();
+        if (
+            !current ||
+            !target ||
+            !current.layout.surface ||
+            current.layout.epoch !== event.epoch ||
+            current.layout.revision !== event.revision ||
+            current.rootId !== actionContext.current.rootId ||
+            current.actionEpoch !== actionContext.current.epoch ||
+            !actionContext.current.available ||
+            !state.visible ||
+            !state.enabled ||
+            !state.connected ||
+            !canWrite(current.rootId)
+        ) {
+            void bridge
+                .request('fileDropCancel', { batchId: event.batchId })
+                .catch(() => {});
+            setNotice({
+                kind: 'error',
+                text: '拖放目标或布局已变化，此批次未开始上传，请重新拖入。',
+            });
+            return;
+        }
+        // prepareDrop sets the preparation lock synchronously, before reading.
+        void prepareDrop(
+            { batchId: event.batchId },
+            target.directory,
+            current.rootId,
+        );
     };
 
     const beginUpload = (
@@ -1915,6 +2104,21 @@ export function App() {
                                 );
                             }}
                         />
+                        {readingDrop && (
+                            <div
+                                className="folder-drop-preparation"
+                                role="status"
+                            >
+                                <span>正在读取文件夹…</span>
+                                <button
+                                    onClick={() =>
+                                        dropPreparation.current?.abort()
+                                    }
+                                >
+                                    取消
+                                </button>
+                            </div>
+                        )}
                     </header>
                     {rootsError && (
                         <div className="list-error" role="alert">
@@ -1942,8 +2146,32 @@ export function App() {
                         }
                         interactionEpoch={actionIntent.current}
                         uploadAllowed={canWrite(rootId)}
-                        onUpload={(files, path) =>
-                            chooseFiles(files, rootId, path)
+                        hostDropScope={JSON.stringify([
+                            rootId,
+                            available,
+                            readOnly,
+                            actionContext.current.epoch,
+                        ])}
+                        hostDropEnabled={
+                            canWrite(rootId) &&
+                            lifecycle.visible &&
+                            !contextMenu &&
+                            !tabMenu &&
+                            !dialog &&
+                            !creation &&
+                            !menu
+                        }
+                        onHostDropLayout={(layout) => {
+                            hostDropLayout.current = layout
+                                ? {
+                                      layout,
+                                      rootId,
+                                      actionEpoch: actionContext.current.epoch,
+                                  }
+                                : undefined;
+                        }}
+                        onDropFiles={(data, path) =>
+                            void prepareDrop(data, path)
                         }
                         onPasteFiles={(files, path) =>
                             chooseFiles(files, rootId, path)
@@ -1951,7 +2179,7 @@ export function App() {
                         onDirectoryDrop={() =>
                             setNotice({
                                 kind: 'error',
-                                text: '文件夹拖放/粘贴暂不支持。请在目录菜单选择“上传文件夹”；浏览器未提供的空目录不会上传。',
+                                text: '文件夹粘贴暂不支持。请在目录菜单选择“上传文件夹”；浏览器未提供的空目录不会上传。',
                             })
                         }
                         onSelect={selectEntry}
@@ -2672,9 +2900,11 @@ export function App() {
                                 >
                                     <Icon
                                         name={
-                                            job.direction === 'upload'
-                                                ? 'upload'
-                                                : 'download'
+                                            job.directory
+                                                ? 'folder'
+                                                : job.direction === 'upload'
+                                                  ? 'upload'
+                                                  : 'download'
                                         }
                                         size={15}
                                     />
@@ -2689,45 +2919,65 @@ export function App() {
                                                 role="status"
                                                 aria-live="polite"
                                             >
-                                                {job.direction === 'download' &&
-                                                job.status === 'done'
-                                                    ? '传输结束，请检查浏览器下载记录'
+                                                {job.directory
+                                                    ? job.status === 'done'
+                                                        ? '文件夹已就绪'
+                                                        : job.status ===
+                                                            'queued'
+                                                          ? '等待创建文件夹'
+                                                          : job.status ===
+                                                              'checking'
+                                                            ? '检查/创建文件夹'
+                                                            : transferLabels[
+                                                                  job.status
+                                                              ]
                                                     : job.direction ===
                                                             'download' &&
-                                                        job.status ===
-                                                            'running' &&
-                                                        job.loaded === job.size
-                                                      ? '响应流已传输，等待宿主完整性校验…'
-                                                      : transferLabels[
-                                                            job.status
-                                                        ]}
+                                                        job.status === 'done'
+                                                      ? '传输结束，请检查浏览器下载记录'
+                                                      : job.direction ===
+                                                              'download' &&
+                                                          job.status ===
+                                                              'running' &&
+                                                          job.loaded ===
+                                                              job.size
+                                                        ? '响应流已传输，等待宿主完整性校验…'
+                                                        : transferLabels[
+                                                              job.status
+                                                          ]}
                                             </span>
                                         </div>
-                                        <progress
-                                            max={job.size || 1}
-                                            value={
-                                                [
-                                                    'queued',
-                                                    'checking',
-                                                    'preparing',
-                                                    'finishing',
-                                                    'cancelling',
-                                                    'saving',
-                                                ].includes(job.status)
-                                                    ? undefined
-                                                    : [
-                                                            'done',
-                                                            'handed-off',
-                                                        ].includes(job.status)
-                                                      ? job.size || 1
-                                                      : job.loaded
-                                            }
-                                            aria-label={`${job.name} 传输进度`}
-                                        />
+                                        {!job.directory && (
+                                            <progress
+                                                max={job.size || 1}
+                                                value={
+                                                    [
+                                                        'queued',
+                                                        'checking',
+                                                        'preparing',
+                                                        'finishing',
+                                                        'cancelling',
+                                                        'saving',
+                                                    ].includes(job.status)
+                                                        ? undefined
+                                                        : [
+                                                                'done',
+                                                                'handed-off',
+                                                            ].includes(
+                                                                job.status,
+                                                            )
+                                                          ? job.size || 1
+                                                          : job.loaded
+                                                }
+                                                aria-label={`${job.name} 传输进度`}
+                                            />
+                                        )}
                                         <div className="transfer-meta">
-                                            {job.status === 'preparing'
-                                                ? '正在准备源文件快照，尚未开始传输。'
-                                                : `${formatSize(job.loaded)} / ${formatSize(job.size)}${job.size > 0 ? ` · ${Math.floor((job.loaded / job.size) * 100)}%` : ''}`}
+                                            {job.directory
+                                                ? '空文件夹任务 · 仅检查或创建目录，不传输文件字节；已创建目录不会因取消而删除。'
+                                                : job.status === 'preparing'
+                                                  ? '正在准备源文件快照，尚未开始传输。'
+                                                  : `${formatSize(job.loaded)} / ${formatSize(job.size)}${job.size > 0 ? ` · ${Math.floor((job.loaded / job.size) * 100)}%` : ''}`}
                                             {job.status === 'ready' &&
                                                 ' · 浏览器尚未开始接收；可点击“手动开始下载”。'}
                                             {job.direction === 'download' &&

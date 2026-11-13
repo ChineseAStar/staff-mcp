@@ -1,3 +1,5 @@
+import type { HostDropEvent } from './host-file-drop';
+
 export interface Lifecycle {
     enabled: boolean;
     connected: boolean;
@@ -153,10 +155,12 @@ class FileManagerBridge {
             reject: (error: Error) => void;
             timer?: ReturnType<typeof setTimeout>;
             method: string;
+            batchId?: string;
         }
     >();
     private listeners = new Set<() => void>();
     private progressListeners = new Set<(progress: TransferProgress) => void>();
+    private hostDropListeners = new Set<(event: HostDropEvent) => void>();
     private state: Lifecycle = {
         enabled: false,
         connected: false,
@@ -237,6 +241,36 @@ class FileManagerBridge {
             for (const listener of this.progressListeners) listener(data);
             return;
         }
+        if (
+            (data.type === 'file-drop-error' &&
+                typeof data.message === 'string') ||
+            (['file-drop-start', 'file-drop-hover'].includes(data.type) &&
+                typeof data.epoch === 'string' &&
+                Number.isSafeInteger(data.revision) &&
+                data.revision >= 0 &&
+                (data.type === 'file-drop-start'
+                    ? typeof data.batchId === 'string' &&
+                      !!data.batchId &&
+                      typeof data.token === 'string'
+                    : data.token === null || typeof data.token === 'string'))
+        ) {
+            for (const listener of this.hostDropListeners) listener(data);
+            return;
+        }
+        if (
+            data.type === 'file-drop-start' &&
+            typeof data.batchId === 'string'
+        ) {
+            void this.request('fileDropCancel', {
+                batchId: data.batchId,
+            }).catch(() => {});
+            for (const listener of this.hostDropListeners)
+                listener({
+                    type: 'file-drop-error',
+                    message: '宿主拖放事件无效，此批次未开始上传，请重新拖入。',
+                });
+            return;
+        }
         if (data.version !== 1 || typeof data.id !== 'string') return;
         const pending = this.pending.get(data.id);
         if (!pending) return;
@@ -251,9 +285,11 @@ class FileManagerBridge {
         if (!state.connected || !state.enabled) {
             for (const [id, pending] of this.pending) {
                 if (
-                    ['transferCancel', 'transferStatus'].includes(
-                        pending.method,
-                    ) &&
+                    [
+                        'transferCancel',
+                        'transferStatus',
+                        'fileDropCancel',
+                    ].includes(pending.method) &&
                     state.connected
                 )
                     continue;
@@ -297,6 +333,47 @@ class FileManagerBridge {
         };
     }
 
+    onHostDrop(listener: (event: HostDropEvent) => void) {
+        this.hostDropListeners.add(listener);
+        return () => {
+            this.hostDropListeners.delete(listener);
+        };
+    }
+
+    readHostDrop(batchId: string, signal: AbortSignal): Promise<unknown> {
+        // Cancel remains a local, idempotent cleanup call even after disconnect.
+        const cancel = () => {
+            for (const [id, pending] of this.pending) {
+                if (
+                    pending.method !== 'fileDropRead' ||
+                    pending.batchId !== batchId
+                )
+                    continue;
+                clearTimeout(pending.timer);
+                this.pending.delete(id);
+                pending.reject(new Error('已停止读取拖放文件。'));
+            }
+            void this.request('fileDropCancel', { batchId }).catch(() => {});
+        };
+        if (signal.aborted) {
+            cancel();
+            return Promise.reject(signal.reason);
+        }
+        const read = this.request<unknown>('fileDropRead', { batchId });
+        let abort: () => void = () => {};
+        return new Promise<unknown>((resolve, reject) => {
+            abort = () => {
+                cancel();
+                reject(signal.reason);
+            };
+            signal.addEventListener('abort', abort, { once: true });
+            void read.then(resolve, (error) => {
+                cancel();
+                reject(error);
+            });
+        }).finally(() => signal.removeEventListener('abort', abort));
+    }
+
     post(message: { type: 'app-state'; dirty: boolean }) {
         this.port?.postMessage(message);
     }
@@ -309,7 +386,8 @@ class FileManagerBridge {
         const localHostMethod =
             method === 'copy' ||
             method === 'transferCancel' ||
-            method === 'transferStatus';
+            method === 'transferStatus' ||
+            method === 'fileDropCancel';
         if (
             !this.port ||
             (!localHostMethod && (!this.state.connected || !this.state.enabled))
@@ -344,7 +422,9 @@ class FileManagerBridge {
                                   ),
                               );
                           },
-                          ['uploadStream', 'download'].includes(method)
+                          ['uploadStream', 'download', 'fileDropRead'].includes(
+                              method,
+                          )
                               ? 15 * 60_000
                               : 90_000,
                       );
@@ -353,6 +433,10 @@ class FileManagerBridge {
                 reject,
                 timer,
                 method,
+                batchId:
+                    method === 'fileDropRead'
+                        ? String(params.batchId)
+                        : undefined,
             });
             try {
                 this.port!.postMessage(

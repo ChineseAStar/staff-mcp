@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add folder drag-in through a paired host-local browser bridge while retaining the opaque iframe sandbox. Keep outer folder names, hierarchy and empty directories, freeze the tree drop destination, and reuse the existing checked serial upload queue. Local enumeration is cancellable and atomic before enqueue, not a remote directory transaction. Ordinary file paste/drop and picker uploads remain available; folder paste and drag-out downloads are not added. No MCP wire, data channel, port or dependency change.
+
 - Add a one-shot current-file reveal button to the Files App's wide split layout, using a crosshair in the file-list header immediately before Refresh. Switch to the active file's root, expand/paginate only its ancestor path and scroll/select the real row without rereading or saving document contents. Narrow layouts keep Back to files; no auto-follow preference, protocol or permission change.
 
 - Default `--docker` launches to `--ulimit core=0:0` before the image name, setting core-file soft/hard limits to zero. Preserve explicit `-D` / `--docker-args` core limits in both `--ulimit core=...` and `--ulimit=core=...` forms without adding the default; other ulimits do not suppress it. Leave invalid limits to Docker and host mode unchanged. No existing container or host setting is modified.

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { bridge, BridgeError, errorMessage } from './bridge';
 import type { TransferProgress } from './bridge';
 import { validUploadPath } from './tree-input';
+import type { UploadEntry } from './tree-input';
 
 // Numeric validity boundary, also used by the upload retry button; not a byte budget.
 export const MAX_FILE_SIZE = Number.MAX_SAFE_INTEGER;
@@ -34,6 +35,7 @@ export interface TransferJob {
     loaded: number;
     status: TransferStatus;
     file?: File;
+    directory?: true;
     error?: string;
     overwrite?: boolean;
     expectedVersion?: string;
@@ -229,7 +231,9 @@ export function useTransfers(
                             ? job.uploadDirectory.length + 1
                             : 0,
                     );
-                    const parents = relative.split('/').slice(0, -1);
+                    const parents = job.directory
+                        ? relative.split('/')
+                        : relative.split('/').slice(0, -1);
                     let directory = job.uploadDirectory;
                     for (const part of parents) {
                         if (cancelled()) throw new Error('已取消');
@@ -241,6 +245,7 @@ export function useTransfers(
                                 rootId: job.rootId,
                                 path: directory,
                             });
+                            if (cancelled()) throw new Error('已取消');
                             if (entry.type !== 'directory')
                                 throw new Error(
                                     `父路径不是文件夹：${directory}`,
@@ -270,6 +275,7 @@ export function useTransfers(
                                     rootId: job.rootId,
                                     path: directory,
                                 });
+                                if (cancelled()) throw new Error('已取消');
                                 if (entry.type !== 'directory')
                                     throw new Error(
                                         `父路径不是文件夹：${directory}`,
@@ -279,6 +285,11 @@ export function useTransfers(
                     }
                 }
                 if (cancelled()) throw new Error('已取消');
+                if (job.directory) {
+                    change(job.id, { status: 'done', error: undefined });
+                    onUploadedRef.current(job.rootId, job.path);
+                    return;
+                }
                 if (!job.overwrite) {
                     try {
                         const existing = await bridge.request<{
@@ -366,7 +377,7 @@ export function useTransfers(
                         current?.cancelRequested && enabledRef.current
                             ? undefined
                             : job.uploadDirectory !== undefined && !transferId
-                              ? `文件未提交；已创建的文件夹会保留：${errorMessage(error)}`
+                              ? `${job.directory ? '文件夹任务未完成' : '文件未提交'}；已创建的文件夹会保留：${errorMessage(error)}`
                               : errorMessage(error),
                     // Every explicit retry rechecks the destination and asks again.
                     overwrite: false,
@@ -415,33 +426,35 @@ export function useTransfers(
     }, [available, jobs, change]);
 
     const upload = (
-        files: File[],
+        entries: UploadEntry[],
         rootId: string,
         directory: string,
-        folder = false,
     ) => {
-        const batch = files.map((file): TransferJob => {
-            const relative = folder ? file.webkitRelativePath : file.name;
+        const batch = entries.map((entry): TransferJob => {
+            const relative = entry.relativePath;
+            const size = entry.directory ? 0 : entry.file.size;
             const invalidPath =
                 !validUploadPath(relative) ||
-                (!!directory && !validUploadPath(directory)) ||
-                (!folder && relative.includes('/'));
-            const invalidSize =
-                !Number.isSafeInteger(file.size) || file.size < 0;
+                (!!directory && !validUploadPath(directory));
+            const invalidSize = !Number.isSafeInteger(size) || size < 0;
             return {
                 id: `transfer-${++sequence.current}`,
                 direction: 'upload',
                 rootId,
                 path: directory ? `${directory}/${relative}` : relative,
-                name: relative || file.name,
-                file,
-                ...(folder ? { uploadDirectory: directory } : {}),
+                name: relative || entry.file?.name || '文件夹',
+                ...(entry.directory
+                    ? { directory: true }
+                    : { file: entry.file }),
+                ...(entry.directory || relative.includes('/')
+                    ? { uploadDirectory: directory }
+                    : {}),
                 invalidUpload: invalidPath || invalidSize,
-                size: file.size,
+                size,
                 loaded: 0,
                 status: invalidPath || invalidSize ? 'error' : 'queued',
                 error: invalidPath
-                    ? '路径无效（禁止绝对路径、空段、../、反斜杠）；此文件未提交。'
+                    ? '路径无效（禁止绝对路径、空段、../、反斜杠）；此任务未提交。'
                     : invalidSize
                       ? '文件大小必须是非负安全整数，未开始上传。'
                       : undefined,

@@ -95,3 +95,94 @@ export function validUploadPath(path: string) {
             )
     );
 }
+
+// Metadata only: directory tasks never masquerade as browser File objects.
+export type UploadEntry =
+    | { file: File; relativePath: string; directory?: false }
+    | { directory: true; relativePath: string; file?: never };
+
+const folderDropHelp =
+    '拖放区域尚未就绪，请重新拖入并在目标高亮后松手，或在目录菜单使用“上传文件夹”（菜单无法保留空目录）。';
+
+// Opaque iframes cannot enumerate directory entries. Only the opted-in host
+// bridge does that; direct drops keep the ordinary captured-File fallback.
+export function collectDroppedEntries(
+    data: DataTransfer,
+    signal: AbortSignal,
+    assertCurrent: () => void,
+): Promise<UploadEntry[]> {
+    let files: File[];
+    try {
+        if (hasDirectoryPayload(data)) throw new Error(folderDropHelp);
+        files = transferFiles(data);
+    } catch (error) {
+        return Promise.reject(new Error(folderDropHelp, { cause: error }));
+    }
+    return (async () => {
+        const entries: UploadEntry[] = [];
+        for (const file of files) {
+            signal.throwIfAborted();
+            assertCurrent();
+            if (file.name.includes('/') || !validUploadPath(file.name))
+                throw new Error('拖入文件名无效，此批次未开始上传。');
+            // An opaque directory may look like a zero-byte File. Probe at most
+            // one byte, never infer directory kind from MIME or file size.
+            let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+            let abort: () => void = () => {};
+            try {
+                reader = file.slice(0, 1).stream().getReader();
+                const activeReader = reader;
+                await new Promise((resolve, reject) => {
+                    abort = () => reject(signal.reason);
+                    signal.addEventListener('abort', abort, { once: true });
+                    void activeReader.read().then(resolve, reject);
+                });
+            } catch (error) {
+                throw new Error(folderDropHelp, { cause: error });
+            } finally {
+                signal.removeEventListener('abort', abort);
+                void reader?.cancel().catch(() => {});
+            }
+            signal.throwIfAborted();
+            assertCurrent();
+            entries.push({ file, relativePath: file.name });
+        }
+        return entries;
+    })();
+}
+
+// One external boundary for the complete host result, before anything is queued.
+export function validateHostDropEntries(result: unknown): UploadEntry[] {
+    if (
+        !result ||
+        typeof result !== 'object' ||
+        !('entries' in result) ||
+        !Array.isArray(result.entries)
+    )
+        throw new Error('宿主拖放结果无效，此批次未开始上传。');
+    return result.entries.map((entry: unknown): UploadEntry => {
+        if (
+            !entry ||
+            typeof entry !== 'object' ||
+            !('relativePath' in entry) ||
+            typeof entry.relativePath !== 'string' ||
+            !validUploadPath(entry.relativePath)
+        )
+            throw new Error('宿主拖放路径无效，此批次未开始上传。');
+        if (
+            'directory' in entry &&
+            entry.directory === true &&
+            !('file' in entry)
+        )
+            return { directory: true, relativePath: entry.relativePath };
+        if (
+            !('directory' in entry) &&
+            'file' in entry &&
+            entry.file instanceof File &&
+            Number.isSafeInteger(entry.file.size) &&
+            entry.file.size >= 0
+        )
+            return { file: entry.file, relativePath: entry.relativePath };
+        throw new Error('宿主拖放条目无效，此批次未开始上传。');
+    });
+}

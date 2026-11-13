@@ -7,6 +7,8 @@ import {
     namePastedFiles,
     transferFiles,
 } from './tree-input';
+import { useHostFileDrop } from './host-file-drop';
+import type { HostDropLayout } from './host-file-drop';
 import { formatDate, formatSize, Icon } from './ui';
 import type { IconName } from './ui';
 import { parentPath, withinPath } from './tree-types';
@@ -21,7 +23,10 @@ interface Props {
     locateRequest?: { path: string };
     interactionEpoch: number;
     uploadAllowed: boolean;
-    onUpload: (files: File[], directory: string) => void;
+    hostDropScope: string;
+    hostDropEnabled: boolean;
+    onHostDropLayout: (layout: HostDropLayout | undefined) => void;
+    onDropFiles: (data: DataTransfer, directory: string) => void;
     onPasteFiles: (files: File[], directory: string) => void;
     onDirectoryDrop: () => void;
     onSelect: (entry: Entry) => void;
@@ -49,7 +54,10 @@ export function DirectoryTree({
     locateRequest,
     interactionEpoch,
     uploadAllowed,
-    onUpload,
+    hostDropScope,
+    hostDropEnabled,
+    onHostDropLayout,
+    onDropFiles,
     onPasteFiles,
     onDirectoryDrop,
     onSelect,
@@ -190,6 +198,13 @@ export function DirectoryTree({
     }, [interactionEpoch, available, tree.directories]);
     const nodes = useRef(new Map<string, HTMLDivElement>());
     const list = useRef<HTMLDivElement>(null);
+    const hostDrop = useHostFileDrop(
+        list,
+        hostDropScope,
+        hostDropEnabled,
+        onHostDropLayout,
+        setDropTarget,
+    );
     const consumedLocate = useRef<Props['locateRequest']>(undefined);
     useEffect(() => {
         if (!locateRequest || consumedLocate.current === locateRequest) return;
@@ -648,13 +663,17 @@ export function DirectoryTree({
                     dragTarget(target).directory,
                 );
             }}
+            onDragEnter={(event) => {
+                if (hasFilePayload(event.dataTransfer)) hostDrop.activate();
+            }}
             onDragOver={(event) => {
                 if (!hasFilePayload(event.dataTransfer)) return;
+                const delegated = hostDrop.activate();
                 event.preventDefault();
                 event.stopPropagation();
                 event.dataTransfer.dropEffect = uploadAllowed ? 'copy' : 'none';
                 const target = dragTarget(event.target);
-                if (uploadAllowed)
+                if (uploadAllowed && !delegated)
                     setDropTarget((current) =>
                         current?.directory === target.directory &&
                         current?.row === target.row
@@ -674,11 +693,7 @@ export function DirectoryTree({
                 // a state update that could redirect the captured destination.
                 const target = dragTarget(event.target);
                 setDropTarget(undefined);
-                if (hasDirectoryPayload(event.dataTransfer)) {
-                    onDirectoryDrop();
-                    return;
-                }
-                onUpload(transferFiles(event.dataTransfer), target.directory);
+                onDropFiles(event.dataTransfer, target.directory);
             }}
             onContextMenu={(event) => {
                 if (editingTarget(event.target)) return;
