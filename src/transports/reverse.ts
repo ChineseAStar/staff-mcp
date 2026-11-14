@@ -63,6 +63,11 @@ export async function startReverseServer(
         );
     const abort = new AbortController();
     let active: ReverseSseTransport | undefined;
+    let factoryClosing: Promise<void> | undefined;
+    const closeFactory = () =>
+        (factoryClosing ??= (async () => {
+            await serverFactory.close?.();
+        })());
 
     let backoff = options.reconnect?.initialDelay ?? 1000;
     const run = async () => {
@@ -285,13 +290,26 @@ export async function startReverseServer(
             );
         }
     };
-    const closed = run();
+    // Only final controller shutdown owns the factory, never an attempt/retry.
+    const closed = run().finally(closeFactory);
     return {
         closed,
         stop: async () => {
             abort.abort();
-            await active?.close().catch(() => {});
-            await closed;
+            const factoryCleanup = closeFactory();
+            const results = await Promise.allSettled([
+                factoryCleanup,
+                active?.close(),
+                closed,
+            ]);
+            const failures = results.filter(
+                (result) => result.status === 'rejected',
+            );
+            if (failures.length)
+                throw new AggregateError(
+                    failures.map((result) => result.reason),
+                    'Reverse cleanup failed',
+                );
         },
     };
 }

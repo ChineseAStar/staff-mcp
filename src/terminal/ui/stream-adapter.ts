@@ -24,6 +24,8 @@ export interface TerminalOpenResult {
     path?: string;
     shell?: string;
     leaseMs: number;
+    resumed?: boolean;
+    retainedForMs?: number;
 }
 
 export interface TerminalReadResult {
@@ -39,6 +41,7 @@ export interface TerminalPresentation {
     open(params: { cols: number; rows: number }): Promise<TerminalOpenResult>;
     input(terminalId: string, data: string): Promise<unknown>;
     resize(terminalId: string, cols: number, rows: number): Promise<unknown>;
+    terminate(terminalId: string): Promise<unknown>;
     read(terminalId: string, cursor: number): Promise<TerminalReadResult>;
     close(terminalId: string): Promise<unknown>;
 }
@@ -73,6 +76,14 @@ export function terminalPresentation(
             return {
                 terminalId: result.streamId,
                 leaseMs: result.leaseMs,
+                resumed:
+                    typeof metadata?.resumed === 'boolean'
+                        ? metadata.resumed
+                        : undefined,
+                retainedForMs:
+                    typeof metadata?.retainedForMs === 'number'
+                        ? metadata.retainedForMs
+                        : undefined,
                 rootId:
                     typeof metadata?.rootId === 'string'
                         ? metadata.rootId
@@ -106,6 +117,13 @@ export function terminalPresentation(
                 streamId: terminalId,
                 command: 'resize',
                 params: { cols, rows },
+            });
+        },
+        terminate(terminalId) {
+            return bridge.request('streamCommand', {
+                streamId: terminalId,
+                command: 'terminate',
+                params: {},
             });
         },
         async read(terminalId, cursor) {

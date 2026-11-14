@@ -17,6 +17,7 @@ import { EXTENSIONS, manifest } from './extensions/protocol.js';
 import { installExtensions } from './extensions/runtime.js';
 import type { HttpDataBindings } from './extensions/HttpDataBindings.js';
 import { loadTerminalRuntime } from './terminal/pty.js';
+import { TerminalStore } from './terminal/store.js';
 import {
     registerFileResources,
     subscribeFileResourceUpdates,
@@ -36,6 +37,7 @@ export interface ServerFactoryContext extends McpRequestContext {
 
 export interface ServerFactory {
     (context?: ServerFactoryContext): McpServer;
+    close?: () => Promise<void>;
     // Optional for minimal/non-file factories used by connection owners.
     validateResourceSubscription?: (uri: string) => Promise<void>;
     subscribeCatalogUpdates?: (notify: ServerNotifier) => () => void;
@@ -140,6 +142,9 @@ export function createServerFactory(
     const terminalRuntime = options.enabled.includes('terminal')
         ? loadTerminalRuntime(true)
         : undefined;
+    const terminalStore = terminalRuntime
+        ? new TerminalStore(terminalRuntime)
+        : undefined;
     const features = { files: !!filesCore, terminal: !!terminalRuntime };
 
     const factory: ServerFactory = (context) => {
@@ -197,6 +202,7 @@ export function createServerFactory(
                                 bindings: context.httpDataBindings!,
                             }
                           : undefined,
+                      terminalStore,
                   )
                 : undefined;
         registerFileResources(
@@ -227,6 +233,7 @@ export function createServerFactory(
         }
         return server;
     };
+    factory.close = () => terminalStore?.close() ?? Promise.resolve();
     factory.subscribeCatalogUpdates = (notify) =>
         watchProjectSkills(workingDir, () => {
             notify.toolsChanged();

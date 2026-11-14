@@ -57,7 +57,11 @@ const terminal = {
             renew: `${TERMINAL}/v1/renew`,
             status: `${TERMINAL}/v1/status`,
             close: `${TERMINAL}/v1/close`,
-            commands: { resize: `${TERMINAL}/v1/resize` },
+            reuse: true,
+            commands: {
+                resize: `${TERMINAL}/v1/resize`,
+                terminate: `${TERMINAL}/v1/terminate`,
+            },
         },
     },
 };

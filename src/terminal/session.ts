@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
-import type { IDisposable } from 'node-pty';
+import { ProtocolError } from '@modelcontextprotocol/server';
 import type {
     ChannelOpen,
     ChannelReceiver,
@@ -16,17 +16,16 @@ import {
     extensionError,
 } from '../extensions/protocol.js';
 import { TerminalStartupError } from './pty.js';
-import type {
-    TerminalPty,
-    TerminalRuntime,
-    TerminalStartupReason,
-} from './pty.js';
+import { TerminalStore, RETAINED_FOR_MS } from './store.js';
+import type { StoredTerminal, TerminalAttachment } from './store.js';
+import type { TerminalRuntime, TerminalStartupReason } from './pty.js';
 
 export interface CreateTerminal {
     operationId: string;
     rootId: string;
     cols: number;
     rows: number;
+    reuseKey?: string;
 }
 interface Terminal {
     params?: CreateTerminal;
@@ -38,7 +37,9 @@ interface Terminal {
     expires: number;
     finished?: number;
     job?: Promise<void>;
-    pty?: TerminalPty;
+    terminal?: StoredTerminal;
+    attachment?: TerminalAttachment;
+    resumed?: boolean;
     bound: boolean;
     fenced: boolean;
     outputIncomplete?: boolean;
@@ -47,19 +48,10 @@ interface Terminal {
     queue: Buffer[];
     bytes: number;
     pumping: boolean;
-    subscriptions: IDisposable[];
-    killTimer?: NodeJS.Timeout;
-    exited?: Promise<void>;
-    resolveExit?: () => void;
     exit: { code: number | null; signal: string | null };
 }
 const INPUT_LIMIT = 32 * 1024;
 const OUTPUT_LIMIT = 256 * 1024;
-const sessions = new Set<TerminalSession>();
-process.once('exit', () => {
-    for (const session of sessions) session.cleanupOnExit();
-});
-
 export class TerminalSession {
     private readonly operations = new Map<string, Terminal>();
     private readonly resources = new Map<string, Terminal>();
@@ -67,13 +59,17 @@ export class TerminalSession {
     private disposed = false;
     private closing?: Promise<void>;
     private readonly timer: NodeJS.Timeout;
+    private readonly store: TerminalStore;
+    private readonly ownsStore: boolean;
 
     constructor(
         private readonly core: FileCore,
         private readonly runtime: TerminalRuntime,
         private readonly authorize: () => void,
+        store?: TerminalStore,
     ) {
-        sessions.add(this);
+        this.ownsStore = !store;
+        this.store = store ?? new TerminalStore(runtime);
         this.timer = setInterval(() => this.sweep(), 1000);
         this.timer.unref();
     }
@@ -87,7 +83,7 @@ export class TerminalSession {
                     (item.state === 'closed' && item.bound && !item.fenced)) &&
                 item.expires <= now
             )
-                this.stop(item, 'LEASE_EXPIRED');
+                this.stop(item, 'LEASE_EXPIRED', true);
             if (
                 item.finished !== undefined &&
                 now - item.finished >= RECORD_TTL_MS &&
@@ -105,12 +101,13 @@ export class TerminalSession {
         if (this.disposed)
             extensionError('STALE_CONNECTION', 'Terminal connection closed');
         if (item.expires <= performance.now()) {
-            this.stop(item, 'LEASE_EXPIRED');
+            this.stop(item, 'LEASE_EXPIRED', true);
             extensionError('LEASE_EXPIRED', 'Terminal lease expired');
         }
         if (
             item.fenced ||
-            (item.state !== 'starting' && item.state !== 'running')
+            (item.state !== 'starting' && item.state !== 'running') ||
+            (item.terminal && item.terminal.attachment !== item.attachment)
         )
             extensionError('INVALID_STATE', 'Terminal is not running');
     }
@@ -156,6 +153,10 @@ export class TerminalSession {
                       rootId: item.params!.rootId,
                       path: item.cwd!,
                       shell: this.runtime.shell,
+                      resumed: item.resumed ?? false,
+                      retainedForMs: item.params!.reuseKey
+                          ? RETAINED_FOR_MS
+                          : 0,
                       leaseMs: Math.max(
                           1,
                           Math.ceil(item.expires - performance.now()),
@@ -181,6 +182,7 @@ export class TerminalSession {
             params.rootId,
             params.cols,
             params.rows,
+            params.reuseKey ?? null,
         ]);
         const existing = this.operations.get(params.operationId);
         if (existing) {
@@ -214,12 +216,12 @@ export class TerminalSession {
             queue: [],
             bytes: 0,
             pumping: false,
-            subscriptions: [],
             exit: { code: null, signal: null },
         };
         this.operations.set(params.operationId, item);
         const job = this.start(item, params);
         item.job = job;
+        this.store.trackCreation(job);
         try {
             await job;
         } finally {
@@ -229,6 +231,7 @@ export class TerminalSession {
     }
 
     private async start(item: Terminal, params: CreateTerminal) {
+        let admitting = false;
         try {
             // cwd starts at an administrator-configured root; it is not a shell sandbox.
             const cwd = await this.core.resolve(params.rootId, '');
@@ -239,53 +242,73 @@ export class TerminalSession {
                     'Terminal cwd must be a directory',
                 );
             this.check(item);
-            const pty = this.runtime.spawn(cwd, params.cols, params.rows);
-            item.pty = pty;
-            item.exited = new Promise<void>((resolve) => {
-                item.resolveExit = resolve;
-            });
-            pty.pause();
-            item.terminalId = randomUUID();
-            this.resources.set(item.terminalId, item);
-            item.subscriptions.push(
-                pty.onData((raw) => {
-                    // Cleanup resumes the PTY to drain its tail. Fenced output
-                    // must stay draining until close, not pause on the first chunk.
-                    if (item.fenced || this.disposed) return;
-                    // Linux emits raw Buffers; ConPTY emits streaming-decoded UTF-8 text.
+            const attachment: TerminalAttachment = {
+                id: Symbol('terminal attachment'),
+                data: (raw) => {
+                    // Store dispatch and this fence both belong to this attachment.
+                    if (
+                        item.fenced ||
+                        this.disposed ||
+                        item.terminal?.attachment !== attachment
+                    )
+                        return;
                     const data = Buffer.isBuffer(raw)
                         ? raw
                         : Buffer.from(raw, 'utf8');
-                    pty.pause();
+                    item.terminal.pty.pause();
                     if (!data.length) return;
                     if (this.outputBytes + data.length > OUTPUT_LIMIT) {
-                        this.stop(item, 'OUTPUT_LIMIT');
+                        this.stop(item, 'OUTPUT_LIMIT', true);
                         return;
                     }
                     this.outputBytes += data.length;
                     item.bytes += data.length;
                     item.queue.push(data);
                     void this.pump(item);
-                }),
-            );
-            item.subscriptions.push(
-                pty.onExit((event) => {
-                    item.exit = {
-                        code: event.exitCode ?? null,
-                        signal: event.signal ? String(event.signal) : null,
-                    };
+                },
+                exited: (exit) => {
+                    if (item.terminal?.attachment !== attachment) return;
+                    item.exit = exit;
                     this.exited(item);
-                }),
+                },
+                stopped: (code) => {
+                    if (item.state !== 'closed') item.state = 'closing';
+                    this.fence(item, code);
+                },
+            };
+            item.attachment = attachment;
+            admitting = true;
+            const claimed = this.store.claim(
+                params.rootId,
+                cwd,
+                params.cols,
+                params.rows,
+                attachment,
+                params.reuseKey,
+            );
+            admitting = false;
+            item.terminal = claimed.terminal;
+            item.resumed = claimed.resumed;
+            item.terminalId = randomUUID();
+            this.resources.set(item.terminalId, item);
+            await this.store.ready(
+                claimed.terminal,
+                attachment,
+                params.cols,
+                params.rows,
+                () => this.check(item),
             );
             this.check(item);
             item.state = 'running';
         } catch (error) {
             if (error instanceof TerminalStartupError)
                 item.failureReason = error.reason;
-            if (item.pty) this.stop(item, 'START_FAILED');
+            if (item.terminal) this.stop(item, 'START_FAILED', true);
             else if (item.state === 'starting') {
                 item.state = 'failed';
                 item.finished = performance.now();
+                // Admission conflicts must retain their protocol error code.
+                if (admitting && error instanceof ProtocolError) throw error;
             }
         }
     }
@@ -296,26 +319,30 @@ export class TerminalSession {
         try {
             while (item.queue.length && !item.fenced && !this.disposed) {
                 this.authorize();
-                const data = item.queue[0];
-                for (let offset = 0; offset < data.length; offset += 65536) {
+                // Do not retain a whole output buffer in an async pump after detach.
+                const length = item.queue[0].length;
+                for (let offset = 0; offset < length; offset += 65536) {
                     if (item.fenced || this.disposed) return;
-                    await item.channel.write(
-                        data.subarray(offset, offset + 65536),
+                    await item.channel!.write(
+                        item.queue[0].subarray(offset, offset + 65536),
                     );
                 }
-                // Include the in-flight chunk in the bounded budget until write releases it.
-                if (item.queue[0] === data) {
-                    item.queue.shift();
-                    item.bytes -= data.length;
-                    this.outputBytes -= data.length;
-                }
+                if (item.fenced || this.disposed) return;
+                item.queue.shift();
+                item.bytes -= length;
+                this.outputBytes -= length;
             }
             if (!item.fenced && !this.disposed) {
                 if (item.state === 'closed') await item.channel.end();
-                else if (item.state === 'running') item.pty?.resume();
+                else if (
+                    item.state === 'running' &&
+                    item.terminal &&
+                    item.terminal.attachment === item.attachment
+                )
+                    item.terminal.pty.resume();
             }
         } catch {
-            this.stop(item, 'OUTPUT_FAILED');
+            this.stop(item, 'OUTPUT_FAILED', true);
         } finally {
             item.pumping = false;
         }
@@ -326,16 +353,11 @@ export class TerminalSession {
         // A congested exit therefore cannot promise a complete output stream.
         item.outputIncomplete =
             !item.fenced && (!item.bound || item.pumping || item.bytes > 0);
-        clearTimeout(item.killTimer);
         item.state = 'closed';
         item.finished = performance.now();
-        for (const subscription of item.subscriptions) subscription.dispose();
-        item.subscriptions.length = 0;
         if (item.outputIncomplete) this.stop(item, 'OUTPUT_INCOMPLETE');
         else if (item.fenced) this.clearOutput(item);
         else void this.pump(item);
-        item.resolveExit?.();
-        item.resolveExit = undefined;
     }
 
     private clearOutput(item: Terminal) {
@@ -344,25 +366,36 @@ export class TerminalSession {
         item.queue.length = 0;
     }
 
-    private stop(item: Terminal, code: string) {
+    private fence(item: Terminal, code: string) {
         if (item.fenced) return;
         item.fenced = true;
-        item.channel?.close(code);
+        const channel = item.channel;
+        item.channel = undefined;
         this.clearOutput(item);
-        if (!item.pty || item.state === 'closed' || item.state === 'failed') {
-            if (item.state !== 'failed') item.state = 'closed';
-            item.finished ??= performance.now();
+        // Fence before close: channel close can synchronously reenter the receiver.
+        channel?.close(code);
+    }
+
+    private stop(item: Terminal, code: string, retain = false) {
+        if (item.fenced) {
+            if (!retain && item.terminal && item.attachment)
+                this.store.terminateOwned(item.terminal, item.attachment, code);
             return;
         }
-        item.state = 'closing';
-        item.pty.pause();
-        item.pty.kill('SIGTERM');
-        // A cancelled Windows connection can report exit synchronously.
-        if (item.state !== 'closing') return;
-        item.killTimer = setTimeout(() => {
-            if (item.pty && item.state === 'closing') item.pty.kill('SIGKILL');
-        }, 1000);
-        item.killTimer.unref();
+        this.fence(item, code);
+        if (item.terminal && item.attachment) {
+            if (retain && this.store.detach(item.terminal, item.attachment)) {
+                item.state = 'closed';
+                item.finished = performance.now();
+                return;
+            }
+            this.store.terminateOwned(item.terminal, item.attachment, code);
+            if (item.state === 'closed') return;
+            item.state =
+                item.terminal.state === 'closed' ? 'closed' : 'closing';
+        } else if (item.state !== 'failed') item.state = 'closed';
+        if (item.state === 'closed' || item.state === 'failed')
+            item.finished ??= performance.now();
     }
 
     status(operationId: string) {
@@ -377,7 +410,7 @@ export class TerminalSession {
         if (item.state !== 'running')
             extensionError('INVALID_STATE', 'Terminal is not running');
         try {
-            item.pty!.resize(cols, rows);
+            item.terminal!.pty.resize(cols, rows);
         } catch {
             extensionError('INVALID_STATE', 'Terminal resize failed');
         }
@@ -391,7 +424,7 @@ export class TerminalSession {
         return { terminalId, leaseMs: LEASE_MS };
     }
 
-    closeOperation(operationId: string, reason: string) {
+    closeOperation(operationId: string, reason: string, retain = false) {
         this.sweep();
         let item = this.operations.get(operationId);
         if (!item) {
@@ -410,11 +443,15 @@ export class TerminalSession {
                 queue: [],
                 bytes: 0,
                 pumping: false,
-                subscriptions: [],
                 exit: { code: null, signal: null },
             };
             this.operations.set(operationId, item);
-        } else this.stop(item, reason === 'page-exit' ? 'PAGE_EXIT' : 'USER');
+        } else
+            this.stop(
+                item,
+                reason === 'page-exit' ? 'PAGE_EXIT' : 'USER',
+                retain,
+            );
         return this.view(item);
     }
 
@@ -442,6 +479,7 @@ export class TerminalSession {
                 'Terminal may be bound only once',
             );
         item.bound = true;
+        item.terminal!.bound = true;
         item.channel = channel;
         void this.pump(item);
         return {
@@ -460,51 +498,53 @@ export class TerminalSession {
                         offset < data.byteLength;
                         offset += INPUT_LIMIT
                     ) {
-                        await item.pty!.writeInput(
+                        this.check(item);
+                        await this.store.writeInput(
+                            item.terminal!,
+                            item.attachment!,
                             data.subarray(offset, offset + INPUT_LIMIT),
                             () => this.check(item),
                         );
                     }
                 } catch {
-                    this.stop(item, 'INPUT_FAILED');
+                    this.stop(item, 'INPUT_FAILED', true);
                     extensionError('INVALID_STATE', 'Terminal input failed');
                 }
             },
             end: () => {
-                this.stop(item, 'INPUT_ENDED');
+                this.stop(item, 'INPUT_ENDED', true);
             },
             close: (reason) => {
-                this.stop(item, reason ? 'CHANNEL_CLOSED' : 'CHANNEL_ENDED');
+                this.stop(
+                    item,
+                    reason ? 'CHANNEL_CLOSED' : 'CHANNEL_ENDED',
+                    true,
+                );
             },
         };
     }
 
-    cleanupOnExit() {
-        for (const item of this.operations.values()) {
-            if (
-                item.pty &&
-                (item.state === 'running' || item.state === 'closing')
-            )
-                item.pty.kill('SIGKILL');
-        }
+    terminate(terminalId: string) {
+        const item = this.resource(terminalId);
+        this.check(item);
+        this.stop(item, 'USER');
+        return this.view(item);
     }
 
     close(): Promise<void> {
         if (this.closing) return this.closing;
         this.disposed = true;
         clearInterval(this.timer);
-        for (const item of this.operations.values()) {
-            this.stop(item, 'STALE_CONNECTION');
-            // Normal shutdown must remain alive through TERM -> KILL -> exit.
-            item.killTimer?.ref();
-        }
+        for (const item of this.operations.values())
+            this.stop(item, 'STALE_CONNECTION', true);
         this.closing = Promise.all(
             [...this.operations.values()].map(async (item) => {
-                await item.job;
-                await item.exited;
+                await item.job?.catch(() => {});
+                if (item.terminal?.state === 'closing')
+                    await item.terminal.exited;
             }),
-        ).then(() => {
-            sessions.delete(this);
+        ).then(async () => {
+            if (this.ownsStore) await this.store.close();
         });
         return this.closing;
     }

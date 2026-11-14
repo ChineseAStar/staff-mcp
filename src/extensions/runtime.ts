@@ -18,6 +18,7 @@ import {
     registerFileManager,
 } from '../file-manager/extension.js';
 import { TerminalSession } from '../terminal/session.js';
+import type { TerminalStore } from '../terminal/store.js';
 import { registerTerminal } from '../terminal/extension.js';
 import type { TerminalRuntime } from '../terminal/pty.js';
 import {
@@ -155,6 +156,7 @@ export class ExtensionOwner {
         workspaceCore: FileCore,
         terminalRuntime?: TerminalRuntime,
         private readonly isActive: () => boolean = () => true,
+        terminalStore?: TerminalStore,
     ) {
         this.files = createFiles?.(() => {
             this.requireDataExtension(FILES);
@@ -170,15 +172,20 @@ export class ExtensionOwner {
                 );
         });
         this.terminal = terminalRuntime
-            ? new TerminalSession(workspaceCore, terminalRuntime, () => {
-                  this.requireDataExtension(STREAMS);
-                  this.requireDataExtension(DATA);
-                  if (!this.currentData().supports(TERMINAL, 'duplex'))
-                      extensionError(
-                          'CAPABILITY_UNAVAILABLE',
-                          'Terminal data session is unavailable',
-                      );
-              })
+            ? new TerminalSession(
+                  workspaceCore,
+                  terminalRuntime,
+                  () => {
+                      this.requireDataExtension(STREAMS);
+                      this.requireDataExtension(DATA);
+                      if (!this.currentData().supports(TERMINAL, 'duplex'))
+                          extensionError(
+                              'CAPABILITY_UNAVAILABLE',
+                              'Terminal data session is unavailable',
+                          );
+                  },
+                  terminalStore,
+              )
             : undefined;
     }
 
@@ -379,6 +386,7 @@ export function installExtensions(
     workspaceCore: FileCore,
     terminalRuntime?: TerminalRuntime,
     options?: ExtensionRuntimeOptions,
+    terminalStore?: TerminalStore,
 ) {
     const bindings =
         options?.mode === 'modern-http' ? options.bindings : undefined;
@@ -457,6 +465,7 @@ export function installExtensions(
             workspaceCore,
             terminalRuntime,
             isActive,
+            terminalStore,
         );
     registerApps(
         server,

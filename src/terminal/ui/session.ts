@@ -16,6 +16,7 @@ export interface SessionView {
     error?: boolean;
     code?: string;
     recovery?: 'terminal' | 'app';
+    ending?: boolean;
 }
 
 interface Instance {
@@ -72,6 +73,11 @@ export function terminalSize(cols: number, rows: number) {
     };
 }
 
+type TerminalSurface = Pick<
+    Terminal,
+    'options' | 'cols' | 'rows' | 'write' | 'focus'
+>;
+
 // One instance owns all in-flight work. Invalidating it fences every late
 // receipt before it can write output, send queued input, or restart a reader.
 export class TerminalSession {
@@ -90,11 +96,9 @@ export class TerminalSession {
 
     constructor(
         private readonly presentation: TerminalPresentation,
-        private readonly terminal: Pick<
-            Terminal,
-            'options' | 'cols' | 'rows' | 'write' | 'reset' | 'focus'
-        >,
+        private terminal: TerminalSurface,
         private readonly update: (view: SessionView) => void,
+        private readonly resetSurface: () => TerminalSurface,
     ) {}
 
     setAvailability(available: boolean) {
@@ -155,24 +159,26 @@ export class TerminalSession {
         instance.size = undefined;
     }
 
-    private waitForExit(instance: Instance) {
+    private waitForExit(
+        instance: Instance,
+        detail = '进程已停止接收输入，正在等待尾部输出和退出状态；未提交的输入已丢弃，不会重放，输入回执不代表命令已执行。',
+    ) {
         instance.ending = true;
         this.terminal.options.disableStdin = true;
         this.cleanup(instance);
-        const detail =
-            '进程已停止接收输入，正在等待尾部输出和退出状态；未提交的输入已丢弃，不会重放，输入回执不代表命令已执行。';
         this.publish({
             ...this.view,
             message: instance.outputWarning
                 ? `${instance.outputWarning} ${detail}`
                 : detail,
             error: !!instance.outputWarning,
+            ending: true,
         });
     }
 
     private closeRemote(terminalId: string) {
-        // A rejected close is never retried against a new scope. The host and
-        // remote lease remain responsible for cleanup when the bridge is gone.
+        // A rejected detach is never retried against a new scope. Host cleanup
+        // and backend retention bound the shell lifetime when the bridge is gone.
         return this.presentation.close(terminalId);
     }
 
@@ -210,7 +216,9 @@ export class TerminalSession {
             ? '应用不可用；请从工作区重新打开终端应用。'
             : openUnconfirmed
               ? '请从工作区重新打开终端应用；当前页不能再次创建终端。'
-              : '可手动新建终端；不会恢复旧会话或重放输入。';
+              : code === 'WRITER_CONFLICT'
+                ? '原会话仍被另一页面使用或旧连接尚未释放；请关闭另一页面或稍后手动重新连接，不会自动抢占或重试。'
+                : '可手动重新连接，优先接回原会话；不会重放输入。';
         if (this.current(instance))
             this.stop(`${detail} ${action}`, true, code, recovery);
         else if (!this.view.code && code)
@@ -252,7 +260,7 @@ export class TerminalSession {
                 if (!this.instance && this.view === stopped) {
                     this.publish({
                         ...this.view,
-                        message: `${detail} 关闭结果未确认，将由宿主清理或租约到期回收。`,
+                        message: `${detail} 断开结果未确认；不会重发断开请求，原会话可能仍在运行。`,
                         error: true,
                     });
                 }
@@ -287,10 +295,15 @@ export class TerminalSession {
             return;
         instance.opening = true;
         try {
-            // An explicit reopen waits for prior cleanup; it must not race the
-            // host's one-terminal-per-instance ownership check. Never retry close.
+            // An explicit reconnect waits for prior detach; never retry close or
+            // race the host's one-stream-per-instance ownership check.
             if (this.release) await this.release;
             if (!this.current(instance) || !this.visible) return;
+            // Drain accepted writes before replacing the surface. xterm.reset()
+            // resets the screen, but leaves partial ANSI/UTF-8 parser state alive.
+            await this.rendered;
+            if (!this.current(instance) || !this.visible) return;
+            this.terminal = this.resetSurface();
             const size = terminalSize(this.terminal.cols, this.terminal.rows);
             if (!size) throw new Error('无效的终端尺寸。');
             const result = await this.presentation.open(size);
@@ -308,15 +321,20 @@ export class TerminalSession {
             ) {
                 throw new Error('宿主返回了无效的终端信息。');
             }
-            // An accepted old write may still be in xterm's parser queue.
-            // Drain it before resetting the display for this new instance.
-            await this.rendered;
-            if (!this.current(instance)) return;
-            this.terminal.reset();
             this.terminal.options.disableStdin = !this.visible;
+            let message = '已连接；原会话状态未确认。';
+            if (result.resumed === true)
+                message = '已接回原终端；离线输出未保存，可按回车显示提示符。';
+            else if (result.resumed === false) message = '已新建终端。';
+            if (
+                typeof result.retainedForMs === 'number' &&
+                Number.isFinite(result.retainedForMs) &&
+                result.retainedForMs > 0
+            )
+                message += ` 离线最多保留${result.retainedForMs / 3_600_000}小时。`;
             this.publish({
                 phase: 'running',
-                message: '已连接',
+                message,
                 shell: result.shell,
                 path: result.path,
             });
@@ -484,9 +502,11 @@ export class TerminalSession {
                 cursor = result.cursor;
                 if (result.state !== 'running') {
                     this.stop(
-                        result.state === 'exited'
-                            ? `进程已退出${result.exitCode === undefined ? '' : `（${result.exitCode}）`}；可重连。`
-                            : '终端已关闭；可重连。',
+                        result.state === 'exited' &&
+                            typeof result.exitCode === 'number' &&
+                            Number.isFinite(result.exitCode)
+                            ? `进程已退出（${result.exitCode}）；可重连。`
+                            : '终端连接已结束；可重新连接，原会话可能仍在运行。',
                     );
                     return;
                 }
@@ -560,9 +580,45 @@ export class TerminalSession {
         }
     }
 
+    async terminate() {
+        const instance = this.instance;
+        if (
+            !instance?.terminalId ||
+            !this.current(instance) ||
+            !this.visible ||
+            instance.ending ||
+            this.view.phase !== 'running'
+        )
+            return;
+        // Fence immediately, including repeated clicks, but keep the reader/ACK
+        // alive to drain real output. An uncertain termination is never replayed.
+        this.waitForExit(
+            instance,
+            '已请求结束原会话，正在等待尾部输出和退出状态；未提交输入已丢弃，不会重放。',
+        );
+        try {
+            await this.presentation.terminate(instance.terminalId);
+        } catch (error) {
+            if (
+                this.current(instance) &&
+                error instanceof BridgeError &&
+                error.code === 'STREAM_DRAINING'
+            )
+                this.waitForExit(instance);
+            else
+                this.fail(
+                    instance,
+                    error,
+                    '结束结果未确认；不会重发结束请求，运行程序可能仍在继续。',
+                );
+        }
+    }
+
     close() {
         if (this.instance)
-            this.stop('已请求关闭终端；不保证已结束所有子进程或撤销外部操作。');
+            this.stop(
+                '已请求断开终端连接；原会话会暂时保留，未提交输入不会重放，外部操作不会撤销。',
+            );
     }
 
     dispose() {

@@ -453,7 +453,11 @@ export async function startHttpServer(
         stopping = true;
         stopResourceNotifications?.();
         stopCatalogNotifications?.();
-        await Promise.allSettled([modern.close(), bindings.close()]);
+        await Promise.allSettled([
+            modern.close(),
+            bindings.close(),
+            serverFactory.close?.(),
+        ]);
         throw error;
     }
     const address = listener.address() as AddressInfo;
@@ -476,6 +480,7 @@ export async function startHttpServer(
                 const results = await Promise.allSettled([
                     modern.close(),
                     bindings.close(),
+                    serverFactory.close?.(),
                     ...[...sessions].map(([id, session]) =>
                         closeSession(id, session),
                     ),

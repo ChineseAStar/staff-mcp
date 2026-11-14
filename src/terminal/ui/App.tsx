@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Terminal } from '@xterm/xterm';
+import type { IDisposable } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { bridge } from '../../file-manager/ui/bridge';
 import { TerminalSession, terminalSize } from './session';
@@ -18,12 +19,18 @@ export function App() {
         phase: 'idle',
         message: '等待宿主连接…',
     });
+    const [confirmEnd, setConfirmEnd] = useState(false);
     const active = view.phase === 'running' || view.phase === 'opening';
     const available = lifecycle.enabled && lifecycle.connected && visible;
 
     useEffect(() => {
+        if (view.phase !== 'running' || view.ending || !available)
+            setConfirmEnd(false);
+    }, [view.phase, view.ending, available]);
+
+    useEffect(() => {
         const container = mount.current!;
-        const term = new Terminal({
+        let term = new Terminal({
             cols: 80,
             rows: 24,
             fontSize: 13,
@@ -37,23 +44,52 @@ export function App() {
             // No WebLinks addon, clipboard addon, or window-operation permissions.
             // Escape sequences are rendered by xterm, never as page HTML.
         });
-        const fit = new FitAddon();
-        term.loadAddon(fit);
-        term.open(container);
-        // Explicitly consume OSC 52; terminal output cannot access the clipboard.
-        const clipboardGuard = term.parser.registerOscHandler(52, () => true);
-        const linkGuard = term.parser.registerOscHandler(8, () => true);
+        let fit = new FitAddon();
+        let bindings: IDisposable[] = [];
+        let initialSurface = true;
+        const disposeSurface = () => {
+            for (const binding of bindings) binding.dispose();
+            bindings = [];
+            fit.dispose();
+            term.dispose();
+        };
+        const bindSurface = () => {
+            term.loadAddon(fit);
+            term.open(container);
+            // Terminal output cannot access the clipboard or create hyperlinks.
+            bindings = [
+                term.parser.registerOscHandler(52, () => true),
+                term.parser.registerOscHandler(8, () => true),
+                term.onData((value) => current.input(value)),
+                term.onResize(({ cols, rows }) => current.resize(cols, rows)),
+            ];
+            terminal.current = term;
+        };
         const current = new TerminalSession(
             terminalPresentation(bridge),
             term,
             setView,
+            () => {
+                if (initialSurface) {
+                    initialSurface = false;
+                    return term;
+                }
+                const options = {
+                    ...term.options,
+                    cols: term.cols,
+                    rows: term.rows,
+                    disableStdin: true,
+                };
+                disposeSurface();
+                term = new Terminal(options);
+                fit = new FitAddon();
+                bindSurface();
+                theme();
+                return term;
+            },
         );
         session.current = current;
-        terminal.current = term;
-        const data = term.onData((value) => current.input(value));
-        const resized = term.onResize(({ cols, rows }) =>
-            current.resize(cols, rows),
-        );
+        bindSurface();
 
         let pageHidden = false;
         let disposed = false;
@@ -184,11 +220,7 @@ export function App() {
             themeObserver.disconnect();
             cancelAnimationFrame(frame);
             current.dispose();
-            data.dispose();
-            resized.dispose();
-            clipboardGuard.dispose();
-            linkGuard.dispose();
-            term.dispose();
+            disposeSurface();
             session.current = undefined;
             terminal.current = undefined;
         };
@@ -212,18 +244,50 @@ export function App() {
                 </div>
                 <div className="actions">
                     {active ? (
-                        <button
-                            type="button"
-                            disabled={view.phase !== 'running' || !available}
-                            onClick={() => {
-                                if (!available) return;
-                                terminal.current?.clear();
-                                terminal.current?.focus();
-                            }}
-                            title="仅清除本地屏幕与回滚，不向 shell 发送命令"
-                        >
-                            清屏
-                        </button>
+                        <>
+                            <button
+                                type="button"
+                                disabled={
+                                    view.phase !== 'running' || !available
+                                }
+                                onClick={() => {
+                                    if (!available) return;
+                                    terminal.current?.clear();
+                                    terminal.current?.focus();
+                                }}
+                                title="仅清除本地屏幕与回滚，不向 shell 发送命令"
+                            >
+                                清屏
+                            </button>
+                            <button
+                                type="button"
+                                disabled={
+                                    view.phase !== 'running' ||
+                                    !!view.ending ||
+                                    !available
+                                }
+                                onClick={() => {
+                                    if (!available || view.ending) return;
+                                    if (!confirmEnd) {
+                                        setConfirmEnd(true);
+                                        return;
+                                    }
+                                    setConfirmEnd(false);
+                                    void session.current?.terminate();
+                                }}
+                                title="结束原 shell，运行程序可能被中断；不保证结束所有子进程或撤销外部操作。关闭应用仅断开连接"
+                            >
+                                {confirmEnd ? '确认结束' : '结束会话'}
+                            </button>
+                            {confirmEnd && (
+                                <button
+                                    type="button"
+                                    onClick={() => setConfirmEnd(false)}
+                                >
+                                    取消
+                                </button>
+                            )}
+                        </>
                     ) : view.phase === 'stopped' ? (
                         <button
                             className="primary"
@@ -231,7 +295,7 @@ export function App() {
                             disabled={!available || view.recovery === 'app'}
                             onClick={() => void session.current?.open()}
                         >
-                            新建终端
+                            重新连接
                         </button>
                     ) : null}
                 </div>
@@ -252,7 +316,10 @@ export function App() {
                 {view.code && ` [${view.code}]`}
             </div>
             <div className="terminal-surface" ref={mount} />
-            <footer>回滚保留最近 2000 行 · 关闭应用不撤销已执行的操作</footer>
+            <footer>
+                本地回滚最近 2000 行 · 离线输出不保存 ·
+                关闭应用仅断开连接，不撤销外部操作
+            </footer>
         </main>
     );
 }

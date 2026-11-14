@@ -479,7 +479,6 @@ function windowsPty(child: IPty): TerminalPty {
                         input.write(data, finishWrite);
                     });
                 }
-                check();
                 if (stopped)
                     extensionError('INVALID_STATE', 'PTY input closed');
             } catch {
@@ -488,6 +487,9 @@ function windowsPty(child: IPty): TerminalPty {
             } finally {
                 writing = false;
             }
+            // A retired attachment is not an OS pipe failure. Its final fence must
+            // reject the old input without killing a shell retained for reattach.
+            check();
         },
     };
 }

@@ -61,13 +61,24 @@ export async function startStdioServer(serverFactory: ServerFactory) {
     let stopping: Promise<void> | undefined;
     let inputError: Error | undefined;
     const stop = () => {
-        stopping ??= Promise.resolve().then(async () => {
+        stopping ??= (async () => {
             process.stdin.removeListener('end', onStdinClosed);
             process.stdin.removeListener('close', onStdinClosed);
             process.stdin.removeListener('error', onStdinError);
-            await connection.close();
+            const results = await Promise.allSettled([
+                connection.close(),
+                serverFactory.close?.(),
+            ]);
+            const failures = results.filter(
+                (result) => result.status === 'rejected',
+            );
+            if (failures.length)
+                throw new AggregateError(
+                    failures.map((result) => result.reason),
+                    'Stdio cleanup failed',
+                );
             if (inputError) throw inputError;
-        });
+        })();
         return stopping;
     };
     const onStdinClosed = () => {

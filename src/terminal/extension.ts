@@ -30,6 +30,10 @@ export function registerTerminal(
         create: z
             .object({
                 operationId,
+                reuseKey: z
+                    .string()
+                    .regex(/^[0-9a-f]{64}$/)
+                    .optional(),
                 params: z
                     .object({
                         rootId: z.string().min(1).default('main'),
@@ -47,10 +51,14 @@ export function registerTerminal(
             })
             .strict(),
         renew: z.object({ operationId, resourceId }).strict(),
+        terminate: z
+            .object({ resourceId, params: z.object({}).strict() })
+            .strict(),
         close: z
             .object({
                 operationId,
                 reason: z.literal('user'),
+                retain: z.boolean().optional(),
             })
             .strict(),
     };
@@ -79,6 +87,7 @@ export function registerTerminal(
                         const p = parse(params.create, input);
                         const result = await terminal.create({
                             operationId: p.operationId,
+                            reuseKey: p.reuseKey,
                             ...p.params,
                         });
                         if (result.state !== 'running' || !result.terminalId)
@@ -93,6 +102,8 @@ export function registerTerminal(
                                 rootId: result.rootId,
                                 path: result.path,
                                 shell: result.shell,
+                                resumed: result.resumed,
+                                retainedForMs: result.retainedForMs,
                             },
                         };
                     }
@@ -152,9 +163,17 @@ export function registerTerminal(
                             leaseMs: result.leaseMs,
                         };
                     }
+                    case 'terminate': {
+                        const p = parse(params.terminate, input);
+                        return terminal.terminate(p.resourceId);
+                    }
                     case 'close': {
                         const p = parse(params.close, input);
-                        return terminal.closeOperation(p.operationId, p.reason);
+                        return terminal.closeOperation(
+                            p.operationId,
+                            p.reason,
+                            p.retain,
+                        );
                     }
                 }
             },
