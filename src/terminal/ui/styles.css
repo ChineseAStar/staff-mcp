@@ -142,16 +142,6 @@ button:focus-visible {
 .dark .status[data-error] {
     color: #ff9da6;
 }
-.status-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--text-muted);
-    flex-shrink: 0;
-}
-.status-dot.connected {
-    background: #2a9d61;
-}
 .terminal-surface {
     flex: 1;
     min-width: 0;
@@ -164,12 +154,6 @@ button:focus-visible {
 }
 .terminal-surface .xterm-viewport {
     overscroll-behavior: contain;
-}
-footer {
-    flex-shrink: 0;
-    padding: 5px 12px 8px;
-    color: var(--text-muted);
-    font-size: 11px;
 }
 @media (max-width: 480px) {
     .toolbar {
@@ -201,9 +185,5 @@ footer {
     }
     .terminal-surface {
         margin-inline: 6px;
-    }
-    footer {
-        padding-inline: 8px;
-        font-size: 10px;
     }
 }

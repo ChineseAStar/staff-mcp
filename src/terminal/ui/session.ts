@@ -48,10 +48,7 @@ export function inputChunks(data: string): { chunks: string[]; bytes: number } {
         else if (code <= 0x7ff) size = 2;
         else if (code <= 0xffff) size = 3;
         bytes += size;
-        if (bytes > QUEUE_LIMIT)
-            throw new Error(
-                '此次输入超过剩余 256 KiB 预算，整批未接受；已有输入继续按序发送。',
-            );
+        if (bytes > QUEUE_LIMIT) throw new Error('输入过长，请分批粘贴。');
         if (chunkBytes + size > INPUT_LIMIT) {
             chunks.push(chunk);
             chunk = '';
@@ -91,7 +88,7 @@ export class TerminalSession {
     private release?: Promise<unknown>;
     private view: SessionView = {
         phase: 'idle',
-        message: '等待连接终端…',
+        message: '正在连接…',
     };
 
     constructor(
@@ -104,19 +101,14 @@ export class TerminalSession {
     setAvailability(available: boolean) {
         this.available = available;
         if (!available && this.instance) {
-            this.stop(
-                '应用不可用；请从工作区重新打开终端应用。',
-                true,
-                undefined,
-                'app',
-            );
+            this.stop('请从工作区重新打开终端。', true, undefined, 'app');
         } else if (!available && this.view.phase !== 'stopped') {
-            this.publish({ ...this.view, message: '等待宿主连接…' });
+            this.publish({ ...this.view, message: '正在连接…' });
         } else if (!available && this.view.recovery !== 'app') {
             this.publish({
                 ...this.view,
                 recovery: 'app',
-                message: `${this.view.message} 应用不可用；请从工作区重新打开终端应用。`,
+                message: `${this.view.message} 请从工作区重新打开终端。`,
             });
         } else if (available && this.visible && this.view.phase === 'idle') {
             // Initial availability opens once. A stopped/failed PTY never retries itself.
@@ -159,10 +151,7 @@ export class TerminalSession {
         instance.size = undefined;
     }
 
-    private waitForExit(
-        instance: Instance,
-        detail = '进程已停止接收输入，正在等待尾部输出和退出状态；未提交的输入已丢弃，不会重放，输入回执不代表命令已执行。',
-    ) {
+    private waitForExit(instance: Instance, detail = '正在等待退出…') {
         instance.ending = true;
         this.terminal.options.disableStdin = true;
         this.cleanup(instance);
@@ -212,13 +201,12 @@ export class TerminalSession {
             code &&
             ['STREAM_OPEN_UNCONFIRMED', 'STREAM_OPEN_PENDING'].includes(code);
         const recovery = appUnavailable || openUnconfirmed ? 'app' : 'terminal';
-        const action = appUnavailable
-            ? '应用不可用；请从工作区重新打开终端应用。'
-            : openUnconfirmed
-              ? '请从工作区重新打开终端应用；当前页不能再次创建终端。'
-              : code === 'WRITER_CONFLICT'
-                ? '原会话仍被另一页面使用或旧连接尚未释放；请关闭另一页面或稍后手动重新连接，不会自动抢占或重试。'
-                : '可手动重新连接，优先接回原会话；不会重放输入。';
+        const action =
+            recovery === 'app'
+                ? '请从工作区重新打开终端。'
+                : code === 'WRITER_CONFLICT'
+                  ? '终端正被占用，请关闭其他页面或稍后重试。'
+                  : '请重新连接。';
         if (this.current(instance))
             this.stop(`${detail} ${action}`, true, code, recovery);
         else if (!this.view.code && code)
@@ -260,7 +248,7 @@ export class TerminalSession {
                 if (!this.instance && this.view === stopped) {
                     this.publish({
                         ...this.view,
-                        message: `${detail} 断开结果未确认；不会重发断开请求，原会话可能仍在运行。`,
+                        message: `${detail} 连接状态未确认。`,
                         error: true,
                     });
                 }
@@ -286,7 +274,7 @@ export class TerminalSession {
         this.instance = instance;
         this.stoppedInstance = undefined;
         this.terminal.options.disableStdin = true;
-        this.publish({ phase: 'opening', message: '正在连接终端…' });
+        this.publish({ phase: 'opening', message: '正在连接…' });
         await this.startOpen(instance);
     }
 
@@ -322,19 +310,9 @@ export class TerminalSession {
                 throw new Error('宿主返回了无效的终端信息。');
             }
             this.terminal.options.disableStdin = !this.visible;
-            let message = '已连接；原会话状态未确认。';
-            if (result.resumed === true)
-                message = '已接回原终端；离线输出未保存，可按回车显示提示符。';
-            else if (result.resumed === false) message = '已新建终端。';
-            if (
-                typeof result.retainedForMs === 'number' &&
-                Number.isFinite(result.retainedForMs) &&
-                result.retainedForMs > 0
-            )
-                message += ` 离线最多保留${result.retainedForMs / 3_600_000}小时。`;
             this.publish({
                 phase: 'running',
-                message,
+                message: '',
                 shell: result.shell,
                 path: result.path,
             });
@@ -349,7 +327,7 @@ export class TerminalSession {
                     ['STREAM_OPEN_UNCONFIRMED', 'STREAM_OPEN_PENDING'].includes(
                         error.code,
                     )
-                    ? '创建结果未确认；不会重发创建请求。晚到旧句柄只会清理。'
+                    ? '连接结果未确认。'
                     : '打开终端失败。',
             );
         } finally {
@@ -371,9 +349,7 @@ export class TerminalSession {
         try {
             const input = inputChunks(data);
             if (instance.inputBytes + input.bytes > QUEUE_LIMIT) {
-                throw new Error(
-                    '此次输入超过剩余 256 KiB 预算，整批未接受；已有输入继续按序发送。',
-                );
+                throw new Error('输入过长，请分批粘贴。');
             }
             for (const chunk of input.chunks) {
                 const last = instance.inputs.length - 1;
@@ -400,8 +376,7 @@ export class TerminalSession {
             // already queued inputs and the current write's receipt/order.
             this.publish({
                 ...this.view,
-                message:
-                    '此次输入超过剩余 256 KiB 预算，整批未接受；已有输入继续按序发送。',
+                message: '输入过长，请分批粘贴。',
                 error: true,
             });
         }
@@ -435,12 +410,7 @@ export class TerminalSession {
                 error.code === 'STREAM_DRAINING'
             )
                 this.waitForExit(instance);
-            else
-                this.fail(
-                    instance,
-                    error,
-                    '输入结果未确认；不会自动重发，回执不代表命令已执行。',
-                );
+            else this.fail(instance, error, '输入结果未确认。');
         } finally {
             instance.sending = false;
         }
@@ -505,8 +475,8 @@ export class TerminalSession {
                         result.state === 'exited' &&
                             typeof result.exitCode === 'number' &&
                             Number.isFinite(result.exitCode)
-                            ? `进程已退出（${result.exitCode}）；可重连。`
-                            : '终端连接已结束；可重新连接，原会话可能仍在运行。',
+                            ? `进程已退出（${result.exitCode}）。`
+                            : '连接已断开。',
                     );
                     return;
                 }
@@ -569,12 +539,7 @@ export class TerminalSession {
                 error.code === 'STREAM_DRAINING'
             )
                 this.waitForExit(instance);
-            else
-                this.fail(
-                    instance,
-                    error,
-                    '调整窗口结果未确认；不会自动重发。',
-                );
+            else this.fail(instance, error, '调整窗口失败。');
         } finally {
             instance.resizing = false;
         }
@@ -592,10 +557,7 @@ export class TerminalSession {
             return;
         // Fence immediately, including repeated clicks, but keep the reader/ACK
         // alive to drain real output. An uncertain termination is never replayed.
-        this.waitForExit(
-            instance,
-            '已请求结束原会话，正在等待尾部输出和退出状态；未提交输入已丢弃，不会重放。',
-        );
+        this.waitForExit(instance, '正在结束…');
         try {
             await this.presentation.terminate(instance.terminalId);
         } catch (error) {
@@ -609,16 +571,13 @@ export class TerminalSession {
                 this.fail(
                     instance,
                     error,
-                    '结束结果未确认；不会重发结束请求，运行程序可能仍在继续。',
+                    '结束结果未确认，程序可能仍在运行。',
                 );
         }
     }
 
     close() {
-        if (this.instance)
-            this.stop(
-                '已请求断开终端连接；原会话会暂时保留，未提交输入不会重放，外部操作不会撤销。',
-            );
+        if (this.instance) this.stop('连接已断开。');
     }
 
     dispose() {

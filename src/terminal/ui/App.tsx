@@ -17,7 +17,7 @@ export function App() {
     );
     const [view, setView] = useState<SessionView>({
         phase: 'idle',
-        message: '等待宿主连接…',
+        message: '正在连接…',
     });
     const [confirmEnd, setConfirmEnd] = useState(false);
     const active = view.phase === 'running' || view.phase === 'opening';
@@ -255,7 +255,7 @@ export function App() {
                                     terminal.current?.clear();
                                     terminal.current?.focus();
                                 }}
-                                title="仅清除本地屏幕与回滚，不向 shell 发送命令"
+                                title="清除屏幕"
                             >
                                 清屏
                             </button>
@@ -275,7 +275,7 @@ export function App() {
                                     setConfirmEnd(false);
                                     void session.current?.terminate();
                                 }}
-                                title="结束原 shell，运行程序可能被中断；不保证结束所有子进程或撤销外部操作。关闭应用仅断开连接"
+                                title="结束会话会中断正在运行的程序"
                             >
                                 {confirmEnd ? '确认结束' : '结束会话'}
                             </button>
@@ -300,26 +300,17 @@ export function App() {
                     ) : null}
                 </div>
             </header>
-            <div
-                className="status"
-                role="status"
-                aria-live="polite"
-                data-error={view.error || undefined}
-            >
-                <span
-                    className={`status-dot ${view.phase === 'running' ? 'connected' : ''}`}
-                    aria-hidden="true"
-                />
-                {active && !visible && !view.error
-                    ? '终端已隐藏；暂停新输入，返回后继续当前会话；长时间冻结可能被回收。'
-                    : view.message}
-                {view.code && ` [${view.code}]`}
-            </div>
+            {view.message && (
+                <div
+                    className="status"
+                    role="status"
+                    aria-live="polite"
+                    data-error={view.error || undefined}
+                >
+                    {view.message}
+                </div>
+            )}
             <div className="terminal-surface" ref={mount} />
-            <footer>
-                本地回滚最近 2000 行 · 离线输出不保存 ·
-                关闭应用仅断开连接，不撤销外部操作
-            </footer>
         </main>
     );
 }
