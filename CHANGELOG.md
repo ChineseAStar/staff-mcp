@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix terminal long-stream stability without changing PTY ownership or restoring history after reconnect. Apply data-only HTTP stream timeouts and authenticated upload exemptions from the native request-body deadline; preserve ordinary request/header limits, leases, consumption backpressure, TLS and no-input-replay semantics. Protect modern reverse liveness responses from ordinary POST queues and subscription preflight. Clean up late stream-open results, clamp terminal dimensions, reject unadmitted oversized paste without killing the session, and provide operation-specific failure guidance. Requires the paired host for reverse listener and browser changes; no dependency, wire-version, port or persistent-data migration.
+
 - Add folder drag-in through a paired host-local browser bridge while retaining the opaque iframe sandbox. Keep outer folder names, hierarchy and empty directories, freeze the tree drop destination, and reuse the existing checked serial upload queue. Local enumeration is cancellable and atomic before enqueue, not a remote directory transaction. Ordinary file paste/drop and picker uploads remain available; folder paste and drag-out downloads are not added. No MCP wire, data channel, port or dependency change.
 
 - Add a one-shot current-file reveal button to the Files App's wide split layout, using a crosshair in the file-list header immediately before Refresh. Switch to the active file's root, expand/paginate only its ancestor path and scroll/select the real row without rereading or saving document contents. Narrow layouts keep Back to files; no auto-follow preference, protocol or permission change.

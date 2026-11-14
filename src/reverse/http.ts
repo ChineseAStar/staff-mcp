@@ -1,4 +1,5 @@
 import { Agent, ProxyAgent, fetch as undiciFetch } from 'undici';
+import type { Dispatcher } from 'undici';
 import { checkServerIdentity } from 'node:tls';
 import { selectProxyForOrigin } from '../utils/proxy.js';
 
@@ -85,27 +86,46 @@ export function createReverseHttp(
     } else {
         dispatcher = new Agent({ connect: tls });
     }
-    const fetch: typeof globalThis.fetch = async (input, init) => {
-        const request = new Request(input, init);
-        const target = new URL(request.url);
-        if (
-            target.origin !== url.origin ||
-            target.username ||
-            target.password ||
-            target.hash ||
-            !target.pathname.startsWith(url.pathname + '/')
-        )
-            throw new Error('Reverse HTTP endpoint rejected');
-        const response = await undiciFetch(target, {
-            method: request.method,
-            headers: Object.fromEntries(request.headers),
-            body: request.body,
-            duplex: 'half',
-            signal: AbortSignal.any([signal, request.signal]),
-            redirect: 'manual',
-            dispatcher,
-        });
-        return response as unknown as Response;
+    // Raw data legs are leased streams, not finite HTTP messages. In
+    // particular PUT responds at EOF, while a proxy may hold GET headers until
+    // the first byte. The separate ready handshake bounds attachment. Keep control
+    // requests on the default policy, sharing the same owned connection pool.
+    const dataDispatcher = dispatcher.compose(
+        (dispatch) => (options, handler) =>
+            dispatch(
+                options.method === 'GET' || options.method === 'PUT'
+                    ? { ...options, headersTimeout: 0, bodyTimeout: 0 }
+                    : options,
+                handler,
+            ),
+    );
+    const requestWith =
+        (selected: Dispatcher): typeof globalThis.fetch =>
+        async (input, init) => {
+            const request = new Request(input, init);
+            const target = new URL(request.url);
+            if (
+                target.origin !== url.origin ||
+                target.username ||
+                target.password ||
+                target.hash ||
+                !target.pathname.startsWith(url.pathname + '/')
+            )
+                throw new Error('Reverse HTTP endpoint rejected');
+            const response = await undiciFetch(target, {
+                method: request.method,
+                headers: Object.fromEntries(request.headers),
+                body: request.body,
+                duplex: 'half',
+                signal: AbortSignal.any([signal, request.signal]),
+                redirect: 'manual',
+                dispatcher: selected,
+            });
+            return response as unknown as Response;
+        };
+    return {
+        fetch: requestWith(dispatcher),
+        dataFetch: requestWith(dataDispatcher),
+        close: () => dispatcher.destroy(),
     };
-    return { fetch, close: () => dispatcher.destroy() };
 }

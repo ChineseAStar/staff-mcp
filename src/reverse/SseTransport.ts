@@ -1,17 +1,15 @@
-import {
-    JSONRPCMessageSchema,
-    PingRequestSchema,
-} from '@modelcontextprotocol/core';
+import { JSONRPCMessageSchema } from '@modelcontextprotocol/core';
+import { livenessRequest } from '../transports/liveness.js';
 import type { Transport, JSONRPCMessage } from '@modelcontextprotocol/server';
 
 const MESSAGE_LIMIT = 4 * 1024 * 1024;
 const QUEUE_LIMIT = 8 * 1024 * 1024;
-const PING_LIMIT = 32;
+const LIVENESS_LIMIT = 32;
 const SLOW_POST_MS = 1000;
 const DIAGNOSTIC_INTERVAL_MS = 10000;
 
 export interface ReverseControlDiagnostic {
-    reason: 'control-post-slow' | 'ping-post-slow';
+    reason: 'control-post-slow' | 'ping-post-slow' | 'discover-post-slow';
     bytes: number;
     queuedMs: number;
     elapsedMs: number;
@@ -74,11 +72,14 @@ export class ReverseSseTransport implements Transport {
     private endpoint?: URL;
     private queue = Promise.resolve();
     private queuedBytes = 0;
-    private pingQueue = Promise.resolve();
-    private queuedPings = 0;
+    private livenessQueue = Promise.resolve();
+    private queuedProbes = 0;
     // Typed keys keep numeric and string IDs distinct. Entries live only until
     // reply, cancellation, ID reuse or close; no eviction can prioritize a stale ID.
-    private readonly pendingPings = new Map<string | number, number>();
+    private readonly pendingProbes = new Map<
+        string | number,
+        { bytes: number; kind: 'ping' | 'discover' }
+    >();
     private nextDiagnosticAt = 0;
     private readTimer?: NodeJS.Timeout;
     private readyResolve?: () => void;
@@ -240,12 +241,14 @@ export class ReverseSseTransport implements Transport {
             (typeof message.id === 'string' || typeof message.id === 'number')
         ) {
             // Reused IDs are not valid concurrent JSON-RPC requests. Never retain
-            // ping priority when a subsequent ordinary request uses the same ID.
-            this.takePing(message.id);
-            if (PingRequestSchema.safeParse(message).success) {
+            // probe priority when a subsequent ordinary request uses the same ID.
+            this.takeProbe(message.id);
+            const kind = livenessRequest(message);
+            if (kind) {
                 const bytes = Buffer.byteLength(JSON.stringify(message.id));
                 if (
-                    this.pendingPings.size + this.queuedPings >= PING_LIMIT ||
+                    this.pendingProbes.size + this.queuedProbes >=
+                        LIVENESS_LIMIT ||
                     this.queuedBytes + bytes > QUEUE_LIMIT
                 ) {
                     this.fail({ reason: 'control-queue-exceeded', bytes });
@@ -253,7 +256,7 @@ export class ReverseSseTransport implements Transport {
                 }
                 // Tracked IDs share the existing byte budget with both POST lanes.
                 this.queuedBytes += bytes;
-                this.pendingPings.set(message.id, bytes);
+                this.pendingProbes.set(message.id, { bytes, kind });
             }
         } else if (
             'method' in message &&
@@ -261,17 +264,17 @@ export class ReverseSseTransport implements Transport {
         ) {
             const id = message.params?.requestId;
             if (typeof id === 'string' || typeof id === 'number')
-                this.takePing(id);
+                this.takeProbe(id);
         }
         this.onmessage?.(message);
     }
 
-    private takePing(id: string | number): boolean {
-        const bytes = this.pendingPings.get(id);
-        if (bytes === undefined) return false;
-        this.pendingPings.delete(id);
-        this.queuedBytes -= bytes;
-        return true;
+    private takeProbe(id: string | number) {
+        const probe = this.pendingProbes.get(id);
+        if (!probe) return;
+        this.pendingProbes.delete(id);
+        this.queuedBytes -= probe.bytes;
+        return probe.kind;
     }
 
     async send(message: JSONRPCMessage): Promise<void> {
@@ -279,24 +282,24 @@ export class ReverseSseTransport implements Transport {
             throw new Error('Reverse transport unavailable');
         const body = JSON.stringify(message);
         const bytes = Buffer.byteLength(body);
-        // Only responses to admitted inbound pings may bypass the control FIFO.
+        // Only responses to admitted inbound read-only probes bypass the control FIFO.
         // Delete synchronously: a second response with the same ID is ordinary.
-        const ping =
+        const probe =
             !('method' in message) &&
             message.id !== undefined &&
-            this.takePing(message.id);
+            this.takeProbe(message.id);
         if (
             bytes > MESSAGE_LIMIT ||
             this.queuedBytes + bytes > QUEUE_LIMIT ||
-            (ping && this.queuedPings >= PING_LIMIT)
+            (probe && this.queuedProbes >= LIVENESS_LIMIT)
         ) {
             this.fail({ reason: 'control-queue-exceeded', bytes });
             throw new Error('Reverse control queue exceeded');
         }
         this.queuedBytes += bytes;
-        if (ping) this.queuedPings++;
+        if (probe) this.queuedProbes++;
         const enqueuedAt = performance.now();
-        const queue = ping ? this.pingQueue : this.queue;
+        const queue = probe ? this.livenessQueue : this.queue;
         const operation = queue.then(async () => {
             if (this.stopped) throw new Error('Reverse transport closed');
             const startedAt = performance.now();
@@ -331,11 +334,14 @@ export class ReverseSseTransport implements Transport {
                 ) {
                     this.nextDiagnosticAt =
                         performance.now() + DIAGNOSTIC_INTERVAL_MS;
+                    let reason: ReverseControlDiagnostic['reason'] =
+                        'control-post-slow';
+                    if (probe === 'ping') reason = 'ping-post-slow';
+                    else if (probe === 'discover')
+                        reason = 'discover-post-slow';
                     try {
                         this.ondiagnostic?.({
-                            reason: ping
-                                ? 'ping-post-slow'
-                                : 'control-post-slow',
+                            reason,
                             bytes,
                             queuedMs,
                             elapsedMs,
@@ -364,13 +370,13 @@ export class ReverseSseTransport implements Transport {
                     : { reason: 'message-post-failed' },
             ),
         );
-        if (ping) this.pingQueue = settled;
+        if (probe) this.livenessQueue = settled;
         else this.queue = settled;
         try {
             await operation;
         } finally {
             this.queuedBytes -= bytes;
-            if (ping) this.queuedPings--;
+            if (probe) this.queuedProbes--;
         }
     }
 
@@ -399,9 +405,9 @@ export class ReverseSseTransport implements Transport {
         if (this.stopped) return;
         this.stopped = true;
         clearTimeout(this.readTimer);
-        for (const bytes of this.pendingPings.values())
-            this.queuedBytes -= bytes;
-        this.pendingPings.clear();
+        for (const probe of this.pendingProbes.values())
+            this.queuedBytes -= probe.bytes;
+        this.pendingProbes.clear();
         this.abort.abort();
         void this.reader?.cancel().catch(() => {});
         this.readyReject?.(new Error('Reverse connection closed'));

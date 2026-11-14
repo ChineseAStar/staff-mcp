@@ -1,5 +1,10 @@
 import { HttpDataSession } from '../data/HttpDataSession.js';
 import { handleNodeRequest } from '../data/node.js';
+import {
+    allowLongRequestBody,
+    installRequestPolicy,
+} from '../data/request-policy.js';
+import { createServer } from 'node:http';
 import { configureExtensionData } from '../extensions/runtime.js';
 import type { ExtensionDataFactory } from '../extensions/runtime.js';
 import { HttpDataBindings } from '../extensions/HttpDataBindings.js';
@@ -287,7 +292,9 @@ export async function startHttpServer(
             res.status(404).end();
             return;
         }
-        void handleNodeRequest(session, req, res).then(
+        void handleNodeRequest(session, req, res, () =>
+            allowLongRequestBody(req),
+        ).then(
             (handled) => {
                 if (!handled && !res.headersSent) res.status(404).end();
             },
@@ -430,7 +437,8 @@ export async function startHttpServer(
     app.get('/sse', mcpHandler);
     app.post('/messages', mcpHandler);
 
-    const listener = app.listen(port, host);
+    const listener = createServer(app);
+    const disposeRequestPolicy = installRequestPolicy(listener);
     try {
         await new Promise<void>((resolve, reject) => {
             listener.once('error', reject);
@@ -438,8 +446,10 @@ export async function startHttpServer(
                 listener.removeListener('error', reject);
                 resolve();
             });
+            listener.listen(port, host);
         });
     } catch (error) {
+        disposeRequestPolicy();
         stopping = true;
         stopResourceNotifications?.();
         stopCatalogNotifications?.();

@@ -14,6 +14,10 @@ import type {
     Transport,
     TransportSendOptions,
 } from '@modelcontextprotocol/server';
+import { livenessRequest } from './liveness.js';
+
+const ACK_LIMIT = 32;
+const ACK_BYTE_LIMIT = 8 * 1024 * 1024;
 
 // SDK 2.4's public SUPPORTED_PROTOCOL_VERSIONS is legacy-only. This
 // admission adapter targets the modern revision covered by this pinned SDK.
@@ -43,6 +47,10 @@ export class ResourceSubscriptions implements Transport {
     private closed = false;
     private readonly incoming: Ingress[] = [];
     private draining = false;
+    // Only ACKs associated with forwarded listen generations may release the
+    // SDK's serial ingress before send completes. The physical writer remains FIFO.
+    private readonly acknowledgements = new Set<Promise<void>>();
+    private acknowledgementBytes = 0;
     private readonly interests = new Map<RequestId, Interest>();
     // References to forwarded generations awaiting SDK ACK/error. A cancelled
     // generation must remain here until its reply so ID reuse cannot steal it.
@@ -87,6 +95,7 @@ export class ResourceSubscriptions implements Transport {
     async close(): Promise<void> {
         this.clear();
         await this.wire.close();
+        await Promise.allSettled(this.acknowledgements);
     }
 
     async send(
@@ -96,11 +105,47 @@ export class ResourceSubscriptions implements Transport {
         // Commit the observed ACK synchronously, BEFORE raw.send can yield or
         // cause a mutation. Failed old sends must not remove a reused ID.
         const association = this.observe(message);
+        if (association) {
+            const bytes = Buffer.byteLength(JSON.stringify(message));
+            if (
+                this.acknowledgements.size >= ACK_LIMIT ||
+                this.acknowledgementBytes + bytes > ACK_BYTE_LIMIT
+            ) {
+                this.failAcknowledgement();
+                throw new Error(
+                    'Resource subscription acknowledgement queue exceeded',
+                );
+            }
+            this.acknowledgementBytes += bytes;
+            // Enqueue synchronously to preserve physical ACK/notification order,
+            // while also catching a transport that throws before returning a promise.
+            const pending = new Promise<void>((resolve) => {
+                resolve(this.wire.send(message, options));
+            })
+                .catch(() => {
+                    this.forget(association.id, association.interest);
+                    if (!this.closed) this.failAcknowledgement();
+                })
+                .finally(() => {
+                    this.acknowledgements.delete(pending);
+                    this.acknowledgementBytes -= bytes;
+                });
+            this.acknowledgements.add(pending);
+            return;
+        }
+        await this.wire.send(message, options);
+    }
+
+    private failAcknowledgement() {
+        this.clear();
         try {
-            await this.wire.send(message, options);
-        } catch (error) {
-            if (association) this.forget(association.id, association.interest);
-            throw error;
+            this.onerror?.(
+                new Error('Resource subscription acknowledgement failed'),
+            );
+        } catch {
+            // An observer must not prevent fencing and closing the failed wire.
+        } finally {
+            void this.close().catch(() => {});
         }
     }
 
@@ -132,6 +177,17 @@ export class ResourceSubscriptions implements Transport {
             } else {
                 this.onmessage?.(message, extra);
             }
+            return;
+        }
+
+        if (isJSONRPCRequest(message)) {
+            const previous = this.interests.get(message.id);
+            if (previous) this.forget(message.id, previous);
+        }
+        // Do not parallelize ordinary RPCs: only SDK-validated read-only probes
+        // may pass a filesystem preflight. SDK still owns execution and responses.
+        if (livenessRequest(message)) {
+            this.onmessage?.(message, extra);
             return;
         }
 

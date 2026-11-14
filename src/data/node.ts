@@ -8,6 +8,7 @@ export async function handleNodeRequest(
     session: HttpDataSession,
     request: IncomingMessage,
     response: ServerResponse,
+    onUploadAccepted?: () => void,
 ): Promise<boolean> {
     const abort = new AbortController();
     const cancel = () => abort.abort(new Error('HTTP peer disconnected'));
@@ -39,7 +40,10 @@ export async function handleNodeRequest(
             new URL(request.url ?? '/', 'http://data.invalid'),
             init,
         );
-        const result = await session.handleRequest(webRequest);
+        const result = await session.handleRequest(
+            webRequest,
+            onUploadAccepted,
+        );
         if (!result) return false;
         response.writeHead(result.status, Object.fromEntries(result.headers));
         response.flushHeaders();

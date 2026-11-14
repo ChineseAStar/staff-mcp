@@ -347,6 +347,7 @@ class HttpChannel implements DataChannel {
                 this.sent += chunk.byteLength;
                 check(Number.isSafeInteger(this.sent), 'Data offset overflow');
                 this.output.enqueue(chunk);
+                this.startUpload();
                 // Copy/queue admission only; credit advances exclusively on receiver consumption ACK.
                 await this.fairness(chunk.byteLength);
             }
@@ -371,6 +372,7 @@ class HttpChannel implements DataChannel {
             await this.wait(this.connected.promise);
             // EOF is emitted immediately, never await a final socket drain before end.
             this.output.close();
+            this.startUpload();
             while (!this.outputEnded) await this.wait(this.changed.promise);
             if (this.upload) await this.upload;
             if (this.acknowledgmentsRead) await this.acknowledgmentsRead;
@@ -610,6 +612,20 @@ class HttpChannel implements DataChannel {
         }
     }
 
+    private startUpload() {
+        if (this.serving || this.upload) return;
+        // Do not open a PUT socket before real bytes or EOF are ready. Undici
+        // otherwise connects but delays headers, tripping the peer's header
+        // timeout during a perfectly idle terminal. ready already reserved it.
+        this.upload = this.request('put', 'PUT', this.outgoing).then(
+            async (response) => {
+                await response.body?.cancel();
+                check(this.ending, 'Premature HTTP upload completion');
+            },
+        );
+        void this.upload.catch((error) => this.fail(errorOf(error)));
+    }
+
     async connect(): Promise<void> {
         try {
             if (this.writing) {
@@ -619,13 +635,6 @@ class HttpChannel implements DataChannel {
                 void this.acknowledgmentsRead.catch((error) =>
                     this.fail(errorOf(error)),
                 );
-                this.upload = this.request('put', 'PUT', this.outgoing).then(
-                    async (response) => {
-                        await response.body?.cancel();
-                        check(this.ending, 'Premature HTTP upload completion');
-                    },
-                );
-                void this.upload.catch((error) => this.fail(errorOf(error)));
             }
             if (this.reading) {
                 void this.request('get', 'GET')
@@ -974,7 +983,10 @@ export class HttpDataSession {
         }
     }
 
-    async handleRequest(request: Request): Promise<Response | undefined> {
+    async handleRequest(
+        request: Request,
+        onUploadAccepted?: () => void,
+    ): Promise<Response | undefined> {
         if (!this.endpoint) return undefined;
         const url = new URL(request.url);
         const prefix = this.endpoint.pathname + '/';
@@ -1079,6 +1091,10 @@ export class HttpDataSession {
                     request.headers.get('content-encoding') === 'identity',
                 'Encoded data body is forbidden',
             );
+            // Only this authenticated, unexpired, singly claimed raw PUT may
+            // outlive the native HTTP request-body deadline. The serving
+            // adapter owns that policy; data leases/progress remain unchanged.
+            onUploadAccepted?.();
             await channel.receive(request.body);
             return new Response(null, { status: 204, headers: HEADERS });
         } catch (error) {

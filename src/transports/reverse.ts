@@ -173,7 +173,7 @@ export async function startReverseServer(
                                         binding,
                                         accept,
                                         supportsPurpose,
-                                        fetch: http.fetch,
+                                        fetch: http.dataFetch,
                                         resolveEndpoint: (endpoint) => {
                                             // Match before URL parsing can normalize an unsafe spelling.
                                             if (

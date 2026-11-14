@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { bridge } from '../../file-manager/ui/bridge';
-import { TerminalSession } from './session';
+import { TerminalSession, terminalSize } from './session';
 import { terminalPresentation } from './stream-adapter';
 import type { SessionView } from './session';
 
@@ -76,18 +76,17 @@ export function App() {
                     container.clientHeight > 0
                 ) {
                     const dimensions = fit.proposeDimensions();
-                    if (
-                        !dimensions ||
-                        !(dimensions.cols >= 2 && dimensions.rows >= 2)
-                    )
-                        return;
-                    fit.fit();
+                    const size =
+                        dimensions &&
+                        terminalSize(dimensions.cols, dimensions.rows);
+                    if (!size) return;
+                    term.resize(size.cols, size.rows);
                     // A view switch may need a remote resize even when the
                     // fitted local dimensions did not change.
                     current.resize(term.cols, term.rows);
                     // Availability opens the initial PTY. Fit first so the shell
                     // never prints its first prompt using xterm's default 80x24.
-                    current.setAvailability(true, state.message);
+                    current.setAvailability(true);
                 }
             });
         };
@@ -101,7 +100,7 @@ export function App() {
             const state = bridge.snapshot();
             const available = state.enabled && state.connected;
             // Fence real loss before visibility can reopen a never-opened idle.
-            if (!available) current.setAvailability(false, state.message);
+            if (!available) current.setAvailability(false);
             // A usable bridge alone is not enough to start a shell: the next
             // visible fit enables the session with the measured viewport size.
             visibility();
@@ -229,10 +228,10 @@ export function App() {
                         <button
                             className="primary"
                             type="button"
-                            disabled={!available}
+                            disabled={!available || view.recovery === 'app'}
                             onClick={() => void session.current?.open()}
                         >
-                            重连
+                            新建终端
                         </button>
                     ) : null}
                 </div>
@@ -250,6 +249,7 @@ export function App() {
                 {active && !visible && !view.error
                     ? '终端已隐藏；暂停新输入，返回后继续当前会话；长时间冻结可能被回收。'
                     : view.message}
+                {view.code && ` [${view.code}]`}
             </div>
             <div className="terminal-surface" ref={mount} />
             <footer>回滚保留最近 2000 行 · 关闭应用不撤销已执行的操作</footer>

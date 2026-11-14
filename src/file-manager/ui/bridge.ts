@@ -156,8 +156,12 @@ class FileManagerBridge {
             timer?: ReturnType<typeof setTimeout>;
             method: string;
             batchId?: string;
+            cancelled?: boolean;
         }
     >();
+    // At most one unresolved create, including a timed-out/cancelled receipt.
+    // Keep its original correlation until it replies; never replay an unknown open.
+    private streamOpening = false;
     private listeners = new Set<() => void>();
     private progressListeners = new Set<(progress: TransferProgress) => void>();
     private hostDropListeners = new Set<(event: HostDropEvent) => void>();
@@ -276,6 +280,31 @@ class FileManagerBridge {
         if (!pending) return;
         clearTimeout(pending.timer);
         this.pending.delete(data.id);
+        if (pending.method === 'streamOpen') {
+            if (pending.cancelled) {
+                // This port is never replaced. Only the original bridge may clean
+                // a late handle, even after its lifecycle became unavailable.
+                const result = data.result;
+                if (
+                    !data.error &&
+                    result &&
+                    typeof result.streamId === 'string' &&
+                    result.streamId &&
+                    Number.isFinite(result.leaseMs) &&
+                    result.leaseMs > 0
+                ) {
+                    void this.request('streamClose', {
+                        streamId: result.streamId,
+                    })
+                        .catch(() => {})
+                        .finally(() => {
+                            this.streamOpening = false;
+                        });
+                } else this.streamOpening = false;
+                return;
+            }
+            this.streamOpening = false;
+        }
         if (data.error) pending.reject(new BridgeError(data.error));
         else pending.resolve(data.result);
     };
@@ -294,14 +323,23 @@ class FileManagerBridge {
                 )
                     continue;
                 clearTimeout(pending.timer);
+                if (pending.method === 'streamOpen') {
+                    pending.cancelled = true;
+                    pending.timer = undefined;
+                }
                 pending.reject(
-                    new Error(
-                        mutations.has(pending.method)
-                            ? '连接已暂停或断开，写入结果待核实。请重新读取目标后再决定是否重试。'
-                            : '连接已暂停或断开；当前操作未能取得结果。',
-                    ),
+                    pending.method.startsWith('stream')
+                        ? new BridgeError({
+                              code: 'APP_UNAVAILABLE',
+                              message: '应用不可用；请从工作区重新打开。',
+                          })
+                        : new Error(
+                              mutations.has(pending.method)
+                                  ? '连接已暂停或断开，写入结果待核实。请重新读取目标后再决定是否重试。'
+                                  : '连接已暂停或断开；当前操作未能取得结果。',
+                          ),
                 );
-                this.pending.delete(id);
+                if (pending.method !== 'streamOpen') this.pending.delete(id);
             }
         }
         for (const listener of this.listeners) listener();
@@ -312,10 +350,19 @@ class FileManagerBridge {
         if (event.persisted) return;
         // Leave the port usable for the app to send streamClose.
         for (const [id, pending] of this.pending) {
-            if (pending.method !== 'streamRead') continue;
+            if (!['streamRead', 'streamOpen'].includes(pending.method))
+                continue;
             clearTimeout(pending.timer);
-            this.pending.delete(id);
-            pending.reject(new Error('页面已关闭；流读取已取消。'));
+            if (pending.method === 'streamOpen') {
+                pending.cancelled = true;
+                pending.timer = undefined;
+            } else this.pending.delete(id);
+            pending.reject(
+                new BridgeError({
+                    code: 'APP_UNAVAILABLE',
+                    message: '页面已关闭；流操作已取消。',
+                }),
+            );
         }
     };
 
@@ -387,13 +434,19 @@ class FileManagerBridge {
             method === 'copy' ||
             method === 'transferCancel' ||
             method === 'transferStatus' ||
-            method === 'fileDropCancel';
+            method === 'fileDropCancel' ||
+            method === 'streamClose';
         if (
             !this.port ||
             (!localHostMethod && (!this.state.connected || !this.state.enabled))
         ) {
             return Promise.reject(
-                new Error('应用当前不可操作；草稿仍保留在此页面。'),
+                method.startsWith('stream')
+                    ? new BridgeError({
+                          code: 'APP_UNAVAILABLE',
+                          message: '应用不可用；请从工作区重新打开。',
+                      })
+                    : new Error('应用当前不可操作；草稿仍保留在此页面。'),
             );
         }
         if (
@@ -404,6 +457,15 @@ class FileManagerBridge {
         ) {
             return Promise.reject(new Error('流只允许一个读取请求。'));
         }
+        if (method === 'streamOpen' && this.streamOpening) {
+            return Promise.reject(
+                new BridgeError({
+                    code: 'STREAM_OPEN_PENDING',
+                    message: '上次创建或清理结果未确认；不会重发创建请求。',
+                }),
+            );
+        }
+        if (method === 'streamOpen') this.streamOpening = true;
         const id = `file-ui-${++this.sequence}`;
         return new Promise<T>((resolve, reject) => {
             // Sustained output waits for data, not an idle deadline. Lifecycle /
@@ -413,13 +475,26 @@ class FileManagerBridge {
                     ? undefined
                     : setTimeout(
                           () => {
-                              this.pending.delete(id);
+                              if (method === 'streamOpen') {
+                                  const pending = this.pending.get(id)!;
+                                  pending.cancelled = true;
+                                  pending.timer = undefined;
+                              } else this.pending.delete(id);
                               reject(
-                                  new Error(
-                                      mutations.has(method)
-                                          ? '请求超时，写入结果待核实。不要直接重放，请刷新或重新读取目标。'
-                                          : '请求超时，请检查宿主连接后重试。',
-                                  ),
+                                  method.startsWith('stream')
+                                      ? new BridgeError({
+                                            code:
+                                                method === 'streamOpen'
+                                                    ? 'STREAM_OPEN_UNCONFIRMED'
+                                                    : 'STREAM_REQUEST_TIMEOUT',
+                                            message:
+                                                '流请求结果未确认；不会自动重发。',
+                                        })
+                                      : new Error(
+                                            mutations.has(method)
+                                                ? '请求超时，写入结果待核实。不要直接重放，请刷新或重新读取目标。'
+                                                : '请求超时，请检查宿主连接后重试。',
+                                        ),
                               );
                           },
                           ['uploadStream', 'download', 'fileDropRead'].includes(
@@ -456,6 +531,7 @@ class FileManagerBridge {
             } catch (error) {
                 clearTimeout(timer);
                 this.pending.delete(id);
+                if (method === 'streamOpen') this.streamOpening = false;
                 reject(error);
             }
         });
