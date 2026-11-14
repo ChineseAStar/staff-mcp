@@ -42,13 +42,7 @@ export function isModernRequest(ctx: ServerContext): boolean {
     return typeof version === 'string' && version >= '2026-07-28';
 }
 
-export function supports(
-    server: McpServer,
-    extension: string,
-    ctx: ServerContext,
-    version = 1,
-): boolean {
-    if (![APPS, DATA, FILES, STREAMS].includes(extension)) return false;
+function readClientExtensions(server: McpServer, ctx: ServerContext) {
     // SDK 2.4 exposes the modern capability view through the envelope (not ctx.mcp).
     const envelope = ctx.mcpReq.envelope as Record<string, unknown> | undefined;
     const parsedCapabilities = ClientCapabilitiesSchema.safeParse(
@@ -70,14 +64,36 @@ export function supports(
             version: z.literal(1),
             extensions: z.record(
                 z.string(),
-                z.object({ versions: z.array(z.number().int()) }),
+                z.object({
+                    versions: z.array(z.number().int()),
+                    reuse: z.unknown().optional(),
+                }),
             ),
         })
         .safeParse(manifest);
+    return parsed.success ? parsed.data.extensions : undefined;
+}
+
+export function supports(
+    server: McpServer,
+    extension: string,
+    ctx: ServerContext,
+    version = 1,
+): boolean {
+    if (![APPS, DATA, FILES, STREAMS].includes(extension)) return false;
     return (
-        parsed.success &&
-        parsed.data.extensions[extension]?.versions.includes(version) === true
+        readClientExtensions(server, ctx)?.[extension]?.versions.includes(
+            version,
+        ) === true
     );
+}
+
+export function supportsStreamReuse(
+    server: McpServer,
+    ctx: ServerContext,
+): boolean {
+    const streams = readClientExtensions(server, ctx)?.[STREAMS];
+    return streams?.versions.includes(1) === true && streams.reuse === true;
 }
 
 export function manifest(

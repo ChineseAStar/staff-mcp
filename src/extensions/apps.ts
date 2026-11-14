@@ -9,6 +9,7 @@ import {
     STREAMS,
     parse,
     extensionError,
+    supportsStreamReuse,
 } from './protocol.js';
 
 export const FILE_UI_URI = 'ui://staff-file-manager/v1/index.html';
@@ -57,7 +58,6 @@ const terminal = {
             renew: `${TERMINAL}/v1/renew`,
             status: `${TERMINAL}/v1/status`,
             close: `${TERMINAL}/v1/close`,
-            reuse: true,
             commands: {
                 resize: `${TERMINAL}/v1/resize`,
                 terminate: `${TERMINAL}/v1/terminate`,
@@ -101,6 +101,14 @@ export function registerApps(
                         ? [
                               {
                                   ...terminal,
+                                  capabilities: {
+                                      streams: {
+                                          ...terminal.capabilities.streams,
+                                          ...(supportsStreamReuse(server, ctx)
+                                              ? { reuse: true }
+                                              : {}),
+                                      },
+                                  },
                                   requiredExtensions: {
                                       [STREAMS]: 1,
                                       [DATA]: dataVersion,

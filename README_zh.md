@@ -8,9 +8,9 @@
 
 ---
 
-## SDK／协议兼容范围 — 2.2.0
+## SDK／协议兼容范围 — 2.2.1
 
-staff-mcp 2.2.0（2026-11-08）使用拆包后的 MCP SDK 2：`client`、`server`、`core` 固定 2.4.0，`node` 固定 2.1.2。本次发布目标为 Linux x64；npm 发布不等于 chat-ai 正式运行包 pin 更新、宿主部署或运行端点升级，这些须分别完成。本文不宣称全平台、公司网络或完整端到端验收。
+staff-mcp 2.2.1（2026-11-14）沿用拆包后的 MCP SDK 2：`client`、`server`、`core` 固定 2.4.0，`node` 固定 2.1.2。本次发布目标为 Linux x64；npm 发布不等于 chat-ai 正式运行包 pin 更新、宿主部署或运行端点升级，这些须分别完成。本文不宣称全平台、公司网络或完整端到端验收。
 
 - stdio、reverse 和 direct HTTP 通过官方 SDK 接受 legacy 与现代 `2026-07-28` 客户端。legacy HTTP 保留原鉴权会话；现代 HTTP 每请求调用 server factory，不使用 `Mcp-Session-Id`、共用 MCP server 或暗藏会话 header。普通工具仍共享原进程状态并保留原权限；逐请求 facade 不是独立 OS／用户沙箱。
 - 现代 HTTP 通过公开 **DATA2 业务绑定**保留 Files／Terminal Apps：服务端签发 control 凭据，90 秒租约，files／PTY／data 状态各自归属确切 owner。APPS／FILES／STREAMS 仍为 v1；stdio／reverse（两种协议）及 legacy HTTP 仍为 DATA1。DATA2 需宿主与 staff 配套升级，使用下文配套 chat-ai 版本，并显式更新其内置 staff 依赖。
@@ -20,6 +20,8 @@ staff-mcp 2.2.0（2026-11-08）使用拆包后的 MCP SDK 2：`client`、`server
 - 完整分页保护、公开 SDK API 的逐次输出校验、文件 commit/status、取消、原文件／PTY 租约与不重放规则保留；DATA2 另有独立业务绑定租约。Skills 标准发布使用官方 SDK 的 Beta 扩展，旧 `skill`、`read_skill_file` 和 prompts 继续兼容。配套宿主在首次模型请求前提供已授权技能的名称、描述和来源，再通过两个只读平台工具按需加载。
 
 ## 兼容性与配套升级
+
+**2.2.1 版本：** 保留 2.2.0 的工具、SDK／依赖锁定及协议／数据版本，修复终端流与 Docker 启动问题，增加可选的原 shell 复用和 Files 交互改进，并精简终端界面。原 shell 复用与文件夹拖入需配套 chat-ai 提交 `cc90912a630ec70d5096c58f7deb9c1336e70585` 或兼容后继版本；旧宿主保持原行为。新建 Docker 容器默认 `--ulimit core=0:0`，显式用户设置仍可覆盖。不需要数据迁移。
 
 **2.2.0 版本：** 新增 MCP SDK 2、现代 `2026-07-28` 服务、modern HTTP DATA2 业务绑定、标准 Skills 及旧技能工具兼容标记。请配套 chat-ai `tmp/inner-mcp-stdio` 提交 `1d659874f4da0540274ea454f016cebaa6838945` 或兼容后继版本，以及匹配的宿主／描述符／UI 资源。下文历史版本所列旧宿主提交不足以提供 modern HTTP DATA2 和标准 Skills 集成。本次是需配套升级的控制 wire 变化，不新增持久化数据格式、技能执行审批或操作／输入自动重放；保留下文 2.1.0 的容器与文件资源行为。
 
@@ -41,14 +43,14 @@ Docker 模板/用户脚本编排、受管 staff 短命令与聊天深色渲染�
 
 **从 2.0.3 升级：** Windows 新功能需要 staff-mcp 2.0.4；仅更新 chat-ai 不会为现有 staff 进程增加这些能力。`node-pty` 依赖锁定与扩展协议版本不变。
 
-**破坏性升级：** reverse 连接与可选扩展需要配套 chat-ai 宿主：宿主须实现 reverse v1 与下文的会话相对数据路径合同。宿主、staff-mcp、描述符和 UI 资源须配套升级。
+**历史 reverse 协议升级：** reverse 连接与可选扩展需要配套 chat-ai 宿主：宿主须实现 reverse v1 与下文的会话相对数据路径合同。宿主、staff-mcp、描述符和 UI 资源须配套升级。
 
 标准 stdio/Streamable HTTP 的工具、资源和提示词继续保留。扩展**默认全关**；可选发现或 data 协商失败仍保留健康的标准 MCP 连接。显式请求 terminal 但平台/native/shell 前提不可用时启动失败，不再静默禁用；files 原降级行为不变。旧 reverse 握手本身不兼容，即使关闭所有扩展也不能解决，必须配套升级两端；不提供旧协议兼容模式，也不在断线后自动续传或重放输入。
 
-无需进行 Chat8/schema9/format7/分享 protocol2 数据迁移。
+本补丁不要求持久化数据迁移。
 
 1. 结束在途操作，备份正常配置；无需转换数据。
-2. 先升级配套 chat-ai 宿主并显式更新其内置 staff 依赖，再将 staff-mcp 端点升级到 2.2.0，并协调 reverse 连接的停机窗口。
+2. 先升级配套 chat-ai 宿主并显式更新其内置 staff 依赖，再将 staff-mcp 端点升级到 2.2.1，并协调 reverse 连接的停机窗口。
 3. 重新连接 MCP、重新打开 App，仅显式启用需要的扩展。
 
 发布摘要见 [CHANGELOG](CHANGELOG.md)。
@@ -62,7 +64,7 @@ Docker 模板/用户脚本编排、受管 staff 短命令与聊天深色渲染�
 使用明确版本运行 staff-mcp：
 
 ```bash
-npx --yes staff-mcp@2.2.0 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.2.1 --working-dir /path/to/your/project
 ```
 
 从源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口：
@@ -180,7 +182,7 @@ Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Ser
 
 ## 🛠️ 核心能力
 
-以下描述 staff-mcp 2.2.0；扩展仍须显式启用，npm 发布不会自动升级宿主或运行端点。
+以下描述 staff-mcp 2.2.1；扩展仍须显式启用，npm 发布不会自动升级宿主或运行端点。
 
 扩展**默认全关**。通过 `--extensions files`、`--extensions terminal` 或 `--extensions files,terminal` 启用；apps/data 依赖及 terminal 对 streams v1 的声明自动计算，无需单独选择。禁用能力不声明对应 manifest 条目、不注册对应 UI Resource 或业务 handler；全关时无扩展 manifest、应用数据 listener/session，普通 MCP 工具和非 UI Resources 保留。HTTP 模式仍监听原 MCP 服务。
 
@@ -359,14 +361,14 @@ files-v1 跨 MCP 中转与文件应用上传不再设置 100 MiB 单文件硬限
 ## 发版流程
 
 1. 在临时开发分支完成改动、补齐 CHANGELOG 发布日期，确认 `package.json`、`package-lock.json` 顶层及 `packages[""].version` 都是本次目标版本，提交并推送该分支。
-2. 运行以下 **Bash** 检查流程。先核对 `VERSION`、`RELEASE_BRANCH` 与实现提交 `TARGET`，并确认该分支头已包含发布文档与版本变更。示例为 2.2.0；`TARGET` 是已存在且可核对的 SDK／modern／DATA2／Skills／compat marker 实现提交，不是尚未知的发版提交。该版本发布后不可原样重跑。任何一步失败都应先排查，不要跳过检查继续打标签。
+2. 运行以下 **Bash** 检查流程。先核对 `VERSION`、`RELEASE_BRANCH` 与实现提交 `TARGET`，并确认该分支头已包含发布文档与版本变更。示例为 2.2.1；`TARGET` 是已存在且可核对的 Docker／Files／终端修复与交互改进实现提交，不是尚未知的发版提交。该版本发布后不可原样重跑。任何一步失败都应先排查，不要跳过检查继续打标签。
 
 ```bash
 (
 set -euo pipefail
-VERSION=2.2.0
-RELEASE_BRANCH=tmp/mcp-sdk-v2
-TARGET=885e36d11a9ed208c4ed262b020582be325dcf94
+VERSION=2.2.1
+RELEASE_BRANCH=fix/docker-core-limit-default
+TARGET=04c9ed9d5f96062bcb401cb41c3b83b22c8b73a8
 
 git fetch origin --tags
 git cat-file -e "$TARGET^{commit}"
@@ -418,7 +420,7 @@ git push origin "refs/tags/v$VERSION"
 
 标签触发 `.github/workflows/publish.yml` 的 **Publish to npm**。工作流使用 Node 24、OIDC trusted publishing 和 `npm publish --provenance --access public`；npm 包设置中的 trusted publisher 必须对应仓库和 `publish.yml` 工作流文件。发布任务会验证标签对应提交已包含于远端 `master`，并校验三处版本；仅 push/合并 `master` 不会发布 npm。禁止从未合入的开发分支发版、移动已发布标签或重用已发布版本。
 
-成功后检查 Actions 和 `npm view staff-mcp@2.2.0 version`，再按原安装方式更新（如 `npm install -g staff-mcp@2.2.0` 或 `npx -y staff-mcp@2.2.0 ...`），并重启各 MCP 进程；已运行进程和已打开的 App 不会自动替换。版本号与标签示例需随每次后续发布更新。
+成功后检查 Actions 和 `npm view staff-mcp@2.2.1 version`，再按原安装方式更新（如 `npm install -g staff-mcp@2.2.1` 或 `npx -y staff-mcp@2.2.1 ...`），并重启各 MCP 进程；已运行进程和已打开的 App 不会自动替换。版本号与标签示例需随每次后续发布更新。
 
 ## 📄 License
 
