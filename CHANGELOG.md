@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Prepare folder ZIPs in bounded, cancellable file-manager jobs before starting a download. The App hands the finished archive to the existing files channel without repacking or extending its lease. Ordinary file downloads and the native browser handoff are unchanged; no ZIP-specific host changes are required.
+
 ## 2.2.1 — 2026-11-14
 
 - Reuse a live terminal shell across browser/App reopen and connection retirement while the same staff factory remains alive. A paired host supplies a private scoped reuse key; each attachment receives fresh operation/resource/channel handles and current authorization, with a single writer and no input replay. Detach drains/discards offline output without saving history; retain detached shells for up to two hours within a 32-PTY factory limit. Add an explicit End session command distinct from closing the App. Staff shutdown ends all owned PTYs; no cross-process restart recovery, tmux, dependency or data migration is added. Advertise descriptor `reuse:true` only to clients explicitly declaring streams reuse support; omit it for older strict host schemas so the complete Apps catalog remains available. The optional reuse fields preserve legacy create/close behavior when absent.

@@ -26,6 +26,7 @@ import type { Entry } from './tree-types';
 import {
     MAX_FILE_SIZE,
     transferActive,
+    transferHasByteProgress,
     transferLabels,
     useTransfers,
 } from './transfers';
@@ -2939,6 +2940,8 @@ export function App() {
                                                               'download' &&
                                                           job.status ===
                                                               'running' &&
+                                                          (!job.archive ||
+                                                              job.size > 0) &&
                                                           job.loaded ===
                                                               job.size
                                                         ? '响应流已传输，等待宿主完整性校验…'
@@ -2947,7 +2950,7 @@ export function App() {
                                                           ]}
                                             </span>
                                         </div>
-                                        {!job.directory && (
+                                        {transferHasByteProgress(job) && (
                                             <progress
                                                 max={job.size || 1}
                                                 value={
@@ -2975,16 +2978,28 @@ export function App() {
                                         <div className="transfer-meta">
                                             {job.directory
                                                 ? '空文件夹任务 · 仅检查或创建目录，不传输文件字节；已创建目录不会因取消而删除。'
-                                                : job.status === 'preparing'
-                                                  ? '正在准备源文件快照，尚未开始传输。'
-                                                  : `${formatSize(job.loaded)} / ${formatSize(job.size)}${job.size > 0 ? ` · ${Math.floor((job.loaded / job.size) * 100)}%` : ''}`}
+                                                : job.status === 'archiving'
+                                                  ? '正在生成 ZIP，尚未开始下载。'
+                                                  : job.status === 'preparing'
+                                                    ? job.archive
+                                                        ? 'ZIP 已打包，正在准备下载。'
+                                                        : '正在准备源文件快照，尚未开始传输。'
+                                                    : transferHasByteProgress(
+                                                            job,
+                                                        )
+                                                      ? `${formatSize(job.loaded)} / ${formatSize(job.size)}${job.size > 0 ? ` · ${Math.floor((job.loaded / job.size) * 100)}%` : ''}`
+                                                      : null}
                                             {job.status === 'ready' &&
-                                                ' · 浏览器尚未开始接收；可点击“手动开始下载”。'}
+                                                (job.archive
+                                                    ? '浏览器尚未开始接收；可点击“手动开始下载”。'
+                                                    : ' · 浏览器尚未开始接收；可点击“手动开始下载”。')}
                                             {job.direction === 'download' &&
                                                 job.status === 'done' &&
                                                 ' · 宿主已校验响应流，不代表文件已写入本地磁盘。'}
                                             {job.status === 'handed-off' &&
-                                                ' · 是否保存成功请查看浏览器下载记录。'}
+                                                (transferHasByteProgress(job)
+                                                    ? ' · 是否保存成功请查看浏览器下载记录。'
+                                                    : '是否保存成功请查看浏览器下载记录。')}
                                         </div>
                                         {job.status === 'confirm' && (
                                             <div className="upload-confirm">

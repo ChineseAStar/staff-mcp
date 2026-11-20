@@ -35,6 +35,9 @@ const files = {
         'mkdir',
         'move',
         'delete',
+        'archiveStart',
+        'archiveStatus',
+        'archiveCancel',
     ].map((method) => `${FILE_MANAGER}/${method}`),
     capabilities: {
         files: { version: 1, upload: true, download: true },

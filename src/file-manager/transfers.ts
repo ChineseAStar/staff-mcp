@@ -4,6 +4,7 @@ import type { FileHandle } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { ArchiveJobs } from './archive-jobs.js';
 import {
     FileCore,
     FileError,
@@ -34,6 +35,7 @@ export interface PrepareParams {
     overwrite?: boolean;
     expectedVersion?: string;
     archive?: 'zip';
+    archiveJobId?: string;
 }
 type State =
     | 'preparing'
@@ -93,18 +95,21 @@ export class TransferManager {
     private disposed = false;
     private closing?: Promise<void>;
     private readonly timer: NodeJS.Timeout;
+    private readonly archives: ArchiveJobs;
 
     constructor(
         private readonly core: FileCore,
         private readonly runtimeDirectory: string,
         private readonly authorize: () => void = () => {},
     ) {
+        this.archives = new ArchiveJobs(core, runtimeDirectory, authorize);
         managers.add(this);
         this.timer = setInterval(() => this.sweep(), 1000);
         this.timer.unref();
     }
 
     private sweep() {
+        this.archives.sweep();
         const now = performance.now();
         for (const [id, item] of this.history) {
             if (now - item.finished! >= RECORD_TTL_MS) this.history.delete(id);
@@ -116,6 +121,17 @@ export class TransferManager {
                 item.expires <= now
             )
                 this.finish(item, 'expired');
+            // Once claimed this transfer is the sole owner of the ZIP. Retain
+            // its cleanup handle if the filesystem temporarily refuses removal.
+            if (
+                terminal(item.state) &&
+                item.params.archiveJobId &&
+                item.directory
+            ) {
+                if (!item.job && !item.cleanup)
+                    void this.cleanup(item).catch(() => {});
+                continue;
+            }
             if (
                 item.finished !== undefined &&
                 now - item.finished >= RECORD_TTL_MS &&
@@ -288,9 +304,26 @@ export class TransferManager {
         };
     }
 
+    archiveStart(rootId: string, path: string) {
+        return this.archives.start(rootId, path);
+    }
+
+    archiveStatus(jobId: string) {
+        return this.archives.status(jobId);
+    }
+
+    archiveCancel(jobId: string) {
+        return this.archives.cancel(jobId);
+    }
+
     async prepare(params: PrepareParams) {
         this.authorize();
         if (this.disposed) fail('STALE_CONNECTION', 'File session is closed');
+        if (params.archiveJobId !== undefined) {
+            if (params.mode !== 'read' || params.archive !== 'zip')
+                fail('INVALID_PARAMS', 'Archive job requires read ZIP prepare');
+            this.core.checkArchivePath(params.rootId, params.path);
+        }
         this.sweep();
         const normalized = { ...params, overwrite: params.overwrite ?? false };
         const fingerprint = JSON.stringify([
@@ -302,6 +335,7 @@ export class TransferManager {
             normalized.overwrite,
             normalized.expectedVersion ?? null,
             normalized.archive ?? null,
+            normalized.archiveJobId ?? null,
         ]);
         const retained = this.history.get(params.operationId);
         if (retained) {
@@ -373,9 +407,23 @@ export class TransferManager {
             io: new Mutex(),
             abort: new AbortController(),
         };
-        // Register synchronously, before the first filesystem await, including in-flight deduplication.
+        if (params.archiveJobId !== undefined) {
+            const archive = this.archives.take(
+                params.archiveJobId,
+                params.rootId,
+                params.path,
+            );
+            item.directory = archive.directory;
+            item.staging = archive.staging;
+            item.size = archive.snapshot.size;
+            item.version = archive.snapshot.version;
+            item.sha256 = archive.snapshot.version;
+            item.state = 'prepared';
+        }
+        // Register synchronously, before the first filesystem await or after taking ZIP staging.
         this.operations.set(params.operationId, item);
         this.resources.set(item.transferId, item);
+        if (item.state === 'prepared') return this.preparedView(item);
         const job = this.prepareItem(item);
         item.job = job;
         try {
@@ -599,6 +647,8 @@ export class TransferManager {
             );
         };
         if (item.params.mode === 'read') {
+            // Close/release may have won while bind was resolving.
+            this.alive(item);
             // Start asynchronously: the data writer waits for channel acceptance.
             const job = this.read(item, (data) => channel.write(data))
                 .then(() => channel.end())
@@ -776,14 +826,16 @@ export class TransferManager {
     }
 
     cleanupOnExit() {
-        for (const item of this.operations.values()) {
-            if (item.directory) {
-                try {
-                    rmSync(item.directory, { recursive: true, force: true });
-                } catch {
-                    /* process exit */
-                }
+        const remove = (directory: string) => {
+            try {
+                rmSync(directory, { recursive: true, force: true });
+            } catch {
+                /* process exit */
             }
+        };
+        this.archives.cleanupOnExit(remove);
+        for (const item of this.operations.values()) {
+            if (item.directory) remove(item.directory);
         }
     }
 
@@ -791,16 +843,18 @@ export class TransferManager {
         if (this.closing) return this.closing;
         this.disposed = true;
         clearInterval(this.timer);
+        const archiveCleanup = this.archives.close();
         for (const item of this.operations.values())
             this.finish(item, 'released');
-        this.closing = Promise.allSettled(
-            [...this.operations.values()].map(async (item) => {
+        this.closing = Promise.allSettled([
+            archiveCleanup,
+            ...[...this.operations.values()].map(async (item) => {
                 // Admission owns publication until it settles. Never release its
                 // state or remove a staging directory underneath commitUpload.
                 await item.commit?.catch(() => {});
                 await this.cleanup(item);
             }),
-        ).then((results) => {
+        ]).then((results) => {
             const errors = results
                 .filter((result) => result.status === 'rejected')
                 .map((result) => result.reason);

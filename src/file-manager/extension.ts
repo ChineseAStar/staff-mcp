@@ -32,7 +32,11 @@ const TEXT_RESULT_WIRE_LIMIT = 10 * 1024 * 1024 - 64 * 1024;
 const pathField = z.string();
 const rootPath = { rootId: z.string().default('main'), path: pathField };
 const expected = z.string().min(1).optional();
+const archiveJob = z.object({ jobId: z.uuid() }).strict();
 const params = {
+    archiveStart: z.object(rootPath).strict(),
+    archiveStatus: archiveJob,
+    archiveCancel: archiveJob,
     roots: z.object({}).strict(),
     list: z
         .object({
@@ -473,9 +477,21 @@ export function registerFileManager(
                 throw rpc(e);
             }
         };
-    async function extensionCall(method: keyof typeof params, input: unknown) {
+    async function extensionCall(
+        method: keyof typeof params,
+        input: unknown,
+        transfers: TransferManager,
+    ) {
         // Separate parse calls preserve the exact shape/types for every public method.
         switch (method) {
+            case 'archiveStart': {
+                const p = parse(params.archiveStart, input);
+                return transfers.archiveStart(p.rootId, p.path);
+            }
+            case 'archiveStatus':
+                return transfers.archiveStatus(parse(archiveJob, input).jobId);
+            case 'archiveCancel':
+                return transfers.archiveCancel(parse(archiveJob, input).jobId);
             case 'roots':
                 parse(params.roots, input);
                 return core.roots();
@@ -544,8 +560,16 @@ export function registerFileManager(
             `${FILE_MANAGER}/${method}`,
             { params: z.unknown().optional() },
             guarded(async (input, ctx) => {
-                const selected = select(input, ctx, method, [FILES]);
-                const operation = () => extensionCall(method, selected.params);
+                const required = method.startsWith('archive')
+                    ? [FILES, DATA]
+                    : [FILES];
+                const selected = select(input, ctx, method, required);
+                const operation = () =>
+                    extensionCall(
+                        method,
+                        selected.params,
+                        selected.session.transfers,
+                    );
                 return selected.run ? selected.run(operation) : operation();
             }),
         );
@@ -565,6 +589,7 @@ export function registerFileManager(
                 operationId,
                 mode: z.enum(['read', 'write']),
                 archive: z.literal('zip').optional(),
+                archiveJobId: z.uuid().optional(),
                 rootId: z.string().min(1),
                 path: z.string().min(1),
                 size: z.number().int().nonnegative().safe().optional(),

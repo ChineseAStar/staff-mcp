@@ -133,6 +133,9 @@ const mutations = new Set([
 ]);
 
 const fileMethods = new Set([
+    'archiveStart',
+    'archiveStatus',
+    'archiveCancel',
     'roots',
     'list',
     'stat',

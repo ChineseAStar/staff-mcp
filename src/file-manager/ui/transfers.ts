@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+} from 'react';
 import { bridge, BridgeError, errorMessage } from './bridge';
 import type { TransferProgress } from './bridge';
 import { validUploadPath } from './tree-input';
@@ -11,6 +17,7 @@ type TransferStatus =
     | 'queued'
     | 'checking'
     | 'confirm'
+    | 'archiving'
     | 'preparing'
     | 'ready'
     | 'saving'
@@ -50,6 +57,7 @@ export const transferLabels: Record<TransferStatus, string> = {
     queued: '等待上传',
     checking: '检查目标',
     confirm: '等待覆盖确认',
+    archiving: '正在打包',
     preparing: '准备下载快照…',
     ready: '准备就绪',
     saving: '正在交给浏览器…',
@@ -69,6 +77,7 @@ export function transferActive(job: TransferJob) {
         'queued',
         'checking',
         'confirm',
+        'archiving',
         'preparing',
         'ready',
         'running',
@@ -76,6 +85,29 @@ export function transferActive(job: TransferJob) {
         'finishing',
         'cancelling',
     ].includes(job.status);
+}
+
+export function transferHasByteProgress(job: TransferJob) {
+    if (job.directory) return false;
+    if (!job.archive) return true;
+    return (
+        job.size > 0 && ['running', 'done', 'handed-off'].includes(job.status)
+    );
+}
+
+interface ZipAttempt {
+    jobId?: string;
+    stale?: boolean;
+    wake?: () => void;
+    cancellation?: Promise<unknown>;
+}
+
+function stopZip(attempt: ZipAttempt) {
+    attempt.wake?.();
+    if (!attempt.jobId) return;
+    return (attempt.cancellation ??= bridge.request('archiveCancel', {
+        jobId: attempt.jobId,
+    }));
 }
 
 function progressStatus(progress: TransferProgress): TransferStatus {
@@ -98,6 +130,7 @@ export function useTransfers(
     const jobsRef = useRef(jobs);
     const enabledRef = useRef(available);
     const runningUpload = useRef(false);
+    const zips = useRef(new Map<string, ZipAttempt>());
     const uploadCancels = useRef(new Map<string, Promise<unknown>>());
     const sequence = useRef(0);
     const onUploadedRef = useRef(onUploaded);
@@ -164,6 +197,51 @@ export function useTransfers(
                 });
             }
         });
+    }, [change]);
+
+    useLayoutEffect(() => {
+        const invalidate = (report: boolean) => {
+            for (const [id, attempt] of zips.current) {
+                attempt.stale = true;
+                void stopZip(attempt)?.catch(() => {});
+                const job = jobsRef.current.find((entry) => entry.id === id);
+                if (!job || !transferActive(job)) continue;
+                const patch = {
+                    status: 'error',
+                    cancelRequested: true,
+                } as const;
+                if (report) {
+                    change(id, {
+                        ...patch,
+                        error: '连接已暂停或断开，下载已停止等待，不会自动重试。',
+                    });
+                } else {
+                    jobsRef.current = jobsRef.current.map((entry) =>
+                        entry === job ? { ...entry, ...patch } : entry,
+                    );
+                }
+                if (job.transferId && !job.cancelRequested)
+                    void bridge
+                        .request('transferCancel', {
+                            transferId: job.transferId,
+                        })
+                        .catch(() => {});
+            }
+            zips.current.clear();
+        };
+        const unsubscribe = bridge.subscribe(() => {
+            const { connected, enabled } = bridge.snapshot();
+            if (!connected || !enabled) invalidate(true);
+        });
+        const pagehide = (event: PageTransitionEvent) => {
+            if (!event.persisted) invalidate(false);
+        };
+        window.addEventListener('pagehide', pagehide);
+        return () => {
+            unsubscribe();
+            window.removeEventListener('pagehide', pagehide);
+            invalidate(false);
+        };
     }, [change]);
 
     useEffect(() => {
@@ -472,8 +550,11 @@ export function useTransfers(
         await bridge.request('downloadDiscard', { transferId: job.transferId });
     };
 
-    const runDownload = async (job: TransferJob) => {
-        change(job.id, {
+    const runDownload = async (job: TransferJob, zip?: ZipAttempt) => {
+        const update = (patch: Partial<TransferJob>) => {
+            if (!zip?.stale) change(job.id, patch);
+        };
+        update({
             status: 'preparing',
             loaded: 0,
             error: undefined,
@@ -484,46 +565,46 @@ export function useTransfers(
         let transferId: string | undefined;
         let cleanupAttempted = false;
         const cancelled = () =>
+            zip?.stale ||
             !enabledRef.current ||
             !!jobsRef.current.find((entry) => entry.id === job.id)
                 ?.cancelRequested;
         try {
             await discardDownload(job);
-            change(job.id, { transferId: undefined });
             if (cancelled()) {
-                change(job.id, { status: 'cancelled' });
+                update({ status: 'cancelled' });
                 return;
             }
             const result = await bridge.request<{
                 transferId: string;
-                name: string;
-                size: number;
+                name?: string;
+                size?: number;
             }>('download', {
                 rootId: job.rootId,
                 path: job.path,
-                ...(job.archive ? { archive: job.archive } : {}),
+                ...(zip ? { archive: 'zip', archiveJobId: zip.jobId } : {}),
             });
             transferId = result.transferId;
-            change(job.id, {
+            if (zip && !transferId) throw new Error('未收到下载句柄。');
+            if (zip) zip.jobId = undefined; // Native transfer now owns cleanup.
+            update({
                 transferId,
-                name: result.name,
-                size: result.size,
+                ...(result.name !== undefined ? { name: result.name } : {}),
+                ...(result.size !== undefined ? { size: result.size } : {}),
             });
             if (cancelled()) {
                 // Prepare can finish after the user cancelled. Release the new
                 // handle before acknowledging cancellation; never receive bytes.
-                change(job.id, { status: 'cancelling' });
+                update({ status: 'cancelling' });
                 cleanupAttempted = true;
                 await bridge.request('transferCancel', { transferId });
-                change(job.id, {
-                    status: enabledRef.current ? 'cancelled' : 'error',
-                });
+                update({ status: enabledRef.current ? 'cancelled' : 'error' });
                 return;
             }
             const progress = earlyProgress.current.get(transferId);
             earlyProgress.current.delete(transferId);
             if (progress) {
-                change(job.id, {
+                update({
                     loaded: progress.loaded,
                     size: progress.total,
                     status: progressStatus(progress),
@@ -537,11 +618,13 @@ export function useTransfers(
             );
             if (!current || !['preparing', 'ready'].includes(current.status))
                 return;
-            change(job.id, { status: 'ready' });
+            update({ status: 'ready' });
             await save(job.id);
         } catch (error) {
+            if (zip?.stale) return;
+            if (zip?.jobId) throw error; // Native prepare did not confirm ownership.
             if (cleanupAttempted) {
-                change(job.id, {
+                update({
                     status: 'error',
                     error: `取消结果待核实：${errorMessage(error)}`,
                 });
@@ -557,18 +640,18 @@ export function useTransfers(
             // No automatic replay. On a receive/ack failure a stream may already
             // exist, so cancel it and wait for cleanup before allowing retry.
             if (transferId) {
-                change(job.id, { status: 'cancelling' });
+                update({ status: 'cancelling' });
                 try {
                     await bridge.request('transferCancel', { transferId });
                 } catch (cleanupError) {
-                    change(job.id, {
+                    update({
                         status: 'error',
                         error: `${errorMessage(error)} 清理结果待核实：${errorMessage(cleanupError)}`,
                     });
                     return;
                 }
             }
-            change(job.id, {
+            update({
                 status: 'error',
                 error:
                     cancelled() && !transferId
@@ -624,6 +707,96 @@ export function useTransfers(
         }
     };
 
+    const runZip = async (job: TransferJob) => {
+        type Status = {
+            state: 'preparing' | 'ready' | 'failed';
+            error?: { code: string; message: string };
+        };
+        const attempt: ZipAttempt = {};
+        zips.current.set(job.id, attempt);
+        change(job.id, {
+            status: 'archiving',
+            size: 0,
+            loaded: 0,
+            error: undefined,
+            cancelRequested: false,
+            transferId: undefined,
+        });
+        const cancelled = () =>
+            jobsRef.current.find((entry) => entry.id === job.id)
+                ?.cancelRequested;
+        const stopped = () => attempt.stale || cancelled();
+        try {
+            await discardDownload(job);
+            if (stopped()) {
+                if (!attempt.stale) change(job.id, { status: 'cancelled' });
+                return;
+            }
+            const result = await bridge.request<Status & { jobId: string }>(
+                'archiveStart',
+                { rootId: job.rootId, path: job.path },
+            );
+            const jobId = result?.jobId;
+            if (!jobId) throw new Error('未收到打包任务编号。');
+            attempt.jobId = jobId;
+            let status: Status = result;
+            while (!stopped() && status.state === 'preparing') {
+                const next = await new Promise<Status | undefined>(
+                    (resolve, reject) => {
+                        const timer = setTimeout(() => {
+                            void bridge
+                                .request<Status>('archiveStatus', { jobId })
+                                .then(resolve, reject);
+                        }, 1_000);
+                        // Cancel the delay or stop waiting for an already sent read.
+                        // A late status has no resource handle to release.
+                        attempt.wake = () => {
+                            clearTimeout(timer);
+                            resolve(undefined);
+                        };
+                    },
+                );
+                attempt.wake = undefined;
+                if (!next) break;
+                status = next;
+            }
+            if (stopped()) {
+                await stopZip(attempt);
+                if (!attempt.stale) change(job.id, { status: 'cancelled' });
+            } else if (status.state === 'ready') {
+                await runDownload({ ...job, transferId: undefined }, attempt);
+            } else {
+                throw status.error
+                    ? new BridgeError(status.error)
+                    : new Error('文件夹打包失败。');
+            }
+        } catch (error) {
+            const cleanup = await stopZip(attempt)?.then(
+                () => '',
+                (failure: unknown) =>
+                    ` 清理结果待核实：${errorMessage(failure)}`,
+            );
+            if (!attempt.stale) {
+                if (cancelled() && attempt.jobId && cleanup === '') {
+                    change(job.id, { status: 'cancelled' });
+                } else {
+                    change(job.id, {
+                        status: 'error',
+                        error: errorMessage(error) + (cleanup ?? ''),
+                    });
+                }
+            }
+        } finally {
+            // If native prepare was never admitted, the ZIP is still ours.
+            await stopZip(attempt)?.catch(() => {});
+            if (zips.current.get(job.id) === attempt)
+                zips.current.delete(job.id);
+        }
+    };
+
+    const startDownload = (job: TransferJob) =>
+        job.archive ? runZip(job) : runDownload(job);
+
     const download = (
         rootId: string,
         path: string,
@@ -637,14 +810,14 @@ export function useTransfers(
             path,
             archive,
             name: archive
-                ? `${path.split('/').pop() || '目录'}（ZIP 准备中）`
+                ? `${path.split('/').pop() || '目录'}.zip`
                 : (path.split('/').pop() ?? path),
-            size,
+            size: archive ? 0 : size,
             loaded: 0,
-            status: 'preparing',
+            status: archive ? 'archiving' : 'preparing',
         };
         add(job);
-        void runDownload(job);
+        void startDownload(job);
     };
 
     const cancel = async (id: string) => {
@@ -661,17 +834,20 @@ export function useTransfers(
             return;
         }
         change(id, { status: 'cancelling' });
+        const zip = zips.current.get(id);
+        if (zip) void stopZip(zip)?.catch(() => {});
         if (job.direction === 'download' && job.transferId) {
             try {
                 await bridge.request('transferCancel', {
                     transferId: job.transferId,
                 });
-                change(id, { status: 'cancelled' });
+                if (!zip?.stale) change(id, { status: 'cancelled' });
             } catch (error) {
-                change(id, {
-                    status: 'error',
-                    error: `取消结果待核实：${errorMessage(error)}`,
-                });
+                if (!zip?.stale)
+                    change(id, {
+                        status: 'error',
+                        error: `取消结果待核实：${errorMessage(error)}`,
+                    });
             }
         }
         if (
@@ -762,7 +938,7 @@ export function useTransfers(
         )
             return;
         if (job.direction === 'download') {
-            void runDownload(job);
+            void startDownload(job);
         } else if (
             !job.invalidUpload &&
             Number.isSafeInteger(job.size) &&

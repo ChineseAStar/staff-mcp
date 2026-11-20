@@ -236,6 +236,22 @@ export class FileCore {
         if (write && root.readOnly) fail('READ_ONLY', 'This root is read-only');
         return root;
     }
+    private checkedPath(rootId: string, input: string, write?: boolean) {
+        const root = this.root(rootId, write);
+        const rel = relativePath(input);
+        const full = path.resolve(root.directory, rel);
+        if (!inside(root.directory, full))
+            fail('OUTSIDE_ROOT', 'Path leaves allowed root');
+        this.checkPrivate(full);
+        return { root, rel, full };
+    }
+    /** Validate the logical ZIP target without reopening the source of a prepared snapshot. */
+    checkArchivePath(rootId: string, directory: string) {
+        const { rel } = this.checkedPath(rootId, directory);
+        if (!rel)
+            fail('INVALID_PARAMS', 'Archive requires a non-root directory');
+        return path.basename(rel);
+    }
     async resolve(
         rootId: string,
         input: string,
@@ -245,12 +261,11 @@ export class FileCore {
             allowLeafLink?: boolean;
         } = {},
     ) {
-        const root = this.root(rootId, options.write);
-        const rel = relativePath(input);
-        const full = path.resolve(root.directory, rel);
-        if (!inside(root.directory, full))
-            fail('OUTSIDE_ROOT', 'Path leaves allowed root');
-        this.checkPrivate(full);
+        const { root, rel, full } = this.checkedPath(
+            rootId,
+            input,
+            options.write,
+        );
         // Recheck all ancestry on every operation, including the configured root itself.
         let current = path.parse(root.directory).root;
         const rootParts = root.directory
@@ -901,9 +916,7 @@ export class FileCore {
         signal: AbortSignal,
     ) {
         signal.throwIfAborted();
-        const name = path.basename(relativePath(directory));
-        if (!name)
-            fail('INVALID_PARAMS', 'Archive requires a non-root directory');
+        const name = this.checkArchivePath(rootId, directory);
         // yazl is an EventEmitter; the pinned 2.x declaration omits its base class.
         const zip = new ZipFile() as ZipFile & EventEmitter;
         const abort = new AbortController();
@@ -1024,7 +1037,7 @@ export class FileCore {
             throw fileError(abort.signal.reason ?? error, 'archive');
         } finally {
             signal.removeEventListener('abort', cancel);
-            // The enclosing TransferManager owns cleanup of this known private directory.
+            // The enclosing staging owner cleans up this private directory.
         }
     }
     async snapshot(
