@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.2.2 — 2026-11-22
 
 - Prepare folder ZIPs in bounded, cancellable file-manager jobs before starting a download. The App hands the finished archive to the existing files channel without repacking or extending its lease. Ordinary file downloads and the native browser handoff are unchanged; no ZIP-specific host changes are required.
 

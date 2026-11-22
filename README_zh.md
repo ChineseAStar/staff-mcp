@@ -8,9 +8,9 @@
 
 ---
 
-## SDK／协议兼容范围 — 2.2.1
+## SDK／协议兼容范围 — 2.2.2
 
-staff-mcp 2.2.1（2026-11-14）沿用拆包后的 MCP SDK 2：`client`、`server`、`core` 固定 2.4.0，`node` 固定 2.1.2。本次发布目标为 Linux x64；npm 发布不等于 chat-ai 正式运行包 pin 更新、宿主部署或运行端点升级，这些须分别完成。本文不宣称全平台、公司网络或完整端到端验收。
+staff-mcp 2.2.2（2026-11-22）沿用拆包后的 MCP SDK 2：`client`、`server`、`core` 固定 2.4.0，`node` 固定 2.1.2。本次发布目标为 Linux x64；npm 发布不等于 chat-ai 正式运行包 pin 更新、宿主部署或运行端点升级，这些须分别完成。本文不宣称全平台、公司网络或完整端到端验收。
 
 - stdio、reverse 和 direct HTTP 通过官方 SDK 接受 legacy 与现代 `2026-07-28` 客户端。legacy HTTP 保留原鉴权会话；现代 HTTP 每请求调用 server factory，不使用 `Mcp-Session-Id`、共用 MCP server 或暗藏会话 header。普通工具仍共享原进程状态并保留原权限；逐请求 facade 不是独立 OS／用户沙箱。
 - 现代 HTTP 通过公开 **DATA2 业务绑定**保留 Files／Terminal Apps：服务端签发 control 凭据，90 秒租约，files／PTY／data 状态各自归属确切 owner。APPS／FILES／STREAMS 仍为 v1；stdio／reverse（两种协议）及 legacy HTTP 仍为 DATA1。DATA2 需宿主与 staff 配套升级，使用下文配套 chat-ai 版本，并显式更新其内置 staff 依赖。
@@ -21,7 +21,9 @@ staff-mcp 2.2.1（2026-11-14）沿用拆包后的 MCP SDK 2：`client`、`server
 
 ## 兼容性与配套升级
 
-**2.2.1 版本：** 保留 2.2.0 的工具、SDK／依赖锁定及协议／数据版本，修复终端流与 Docker 启动问题，增加可选的原 shell 复用和 Files 交互改进，并精简终端界面。原 shell 复用与文件夹拖入需配套 chat-ai 提交 `cc90912a630ec70d5096c58f7deb9c1336e70585` 或兼容后继版本；旧宿主保持原行为。新建 Docker 容器默认 `--ulimit core=0:0`，显式用户设置仍可覆盖。不需要数据迁移。
+**2.2.2 版本：** Files App 先通过有界、可取消的任务为非根目录生成 ZIP，再沿用浏览器原生下载流程。普通文件下载不变；旧调用方仅传 `archive:"zip"` 时，仍在 prepare 内同步打包并受原有时限约束。不需要 ZIP 专用宿主改动，不变更协议版本，也不需要持久化数据迁移。详见[目录传输](docs/file-manager.md#markdown-and-directory-transfers)。
+
+**2.2.1 版本：** 发布于 2026-11-14；保留 2.2.0 的工具、SDK／依赖锁定及协议／数据版本，修复终端流与 Docker 启动问题，增加可选的原 shell 复用和 Files 交互改进，并精简终端界面。原 shell 复用与文件夹拖入需配套 chat-ai 提交 `cc90912a630ec70d5096c58f7deb9c1336e70585` 或兼容后继版本；旧宿主保持原行为。新建 Docker 容器默认 `--ulimit core=0:0`，显式用户设置仍可覆盖。不需要数据迁移。
 
 **2.2.0 版本：** 新增 MCP SDK 2、现代 `2026-07-28` 服务、modern HTTP DATA2 业务绑定、标准 Skills 及旧技能工具兼容标记。请配套 chat-ai `tmp/inner-mcp-stdio` 提交 `1d659874f4da0540274ea454f016cebaa6838945` 或兼容后继版本，以及匹配的宿主／描述符／UI 资源。下文历史版本所列旧宿主提交不足以提供 modern HTTP DATA2 和标准 Skills 集成。本次是需配套升级的控制 wire 变化，不新增持久化数据格式、技能执行审批或操作／输入自动重放；保留下文 2.1.0 的容器与文件资源行为。
 
@@ -50,7 +52,7 @@ Docker 模板/用户脚本编排、受管 staff 短命令与聊天深色渲染�
 本补丁不要求持久化数据迁移。
 
 1. 结束在途操作，备份正常配置；无需转换数据。
-2. 先升级配套 chat-ai 宿主并显式更新其内置 staff 依赖，再将 staff-mcp 端点升级到 2.2.1，并协调 reverse 连接的停机窗口。
+2. 先升级配套 chat-ai 宿主并显式更新其内置 staff 依赖，再将 staff-mcp 端点升级到 2.2.2，并协调 reverse 连接的停机窗口。
 3. 重新连接 MCP、重新打开 App，仅显式启用需要的扩展。
 
 发布摘要见 [CHANGELOG](CHANGELOG.md)。
@@ -61,10 +63,10 @@ Docker 模板/用户脚本编排、受管 staff 短命令与聊天深色渲染�
 
 当前源码支持 Linux PTY 与 Windows 原生 ConPTY，仍须通过原生加载和可执行 shell 检查。Windows **build >= 18309** 是必要而非充分条件。Windows Docker Desktop 经验证的本地 Linux 容器 daemon 可启用 files/terminal，不再仅按 launcher OS 判断。**Windows arm64 与 macOS 未实机验证，不承诺 musl/Alpine terminal 支持。** 路径转换或附带 N-API 预编译产物不等于平台支持承诺。
 
-使用明确版本运行 staff-mcp：
+2.2.2 在 npm 可用后，使用明确版本运行 staff-mcp：
 
 ```bash
-npx --yes staff-mcp@2.2.1 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.2.2 --working-dir /path/to/your/project
 ```
 
 从源码 checkout 使用时，先安装依赖并构建，再使用以下示例中的绝对入口：
@@ -182,7 +184,7 @@ Reverse GET `<base>/sse`，携带 `Authorization: Bearer <token>` 与 `X-MCP-Ser
 
 ## 🛠️ 核心能力
 
-以下描述 staff-mcp 2.2.1；扩展仍须显式启用，npm 发布不会自动升级宿主或运行端点。
+以下描述 staff-mcp 2.2.2；扩展仍须显式启用，npm 发布不会自动升级宿主或运行端点。
 
 扩展**默认全关**。通过 `--extensions files`、`--extensions terminal` 或 `--extensions files,terminal` 启用；apps/data 依赖及 terminal 对 streams v1 的声明自动计算，无需单独选择。禁用能力不声明对应 manifest 条目、不注册对应 UI Resource 或业务 handler；全关时无扩展 manifest、应用数据 listener/session，普通 MCP 工具和非 UI Resources 保留。HTTP 模式仍监听原 MCP 服务。
 
@@ -214,7 +216,7 @@ files 启用时直接复用标准工具目录授权：`main` 是 `--working-dir`
 
 部署可设置 `STAFF_MCP_SHELL_INIT` 为 staff 环境内绝对、可读的 Bash 脚本路径（不是 MCP 参数）。配置后必须使用 Linux `/bin/bash`，不静默回退 `sh`；每次 `execute_command` 和每个新 PTY 都先 source 同一文件，alias、function、export 和 `cd` 在该 shell 内生效。初始化 stdout 转 stderr，不污染 MCP 协议 stdout；source 诊断被固定失败消息替代，返回非零则不执行用户命令或进入交互提示。PTY 使用私有 bootstrap 替代正常的用户 Bash rc 文件；清除 `BASH_ENV`，保留初始化路径标记供后代使用。management Node 主进程不 source 文件。脚本修改仅影响后续命令/新 PTY，不更新已有 shell；这是重复执行的初始化代码，不是一次性安装或键值解析。不新增自动重试/重放；未配置时包括 Windows 在内的既有 shell 选择及启动行为不变。详见[终端合同](docs/terminal.md#shared-shell-initialization)。
 
-PTY 默认从 staff 工作区 `main` 启动并继承 staff 的 OS 身份；cwd **不是 sandbox**，终端字节不进入模型或聊天历史。配套未发布源码支持原 shell 复用：关闭 App 或断线仅脱离，重新打开同一授权上下文优先接回原会话，“结束会话”单独终止 shell。离线会话最多保留两小时，factory 合计最多 32 个 PTY；离线输出读取后丢弃，不归档、不回放。不承诺 Staff／容器／host 重启恢复。每次附着仍使用新同源 WS、当前 DATA 授权、默认 30 秒租约、独立 browser presence 与真实 xterm 消费 ACK。普通隐藏保留 read/ACK/presence 并限制新输入/resize。确认撤权立即禁止后续访问，但不可达的离线程序可能继续到远端保留期结束；清理 best effort，不保证后代全部结束或副作用回滚。详见[终端合同](docs/terminal.md)。
+PTY 默认从 staff 工作区 `main` 启动并继承 staff 的 OS 身份；cwd **不是 sandbox**，终端字节不进入模型或聊天历史。宿主配套时，终端可选择复用原 shell：关闭 App 或断线仅脱离，重新打开同一授权上下文优先接回原会话，“结束会话”单独终止 shell。离线会话最多保留两小时，factory 合计最多 32 个 PTY；离线输出读取后丢弃，不归档、不回放。不承诺 Staff／容器／host 重启恢复。每次附着仍使用新同源 WS、当前 DATA 授权、默认 30 秒租约、独立 browser presence 与真实 xterm 消费 ACK。普通隐藏保留 read/ACK/presence 并限制新输入/resize。确认撤权立即禁止后续访问，但不可达的离线程序可能继续到远端保留期结束；清理 best effort，不保证后代全部结束或副作用回滚。详见[终端合同](docs/terminal.md)。
 
 当前描述符和 iframe 资源保持 **bridge v1**：文件显式 `scope:"workspace"`，终端 `scope:"chat"`。文件声明 `capabilities.files:{version:1,upload:true,download:true}`；终端声明 `capabilities.streams:{version:1,purpose,create,renew,status,close,commands}` 并要求 streams v1 与对应 DATA 版本（modern HTTP 为 2，其余为 1）。终端业务 RPC 和 data purpose 保持 `cc.qqxing/terminal`，不再声明 terminal manifest；host 仅校验通用信封，PTY 参数与 metadata 由 staff handler/UI adapter 解释。2.0.0 扩展合同要求宿主、描述符与 UI 资源配套部署并重新打开 App，不提供旧实现兼容路径。files-v1 新增自己的 `stat` 用于 force 复制版本检查，不再依赖文件管理 App；chat-ai 的本地字节预算不代表远端业务上限。详见[宿主/桥接边界](docs/file-manager.md#host-boundary-and-bridge-v1)。
 
@@ -241,6 +243,8 @@ Docker 中普通工具与文件应用复用允许目录挂载。宿主文件系�
 files、terminal 和当前连接的数据通道分别判断可用性。缺少终端运行时在显式请求 terminal 时导致启动失败；默认关闭时不加载原生 PTY。可选文件根不可用仍只禁用 files，标准工作区工具/资源保留。未知或不匹配的扩展版本不开放对应 handlers/App。chat-ai 在标准 initialize 成功后，即使 Apps 发现或 data configure 失败，仍保留正常的 tools/resources/prompts。降级原因写 stderr，不混入 stdio 的 JSON-RPC stdout。
 
 这不是绕过鉴权或生命周期：CLI 参数语法错误、Docker 自身启动失败、凭据错误和标准 MCP 控制连接/初始化失败仍须报错。工作区/全局挂载的权限错误仍在相关启动或文件/工具操作中返回错误；扩展降级不授予额外访问，也不表示启动时已预检所有目录。新旧 reverse 控制协议不兼容仍需两端配套升级，不能用可选能力降级掩盖；文件提交、工具副作用和终端输入也不会自动重试。
+
+**目录 ZIP 下载排查：** 如果 App 仍在下载 prepare 内打包，或提示不识别归档方法，请确认端点正在运行 2.2.2，再重连 MCP 并重开 Files 以加载匹配的资源。打包期间浏览器尚未开始下载；请检查 staff 暂存空间并保持 App 连接。任务过期或失败时，先处理提示的原因，再显式发起新下载；交给浏览器后请查看浏览器下载记录。
 
 ### 2. 技能与工种生态系统 (`--profile`)
 `staff-mcp` 充当了"AI 工位配置器"的角色。它采用 **5 级级联寻址架构 (Cascade Resolution)** 动态加载角色专属的技能包 (SOP 与提示词)，统一使用 `.staff` 目录规范：
@@ -361,14 +365,14 @@ files-v1 跨 MCP 中转与文件应用上传不再设置 100 MiB 单文件硬限
 ## 发版流程
 
 1. 在临时开发分支完成改动、补齐 CHANGELOG 发布日期，确认 `package.json`、`package-lock.json` 顶层及 `packages[""].version` 都是本次目标版本，提交并推送该分支。
-2. 运行以下 **Bash** 检查流程。先核对 `VERSION`、`RELEASE_BRANCH` 与实现提交 `TARGET`，并确认该分支头已包含发布文档与版本变更。示例为 2.2.1；`TARGET` 是已存在且可核对的 Docker／Files／终端修复与交互改进实现提交，不是尚未知的发版提交。该版本发布后不可原样重跑。任何一步失败都应先排查，不要跳过检查继续打标签。
+2. 运行以下 **Bash** 检查流程。示例为 2.2.2（标签 `v2.2.2`）；先核对 `VERSION`、发布分支 `RELEASE_BRANCH` 与实现提交 `TARGET`，并确认已审阅的分支头包含发布文档与版本变更。`TARGET` 是已存在且可核对的目录 ZIP 异步打包实现提交，不是待创建的发版提交。该版本发布后不可原样重跑。任何一步失败都应先排查，不要跳过检查继续打标签。
 
 ```bash
 (
 set -euo pipefail
-VERSION=2.2.1
-RELEASE_BRANCH=fix/docker-core-limit-default
-TARGET=04c9ed9d5f96062bcb401cb41c3b83b22c8b73a8
+VERSION=2.2.2
+RELEASE_BRANCH=tmp/async-folder-zip
+TARGET=325aa109971989c62b93f9eb43ab3f108e01f29f
 
 git fetch origin --tags
 git cat-file -e "$TARGET^{commit}"
@@ -418,9 +422,9 @@ git push origin "refs/tags/v$VERSION"
 
 若不能快进合并，在临时分支先处理与最新 `master` 的集成并重新验收；不要用强推绕过。已推送但错误的标签只能在核实 npm 尚未发布、相关发布任务已停止且获得明确确认后单独修复，不属于每次发版步骤。
 
-标签触发 `.github/workflows/publish.yml` 的 **Publish to npm**。工作流使用 Node 24、OIDC trusted publishing 和 `npm publish --provenance --access public`；npm 包设置中的 trusted publisher 必须对应仓库和 `publish.yml` 工作流文件。发布任务会验证标签对应提交已包含于远端 `master`，并校验三处版本；仅 push/合并 `master` 不会发布 npm。禁止从未合入的开发分支发版、移动已发布标签或重用已发布版本。
+标签触发 `.github/workflows/publish.yml` 的 **Publish to npm**。工作流使用 Node 24、OIDC trusted publishing 和 `npm publish --provenance --access public`；npm 包设置中的 trusted publisher 必须对应仓库和 `publish.yml` 工作流文件。发布任务会验证标签对应提交已包含于远端 `master`，并校验标签与三处版本一致；上面的实现提交和发布分支祖先检查是打标签前的本地检查，不是新增的 CI 关卡。仅 push/合并 `master` 不会发布 npm。禁止从未合入的开发分支发版、移动已发布标签或重用已发布版本。
 
-成功后检查 Actions 和 `npm view staff-mcp@2.2.1 version`，再按原安装方式更新（如 `npm install -g staff-mcp@2.2.1` 或 `npx -y staff-mcp@2.2.1 ...`），并重启各 MCP 进程；已运行进程和已打开的 App 不会自动替换。版本号与标签示例需随每次后续发布更新。
+Actions 成功后，用 `npm view staff-mcp@2.2.2 version` 核对确切版本，再按原安装方式更新（如 `npm install -g staff-mcp@2.2.2` 或 `npx -y staff-mcp@2.2.2 ...`），并重启各 MCP 进程；已运行进程和已打开的 App 不会自动替换。版本号、标签、发布分支与实现提交示例需随每次后续发布更新。
 
 ## 📄 License
 

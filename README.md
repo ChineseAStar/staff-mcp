@@ -8,9 +8,9 @@ It provides secure file management, shell execution, LSP-powered code intelligen
 
 ---
 
-## SDK and protocol compatibility — 2.2.1
+## SDK and protocol compatibility — 2.2.2
 
-staff-mcp 2.2.1 (2026-11-14) retains the split MCP SDK 2 packages (`client`, `server`, `core` 2.4.0 and `node` 2.1.2). The release target is Linux x64. Publishing the npm package does not update the chat-ai runtime pin, deploy a host or upgrade running endpoints; those are separate steps. This documentation does not claim all-platform, company-network or full end-to-end acceptance.
+staff-mcp 2.2.2 (2026-11-22) retains the split MCP SDK 2 packages (`client`, `server`, `core` 2.4.0 and `node` 2.1.2). The release target is Linux x64. Publishing the npm package does not update the chat-ai runtime pin, deploy a host or upgrade running endpoints; those are separate steps. This documentation does not claim all-platform, company-network or full end-to-end acceptance.
 
 - Stdio, reverse and direct HTTP accept legacy clients and modern `2026-07-28` clients through the official SDK. Legacy HTTP keeps its existing authenticated sessions. Modern HTTP calls the server factory for each request, without `Mcp-Session-Id`, a pooled MCP server or a hidden session header. Ordinary tools retain their shared process state and existing permissions; request facades are not separate OS/user sandboxes.
 - Files/Terminal Apps remain available on modern HTTP through the public **DATA2 business binding** contract: a server-minted control capability, a 90-second lease, and independently owned files/PTY/data state. APPS/FILES/STREAMS stay at version 1. Stdio/reverse (both eras) and legacy HTTP keep DATA1. Upgrade the host and staff together for DATA2; use the paired chat-ai version below and explicitly update its bundled staff dependency.
@@ -21,7 +21,9 @@ staff-mcp 2.2.1 (2026-11-14) retains the split MCP SDK 2 packages (`client`, `se
 
 ## Compatibility and coordinated upgrades
 
-**Version 2.2.1:** retains the 2.2.0 tools, SDK/dependency pins and protocol/data versions. It fixes terminal streaming and Docker startup, adds opt-in live-shell reuse and Files interaction improvements, and simplifies the terminal UI. Pair with chat-ai `cc90912a630ec70d5096c58f7deb9c1336e70585` or a compatible successor for shell reuse and folder drag-in; older hosts keep legacy behavior. Newly launched Docker containers default to `--ulimit core=0:0`, with explicit user overrides preserved. No data migration is needed.
+**Version 2.2.2:** the Files App prepares non-root directory ZIPs in bounded, cancellable jobs before starting the existing native browser download. Ordinary file downloads are unchanged. Legacy callers that send only `archive:"zip"` still pack synchronously during prepare under the existing deadline. This adds no ZIP-specific host code, protocol version change or persistent-data migration. See [directory transfers](docs/file-manager.md#markdown-and-directory-transfers).
+
+**Version 2.2.1:** released 2026-11-14; retains the 2.2.0 tools, SDK/dependency pins and protocol/data versions. It fixes terminal streaming and Docker startup, adds opt-in live-shell reuse and Files interaction improvements, and simplifies the terminal UI. Pair with chat-ai `cc90912a630ec70d5096c58f7deb9c1336e70585` or a compatible successor for shell reuse and folder drag-in; older hosts keep legacy behavior. Newly launched Docker containers default to `--ulimit core=0:0`, with explicit user overrides preserved. No data migration is needed.
 
 **Version 2.2.0:** adds MCP SDK 2, modern `2026-07-28` serving, modern HTTP DATA2 business bindings, standard Skills and the legacy skill-tool compatibility marker. Pair with chat-ai `tmp/inner-mcp-stdio` commit `1d659874f4da0540274ea454f016cebaa6838945` or a compatible successor, including matching host/descriptors/UI assets. Older host commits listed for historical releases below are not sufficient for modern HTTP DATA2 or the standard Skills integration. This is a coordinated control-wire upgrade, not a new persistent data format; it adds no skill execution approval or automatic operation/input replay. The 2.1.0 container and file-resource behavior below is retained.
 
@@ -50,7 +52,7 @@ Standard stdio/Streamable HTTP tools, resources and prompts remain supported. Ex
 This patch requires no persistent-data migration.
 
 1. Finish in-flight operations and back up your normal configuration; no data conversion is needed.
-2. Upgrade the matching chat-ai host first, explicitly update its bundled staff dependency, then upgrade staff-mcp endpoints to 2.2.1, coordinating downtime for reverse connections.
+2. Upgrade the matching chat-ai host first, explicitly update its bundled staff dependency, then upgrade staff-mcp endpoints to 2.2.2, coordinating downtime for reverse connections.
 3. Reconnect MCP, reopen Apps and explicitly enable only the extensions you want.
 
 See [CHANGELOG](CHANGELOG.md) for the release summary.
@@ -61,10 +63,10 @@ Requires **Node.js 22.22.2 or newer**, including inside Docker images.
 
 Current source supports Linux PTY and Windows native ConPTY, subject to native loading and executable-shell checks. Windows build **18309 or newer** is necessary, not sufficient. Windows Docker Desktop with a verified local Linux-container daemon can enable files/terminal; the launcher OS alone does not decide availability. **Windows arm64 and macOS have not been validated on real hardware; musl/Alpine terminal support is not promised.** Path translation or a shipped N-API prebuild is not a platform-support guarantee.
 
-Run staff-mcp with an explicit package version:
+Once 2.2.2 is available on npm, run staff-mcp with an explicit package version:
 
 ```bash
-npx --yes staff-mcp@2.2.1 --working-dir /path/to/your/project
+npx --yes staff-mcp@2.2.2 --working-dir /path/to/your/project
 ```
 
 For a source checkout, install dependencies and build before using the absolute entrypoint in the examples:
@@ -188,7 +190,7 @@ The two reverse transport sources (`src/reverse/SseTransport.ts` and chat-ai's `
 
 ## 🛠️ Core Capabilities
 
-The behavior below describes staff-mcp 2.2.1. Extensions remain opt-in; npm publication alone does not upgrade a host or running endpoint.
+The behavior below describes staff-mcp 2.2.2. Extensions remain opt-in; npm publication alone does not upgrade a host or running endpoint.
 
 Extensions are **all off by default**. Use `--extensions files`, `--extensions terminal`, or `--extensions files,terminal`; apps/data dependencies and terminal's streams v1 manifest are added automatically, not selected separately. Disabled features advertise no manifest entry and register no corresponding UI Resource or business handler. With both off there is no extension manifest or application data listener/session; ordinary MCP tools and non-UI Resources remain. HTTP mode still opens its normal MCP listener.
 
@@ -220,7 +222,7 @@ New Apps reusing supported RPC/Resources, files or streams need only their own d
 
 Deployment may set `STAFF_MCP_SHELL_INIT` to an absolute readable Bash script path inside the staff environment (not an MCP argument). When set, Linux `/bin/bash` is required with no `sh` fallback: each `execute_command` and each new PTY sources the same file before user input, preserving aliases, functions, exports and `cd` in that shell. Initialization stdout goes to stderr, not MCP protocol stdout; source diagnostics are suppressed in favor of a fixed failure message, and a nonzero source result prevents the command or interactive prompt. PTYs use a private bootstrap instead of the normal user Bash rc file; `BASH_ENV` is cleared and the init-path marker remains available to descendants. The management Node process never sources the file. Script changes affect only subsequent commands/new PTYs, not existing shells; this is repeated executable initialization, not a one-time install or an environment key/value parser. No automatic retry/replay is added; without the variable all previous shell selection/startup behavior, including Windows, remains unchanged. See [terminal contract](docs/terminal.md#shared-shell-initialization).
 
-The PTY starts at the staff workspace (`main`) and inherits staff's OS identity; cwd is **not a sandbox**. Terminal bytes do not enter model/chat history. The paired unreleased terminal opts into live-shell reuse: closing the App or losing its connection detaches, reopening the same authorized context prefers the original shell, and **End session** explicitly terminates it. Detached shells are retained for up to two hours within a 32-PTY factory cap; offline output is drained/discarded, not archived or replayed. Staff/container/host restart recovery is not promised. Each attachment still uses a fresh same-origin browser WebSocket, current DATA ownership, 30-second default lease, independent browser presence and actual xterm consumption ACKs. Hidden views keep read/ACK/presence and gate new input/resize. Confirmed revocation fences new access; unreachable detached programs can continue until remote retention expires. Cleanup is best effort, not rollback or guaranteed descendant termination. See [terminal lifecycle and boundaries](docs/terminal.md).
+The PTY starts at the staff workspace (`main`) and inherits staff's OS identity; cwd is **not a sandbox**. Terminal bytes do not enter model/chat history. With compatible host support, the terminal can opt into live-shell reuse: closing the App or losing its connection detaches, reopening the same authorized context prefers the original shell, and **End session** explicitly terminates it. Detached shells are retained for up to two hours within a 32-PTY factory cap; offline output is drained/discarded, not archived or replayed. Staff/container/host restart recovery is not promised. Each attachment still uses a fresh same-origin browser WebSocket, current DATA ownership, 30-second default lease, independent browser presence and actual xterm consumption ACKs. Hidden views keep read/ACK/presence and gate new input/resize. Confirmed revocation fences new access; unreachable detached programs can continue until remote retention expires. Cleanup is best effort, not rollback or guaranteed descendant termination. See [terminal lifecycle and boundaries](docs/terminal.md).
 
 Current descriptors and iframe assets keep **bridge v1** with explicit `scope:"workspace"` for files and `scope:"chat"` for terminal. The file App declares `capabilities.files:{version:1,upload:true,download:true}`; terminal declares `capabilities.streams:{version:1,purpose,create,renew,status,close,commands}` and requires streams v1 plus the transport-appropriate DATA version (2 on modern HTTP, 1 elsewhere). Its business RPC and data purpose remain `cc.qqxing/terminal`; host lifecycle methods use generic envelopes and opaque metadata, not PTY fields. The 2.0.0 extension contract requires matching host/descriptors/assets; deploy them together and reopen Apps, with no legacy compatibility path. Files-v1 adds its own `stat` for force-copy version checks, independent of the file-manager App; byte budgets owned by chat-ai are not remote business limits. See the [host/bridge boundary](docs/file-manager.md#host-boundary-and-bridge-v1).
 
@@ -247,6 +249,8 @@ Removing the stdio port does not expand daemon or platform support. No container
 Availability is determined separately for files, terminal and the per-connection data channel. A missing terminal runtime fails startup only when terminal is explicitly requested; with terminal disabled no native PTY is loaded. An unavailable configured file root still disables the optional file extension while preserving the standard workspace tools/resources. Unknown or incompatible extension versions do not enable their handlers or Apps. chat-ai keeps successfully initialized standard tools/resources/prompts if optional Apps discovery or data configuration fails. Warnings go to stderr, never stdio JSON-RPC stdout.
 
 This is not an authentication or lifecycle bypass: malformed CLI arguments, Docker launch failure, invalid credentials, and failed standard MCP transport/initialization remain errors. Workspace/global-mount access errors still fail the affected startup or file/tool operation; optional-extension degradation does not grant access or promise that every directory is prevalidated. Old/new incompatible reverse control protocols still require paired upgrades; optional capability degradation does not make those wire protocols compatible. No failed or uncertain file commit/tool/terminal input is automatically retried.
+
+**Troubleshooting folder ZIP downloads:** If the App still packs inside the download prepare request or does not recognize the archive methods, check that the endpoint is running 2.2.2, then reconnect MCP and reopen Files to load matching assets. While the App is packing, no browser download has started. Check available staff staging space and keep the App connected; if the job expires or fails, address the reported cause before explicitly starting a new download. After handoff, check the browser’s download history.
 
 ### 2. Skill & Profile Ecosystem (`--profile`)
 `staff-mcp` acts as an "AI Workspace Configurator". It uses a **5-tier Cascade Resolution** architecture to load role-specific skills (SOPs & Prompts) dynamically, all under the unified `.staff` directory convention:
@@ -365,7 +369,9 @@ Upgrade the host and all participating endpoints, reconnect MCP and reopen Apps.
 
 ## Release workflow
 
-Merge the verified release changes into `master` first. From an up-to-date `master` checkout, confirm that implementation commit `04c9ed9d5f96062bcb401cb41c3b83b22c8b73a8` (`TARGET`, Docker/Files/terminal fixes and interaction improvements) and the reviewed `fix/docker-core-limit-default` release-branch head are included and all three package/lock versions equal the explicit target version, not merely each other; finalize the changelog, then create and push the new version tag. A check that HEAD belongs to master alone does not prove the feature branch was merged. The checklist stops on any failed command and rejects an existing version/tag. The npm workflow rejects a tag whose commit is not contained in remote `master`. Do not publish from a development branch or move an existing release tag. Merging code alone does not publish to npm. `.github/workflows/publish.yml` runs Node 24 and OIDC trusted publishing with provenance; npm must trust the matching repository/workflow. Run `npm ci`, `npm run build` and `npm pack --dry-run` in the release checkout before tagging. After Actions succeeds, verify the exact version with `npm view staff-mcp@2.2.1 version`, update the package at each endpoint and restart it. See the [step-by-step release checklist](README_zh.md#发版流程); version/tag examples must be advanced for later releases.
+For staff-mcp 2.2.2, verify that the reviewed `tmp/async-folder-zip` release branch contains the async folder ZIP implementation commit `325aa109971989c62b93f9eb43ab3f108e01f29f` (`TARGET`) and the release docs and metadata. Before tagging on `master`, confirm that both `TARGET` and the reviewed release-branch head are ancestors of the release commit, and that `package.json` and both lockfile versions equal `2.2.2`, not merely each other. Checking only that the release commit belongs to `master` does not prove the feature was merged. The [step-by-step release checklist](README_zh.md#发版流程) stops on any failed command or existing npm version/tag and runs `npm ci`, `npm run build` and `npm pack --dry-run` before tagging.
+
+Push the new `v2.2.2` tag only once the release commit is on remote `master`. `.github/workflows/publish.yml` checks remote `master` ancestry and tag/package version consistency, then uses Node 24 and OIDC trusted publishing with provenance; npm must trust the matching repository/workflow. The implementation and release-branch checks are pre-tag checks, not extra CI gates. Merging code alone does not publish to npm. Do not publish from an unmerged development branch or move an existing release tag. After Actions succeeds, verify with `npm view staff-mcp@2.2.2 version` before updating and restarting endpoints. Advance the version, tag, branch and target examples for later releases.
 
 ## 📄 License
 
